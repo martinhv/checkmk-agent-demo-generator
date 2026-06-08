@@ -18,7 +18,7 @@ All counters and gauges gently wobble — no static lines, but nothing ever
 crosses an alert threshold.
 
 Config via env:
-  CMK_HOSTNAME   reported hostname (default: web-frontend-01)
+  CMK_HOSTNAME   reported hostname (default: web-frontend-01.corp.meridian-retail.com)
   AGENT_PORT     plaintext TCP agent port (default: 6556, container)
   HTTP_PORT      admin HTTP port (default: 8080, container)
   STATE_FILE     counter persistence file (default: /var/tmp/cmk-demo-web-frontend-state.json)
@@ -35,7 +35,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
 
-HOSTNAME = os.environ.get("CMK_HOSTNAME", "web-frontend-01")
+HOSTNAME = os.environ.get("CMK_HOSTNAME", "web-frontend-01.corp.meridian-retail.com")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "6556"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "2.5.0-2026.04.03")

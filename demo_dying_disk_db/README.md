@@ -132,7 +132,7 @@ curl http://127.0.0.1:8081/          # {"state": "healthy", ...}
 
 ## 2. Set it up in Checkmk (before the talk)
 
-1. *Setup → Hosts → Add host*. Name `db-postgres-01`, IP `127.0.0.1` (or the
+1. *Setup → Hosts → Add host*. Name `db-postgres-01.corp.meridian-retail.com`, IP `127.0.0.1` (or the
    Docker host's IP), **Checkmk agent port → `6557`**.
 2. Run **service discovery while the container is `healthy`** — this baselines
    the SMART raw values at zero. (Discovering while degraded/broken bakes the
@@ -230,7 +230,7 @@ curl http://localhost:8081/                # JSON: state, in_state_for_s, stuck_
 
 | Var | Default | Meaning |
 |---|---|---|
-| `CMK_HOSTNAME` | `db-postgres-01` | name baked into `<<<check_mk>>>` |
+| `CMK_HOSTNAME` | `db-postgres-01.corp.meridian-retail.com` | name baked into `<<<check_mk>>>` |
 | `AGENT_PORT` | `6556` | agent TCP port (published as 6557) |
 | `HTTP_PORT` | `8080` | admin toggle port (published as 8081) |
 | `START_STATE` | `healthy` | `healthy` \| `degraded` \| `broken` |

@@ -21,17 +21,21 @@ delivering host (the empty `<<<<>>>>` switches back). So `serve.py` here:
    re-frames it as `<<<<hostname>>>>` … `<<<<>>>>` piggyback blocks.
 
 ```
-<<<check_mk>>>                 ← the delivery shell's own minimal data
-Hostname: cmk-demo-gateway
+<<<check_mk>>>                                       ← the delivery shell's own minimal data
+Hostname: cmk-demo-gateway.corp.meridian-retail.com
 ...
-<<<<web-frontend-01>>>>        ← everything below belongs to web-frontend-01
+<<<<web-frontend-01.corp.meridian-retail.com>>>>     ← everything below belongs to web-frontend-01
 <<<check_mk>>>
 ... that host's full sections ...
-<<<<>>>>                       ← back to the delivery shell
-<<<<app-worker-01>>>>
+<<<<>>>>                                             ← back to the delivery shell
+<<<<app-worker-01.corp.meridian-retail.com>>>>
 ...
 <<<<>>>>
 ```
+
+Every host shows up in Checkmk as an **FQDN** (`<short>.corp.meridian-retail.com`,
+set by `ESTATE_DOMAIN`). The short name (`web-frontend-01`, …) stays the internal
+label used by the control panel, `ESTATE_HOSTS`, and the curl API below.
 
 No host data is duplicated or re-implemented — the children are the single
 source of truth.
@@ -64,15 +68,18 @@ nc 127.0.0.1 6559 | grep -E '^<<<<|^Hostname:'
 
 ## 2. Set it up in Checkmk
 
-1. **Add the delivery shell as a normal TCP host.** Name `cmk-demo-gateway`,
-   IP `127.0.0.1` (or the Docker host's IP), **Checkmk agent port → 6559**.
+1. **Add the delivery shell as a normal TCP host.** Name
+   `cmk-demo-gateway.corp.meridian-retail.com`, IP `127.0.0.1` (or the Docker
+   host's IP), **Checkmk agent port → 6559**.
    Discover + activate — it gets a couple of plain services (Check_MK Agent,
    Uptime). Monitoring this host is what makes the site *fetch* the piggyback
    data for everyone else.
-2. **Add each estate host as a piggyback host.** Use the **exact** names from
-   the markers (`web-frontend-01`, `payment-api`, `app-worker-01`,
-   `app-redis-01`, `db-postgres-01`, `db-postgres-02`, `mail-relay-01`,
-   `fileserver-01`, `backup-01`, `win-dc-01`). For each, set **"Checkmk agent /
+2. **Add each estate host as a piggyback host.** Use the **exact** FQDN names
+   from the markers — `<short>.corp.meridian-retail.com` for each of
+   `web-frontend-01`, `payment-api`, `app-worker-01`, `app-redis-01`,
+   `db-postgres-01`, `db-postgres-02`, `mail-relay-01`, `fileserver-01`,
+   `backup-01`, `win-dc-01` (e.g. `payment-api.corp.meridian-retail.com`). For
+   each, set **"Checkmk agent /
    API integrations" → "Configured API integrations, no Checkmk agent"** so the
    site does *not* try to poll them over TCP — they receive their data purely
    via piggyback from the delivery host. (IP address can be left empty / "no
@@ -114,10 +121,11 @@ Each child also still runs its own full control UI on an internal admin port
 
 | Var | Default | Meaning |
 |---|---|---|
-| `DELIVERY_HOSTNAME` | `cmk-demo-gateway` | name of the shell host in its `<<<check_mk>>>` |
+| `ESTATE_DOMAIN` | `corp.meridian-retail.com` | DNS domain appended to every host → FQDN piggyback names |
+| `DELIVERY_HOSTNAME` | `cmk-demo-gateway.${ESTATE_DOMAIN}` | name of the shell host in its `<<<check_mk>>>` |
 | `AGENT_PORT` | `6556` | agent TCP port Checkmk polls (published 6559) |
 | `HTTP_PORT` | `8080` | combined control panel (published 8099) |
-| `ESTATE_HOSTS` | *(all)* | comma list of host names to carry |
+| `ESTATE_HOSTS` | *(all)* | comma list of host names to carry (short names) |
 | `CHILD_AGENT_BASE` | `7600` | internal child agent port base (`+ registry index`) |
 | `CHILD_HTTP_BASE` | `7700` | internal child admin port base |
 | `AGENT_VERSION` | `2.5.0-2026.04.03` | version in the delivery header |

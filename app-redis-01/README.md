@@ -91,7 +91,7 @@ AGENT_PORT=6561 HTTP_PORT=8091 START_STATE=healthy python3 serve.py
 
 ## 2. Set it up in Checkmk
 
-1. *Setup → Hosts → Add host*. Name `app-redis-01`, IP `127.0.0.1`, **Checkmk
+1. *Setup → Hosts → Add host*. Name `app-redis-01.corp.meridian-retail.com`, IP `127.0.0.1`, **Checkmk
    agent port → 6561**.
 2. Service discovery (any state — no discovery-time baselines here). Activate.
    Everything green. You'll see `Redis MERIDIAN_CACHE Server Info`, `… Clients`
@@ -138,7 +138,7 @@ curl http://localhost:8091/                  # JSON: state, used_memory_pct_of_m
 
 | Var | Default | Meaning |
 |---|---|---|
-| `CMK_HOSTNAME` | `app-redis-01` | name in `<<<check_mk>>>` |
+| `CMK_HOSTNAME` | `app-redis-01.corp.meridian-retail.com` | name in `<<<check_mk>>>` |
 | `AGENT_PORT` | `6556` | agent TCP port (published 6561) |
 | `HTTP_PORT` | `8080` | admin port (published 8091) |
 | `START_STATE` | `healthy` | `healthy` \| `degraded` \| `broken` |

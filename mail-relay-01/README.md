@@ -74,7 +74,7 @@ AGENT_PORT=6564 HTTP_PORT=8094 START_STATE=healthy python3 serve.py
 
 ## 2. Set it up in Checkmk
 
-1. *Setup → Hosts → Add host*. Name `mail-relay-01`, IP `127.0.0.1`, **Checkmk
+1. *Setup → Hosts → Add host*. Name `mail-relay-01.corp.meridian-retail.com`, IP `127.0.0.1`, **Checkmk
    agent port → 6564**.
 2. Service discovery (any state — no discovery-time baselines here). Activate.
    Everything green; the *Postfix Queue default* and *Postfix status default*
@@ -108,7 +108,7 @@ curl http://localhost:8094/                  # JSON: state, deferred_queue, acti
 
 | Var | Default | Meaning |
 |---|---|---|
-| `CMK_HOSTNAME` | `mail-relay-01` | name in `<<<check_mk>>>` |
+| `CMK_HOSTNAME` | `mail-relay-01.corp.meridian-retail.com` | name in `<<<check_mk>>>` |
 | `AGENT_PORT` | `6556` | agent TCP port (published 6564) |
 | `HTTP_PORT` | `8080` | admin port (published 8094) |
 | `START_STATE` | `healthy` | `healthy` \| `degraded` \| `broken` |

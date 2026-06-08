@@ -61,7 +61,7 @@ stale on backwards counters) and does not reset a running incident mid-demo.
 ## 2. Add it in Checkmk (the live part of the demo)
 
 **Host:**
-1. *Setup → Hosts → Add host*. Name `payment-api`, IP = the machine running the
+1. *Setup → Hosts → Add host*. Name `payment-api.corp.meridian-retail.com`, IP = the machine running the
    container (or the container IP if your site can reach it directly).
 2. Set the **Checkmk agent port** override to **`6557`** (the demo's published port;
    the default 6556 is your laptop's own agent).
@@ -114,7 +114,7 @@ plain discovery.
 | Beat | Action | What the room sees |
 |---|---|---|
 | Setup | container is up & **broken** | nothing in Checkmk yet — it's the blind spot |
-| Add host ⭐ | add `payment-api`, discovery | DNS/ping OK, agent test OK, services found |
+| Add host ⭐ | add `payment-api.corp.meridian-retail.com`, discovery | DNS/ping OK, agent test OK, services found |
 | HTTP check | add the `check_httpv2` rule | **CRIT** — service returns 503, slow |
 | Correlate | open the host | wall of green + **Systemd Service Summary CRIT**: `payment-worker.service` failed — two reds, one story |
 | Activate ⭐ | activate changes (slide-out) | everything goes live without leaving the page |
@@ -141,7 +141,7 @@ curl http://<host>:8080/admin/status   # JSON: state, durations, leak size
 
 | Var | Default | Meaning |
 |---|---|---|
-| `CMK_HOSTNAME` | `payment-api` | name baked into `<<<check_mk>>>` |
+| `CMK_HOSTNAME` | `payment-api.corp.meridian-retail.com` | name baked into `<<<check_mk>>>` |
 | `AGENT_PORT` | `6556` | agent TCP port |
 | `HTTP_PORT` | `8080` | HTTP endpoint port |
 | `START_BROKEN` | `1` | start in the incident state (ignored once a state file exists) |

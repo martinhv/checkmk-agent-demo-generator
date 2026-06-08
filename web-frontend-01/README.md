@@ -59,7 +59,7 @@ JSON status: `http://localhost:8090/`
 
 ## 2. Set it up in Checkmk
 
-1. *Setup → Hosts → Add host*. Name `web-frontend-01`, IP `127.0.0.1`,
+1. *Setup → Hosts → Add host*. Name `web-frontend-01.corp.meridian-retail.com`, IP `127.0.0.1`,
    **Checkmk agent port → 6560**.
 2. Service discovery (any time — no discovery-time baselines here).
 3. Activate changes. Every service will be green.
@@ -71,7 +71,7 @@ thresholds and this host is well inside them.
 
 | Var | Default (Docker) | Meaning |
 |---|---|---|
-| `CMK_HOSTNAME` | `web-frontend-01` | hostname in `<<<check_mk>>>` |
+| `CMK_HOSTNAME` | `web-frontend-01.corp.meridian-retail.com` | hostname in `<<<check_mk>>>` |
 | `AGENT_PORT` | `6556` | agent TCP port inside the container (published as **6560**) |
 | `HTTP_PORT` | `8080` | admin HTTP port inside the container (published as **8090**) |
 | `AGENT_VERSION` | `2.5.0-2026.04.03` | version string in the agent header |

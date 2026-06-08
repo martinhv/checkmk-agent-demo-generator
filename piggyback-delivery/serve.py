@@ -52,7 +52,11 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
 
-DELIVERY_HOSTNAME = os.environ.get("DELIVERY_HOSTNAME", "cmk-demo-gateway")
+# Estate DNS domain — every host shows up in Checkmk as <short>.<ESTATE_DOMAIN>
+# (FQDN). The short name stays the internal label (panel, ports, selection).
+ESTATE_DOMAIN = os.environ.get("ESTATE_DOMAIN", "corp.meridian-retail.com")
+DELIVERY_HOSTNAME = os.environ.get(
+    "DELIVERY_HOSTNAME", f"cmk-demo-gateway.{ESTATE_DOMAIN}")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "6556"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "2.5.0-2026.04.03")
@@ -98,13 +102,18 @@ class Child:
         self.proc: subprocess.Popen | None = None
 
     @property
+    def fqdn(self) -> str:
+        # the name Checkmk sees (piggyback target + the child's own Hostname:)
+        return f"{self.name}.{ESTATE_DOMAIN}"
+
+    @property
     def script(self) -> str:
         return os.path.join(REPO_ROOT, self.directory, "serve.py")
 
     def spawn(self) -> None:
         env = dict(os.environ)
         env.update({
-            "CMK_HOSTNAME": self.name,
+            "CMK_HOSTNAME": self.fqdn,
             "AGENT_PORT": str(self.agent_port),
             "HTTP_PORT": str(self.http_port),
             "STATE_FILE": f"/var/tmp/cmk-demo-pb-{self.name}.json",
@@ -243,7 +252,7 @@ def build_delivery_output() -> bytes:
         payload = child.fetch_agent()
         if not payload:
             continue  # child not up yet; better to omit than emit garbage
-        out += f"<<<<{child.name}>>>>\n".encode()
+        out += f"<<<<{child.fqdn}>>>>\n".encode()
         out += payload
         if not payload.endswith(b"\n"):
             out += b"\n"

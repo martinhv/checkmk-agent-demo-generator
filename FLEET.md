@@ -62,10 +62,17 @@ new hosts use 6560–6567 so they never collide with each other or the originals
 
 | Host | agent TCP | admin/HTTP |
 |---|---|---|
-| `cmk-demo-gateway` (piggyback delivery shell) | 6559 | 8099 |
+| `cmk-demo-gateway.corp.meridian-retail.com` (piggyback delivery shell) | 6559 | 8099 |
 
 ## Conventions every host follows
 
+- **FQDN host names.** Every host is monitored in Checkmk under its fully
+  qualified name `<short>.corp.meridian-retail.com` (the AD/DNS domain implied by
+  `win-dc-01`). The short label (`web-frontend-01`, …) used in the tables above is
+  just the internal handle for ports, the control panel, and `ESTATE_HOSTS`
+  selection. Override the domain with `ESTATE_DOMAIN` (piggyback) or `CMK_HOSTNAME`
+  (per host). In piggyback mode the FQDN is the piggyback marker, so add each
+  estate host in Checkmk under its FQDN.
 - **Plaintext TCP agent** + the section-by-section parity rules in `CLAUDE.md`
   (full `<<<check_mk>>>` header, controller-status pretending TLS registration,
   deployed-plugin list, both `lnx_if` variants, `df_v2`, full `/proc/meminfo`,

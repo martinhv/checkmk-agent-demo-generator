@@ -30,7 +30,7 @@ TransportProtocol.PLAIN and accepts it — no TLS, no registration.
 Stdlib only -> the container is plain python:slim, no pip install.
 
 Config via env:
-  CMK_HOSTNAME   host name baked into the agent output   (default: db-postgres-01)
+  CMK_HOSTNAME   host name baked into the agent output   (default: db-postgres-01.corp.meridian-retail.com)
   AGENT_PORT     TCP port for the agent                  (default: 6556)
   HTTP_PORT      TCP port for the admin/toggle endpoint  (default: 8080)
   START_STATE    healthy | degraded | broken             (default: healthy)
@@ -61,7 +61,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
 
-HOSTNAME = os.environ.get("CMK_HOSTNAME", "db-postgres-01")
+HOSTNAME = os.environ.get("CMK_HOSTNAME", "db-postgres-01.corp.meridian-retail.com")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "6556"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "2.5.0-2026.04.03")

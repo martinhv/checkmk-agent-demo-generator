@@ -41,7 +41,7 @@ JSON status: http://127.0.0.1:8096/
 
 ## Checkmk setup
 
-1. Add host `backup-01` with address `127.0.0.1`.
+1. Add host `backup-01.corp.meridian-retail.com` with address `127.0.0.1`.
 2. Under **Individual program call instead of agent** (or via the host's
    **Checkmk agent port** rule), set port to **6566**.
 3. Discover services. All services should be OK immediately.
@@ -53,7 +53,7 @@ safe.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CMK_HOSTNAME` | `backup-01` | Hostname reported to Checkmk |
+| `CMK_HOSTNAME` | `backup-01.corp.meridian-retail.com` | Hostname reported to Checkmk |
 | `AGENT_PORT` | `6566` | TCP port the agent listens on (container-internal) |
 | `HTTP_PORT` | `8080` | HTTP status port (container-internal; published as 8096) |
 | `AGENT_VERSION` | `2.5.0-2026.04.03` | Agent version string |

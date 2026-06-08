@@ -62,7 +62,7 @@ AGENT_PORT=6567 HTTP_PORT=8097 START_STATE=healthy python3 serve.py
 
 ## 2. Set it up in Checkmk
 
-1. *Setup → Hosts → Add host*. Name `win-dc-01`, IP `127.0.0.1`, **Checkmk
+1. *Setup → Hosts → Add host*. Name `win-dc-01.corp.meridian-retail.com`, IP `127.0.0.1`, **Checkmk
    agent port → 6567**. Checkmk detects it as a Windows host from the agent
    sections.
 2. Service discovery (any state — no discovery-time baselines). Activate.
@@ -96,7 +96,7 @@ curl http://localhost:8097/                   # JSON: state, c_drive_used_pct, b
 
 | Var | Default | Meaning |
 |---|---|---|
-| `CMK_HOSTNAME` | `win-dc-01` | name in `<<<check_mk>>>` |
+| `CMK_HOSTNAME` | `win-dc-01.corp.meridian-retail.com` | name in `<<<check_mk>>>` |
 | `AGENT_PORT` | `6556` | agent TCP port (published 6567) |
 | `HTTP_PORT` | `8080` | admin port (published 8097) |
 | `START_STATE` | `healthy` | `healthy` \| `degraded` \| `broken` |

@@ -104,7 +104,7 @@ curl localhost:8095/admin/heal      # back to ~30/200, all green
 
 ## 2. Set it up in Checkmk (before the talk)
 
-1. **Add the host** `db-postgres-02` with IP address `127.0.0.1`.
+1. **Add the host** `db-postgres-02.corp.meridian-retail.com` with IP address `127.0.0.1`.
 2. Override the agent port: rule *"Checkmk agent port"* (or the host's
    *Connection* attributes) → **6565**.
 3. The host speaks plaintext TCP — no TLS/registration needed. (The
@@ -184,7 +184,7 @@ check's defaults.
 
 | Env var | Default | Effect |
 |---|---|---|
-| `CMK_HOSTNAME` | `db-postgres-02` | hostname baked into the agent output |
+| `CMK_HOSTNAME` | `db-postgres-02.corp.meridian-retail.com` | hostname baked into the agent output |
 | `AGENT_PORT` | `6556` | TCP port for the agent (container side; published as 6565) |
 | `HTTP_PORT` | `8080` | TCP port for the admin/toggle UI (published as 8095) |
 | `START_STATE` | `healthy` | `healthy` \| `degraded` \| `broken` at boot |

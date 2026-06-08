@@ -67,7 +67,7 @@ AGENT_PORT=6562 HTTP_PORT=8092 START_STATE=healthy python3 serve.py
 
 ## 2. Set it up in Checkmk
 
-1. *Setup → Hosts → Add host*. Name `app-worker-01`, IP `127.0.0.1`, **Checkmk
+1. *Setup → Hosts → Add host*. Name `app-worker-01.corp.meridian-retail.com`, IP `127.0.0.1`, **Checkmk
    agent port → 6562**.
 2. Service discovery (any state — no discovery-time baselines here, unlike the
    SMART check on the db host). Activate. Everything green.
@@ -100,7 +100,7 @@ curl http://localhost:8092/                  # JSON: state, memory_pressure_pct,
 
 | Var | Default | Meaning |
 |---|---|---|
-| `CMK_HOSTNAME` | `app-worker-01` | name in `<<<check_mk>>>` |
+| `CMK_HOSTNAME` | `app-worker-01.corp.meridian-retail.com` | name in `<<<check_mk>>>` |
 | `AGENT_PORT` | `6556` | agent TCP port (published 6562) |
 | `HTTP_PORT` | `8080` | admin port (published 8092) |
 | `START_STATE` | `healthy` | `healthy` \| `degraded` \| `broken` |

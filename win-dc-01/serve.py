@@ -44,7 +44,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
 
-HOSTNAME = os.environ.get("CMK_HOSTNAME", "win-dc-01")
+HOSTNAME = os.environ.get("CMK_HOSTNAME", "win-dc-01.corp.meridian-retail.com")
+# Win32_ComputerSystem.Name is the NetBIOS short name (uppercase), not the FQDN.
+COMPUTERNAME = HOSTNAME.split(".")[0].upper()
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "6556"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "2.5.0-2026.04.03")
@@ -253,7 +255,7 @@ def build_agent_output(state: str) -> bytes:
     a(f"|{qlen}|{int(uptime * 10_000_000)}|10000000|OK")
     a("[computer_system]")
     a("Name|NumberOfLogicalProcessors|NumberOfProcessors|WMIStatus")
-    a(f"{HOSTNAME}|4|1|OK")
+    a(f"{COMPUTERNAME}|4|1|OK")
 
     # ---- uptime (seconds) -------------------------------------------------- #
     a("<<<uptime>>>")

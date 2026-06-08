@@ -26,7 +26,7 @@ creeping up from client retries, tx throughput collapsed.
 Stdlib only -> the container is plain python:slim, no pip install.
 
 Config via env:
-  CMK_HOSTNAME    host name baked into the agent output   (default: payment-api)
+  CMK_HOSTNAME    host name baked into the agent output   (default: payment-api.corp.meridian-retail.com)
   AGENT_PORT      TCP port for the agent                  (default: 6556)
   HTTP_PORT       TCP port for the HTTP endpoint          (default: 8080)
   START_BROKEN    start in the broken state ("1"/"0")     (default: 1)
@@ -49,7 +49,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
 
-HOSTNAME = os.environ.get("CMK_HOSTNAME", "payment-api")
+HOSTNAME = os.environ.get("CMK_HOSTNAME", "payment-api.corp.meridian-retail.com")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "6556"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 BROKEN_DELAY_MS = int(os.environ.get("BROKEN_DELAY_MS", "1500"))

@@ -10,7 +10,7 @@ Plaintext TCP agent (the Checkmk 2.5 fetcher sees `<<` -> TransportProtocol.
 PLAIN and accepts it without TLS/registration). Stdlib only.
 
 Config via env:
-  CMK_HOSTNAME        default backup-01
+  CMK_HOSTNAME        default backup-01.corp.meridian-retail.com
   AGENT_PORT          default 6566 (container internal; published on 6566)
   HTTP_PORT           default 8080 (container internal; published on 8096)
   AGENT_VERSION       default 2.5.0-2026.04.03
@@ -27,7 +27,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
 
-HOSTNAME = os.environ.get("CMK_HOSTNAME", "backup-01")
+HOSTNAME = os.environ.get("CMK_HOSTNAME", "backup-01.corp.meridian-retail.com")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "6566"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "2.5.0-2026.04.03")
