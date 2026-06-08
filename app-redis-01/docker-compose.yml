@@ -1,0 +1,17 @@
+# Meridian Retail demo: app-redis-01 — maxmemory eviction storm.
+#   docker compose up --build -d
+#   docker compose logs -f
+#
+# Published on 127.0.0.1 as 6561 (agent) / 8091 (admin). In Checkmk, add the
+# host with IP 127.0.0.1 and set the "Checkmk agent port" override to 6561.
+services:
+  app-redis-01:
+    build: .
+    container_name: app-redis-01
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6561:6556"   # Check_MK agent
+      - "127.0.0.1:8091:8080"   # admin toggle/UI
+    environment:
+      CMK_HOSTNAME: app-redis-01
+      START_STATE: healthy

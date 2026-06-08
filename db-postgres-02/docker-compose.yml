@@ -1,0 +1,29 @@
+# Meridian Retail demo: db-postgres-02 — PostgreSQL read replica.
+# Incident: a runaway BI/reporting client leaks connections -> the connection
+# count climbs toward max_connections -> "PostgreSQL Connections MAIN/analytics"
+# WARN at 80 % then CRIT at 90 % (the one postgres check that alerts by default).
+#
+#   docker compose up --build -d
+#   docker compose logs -f
+#
+# Published on 127.0.0.1 as 6565 (agent) / 8095 (admin). In Checkmk, add the
+# host with IP 127.0.0.1 and set the "Checkmk agent port" override to 6565.
+services:
+  db-postgres-02:
+    build: .
+    container_name: db-postgres-02
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6565:6556"   # Check_MK agent  -> override port in Checkmk to 6565
+      - "127.0.0.1:8095:8080"   # admin toggle/UI -> http://localhost:8095/admin
+    environment:
+      CMK_HOSTNAME: db-postgres-02
+      START_STATE: healthy
+      # MAX_CONNECTIONS: 200    # the connection-levels denominator (default 200)
+      # AUTO_BREAK_AFTER_MIN: 18
+    volumes:
+      # persist counters/uptime/incident state across restarts (see CLAUDE.md)
+      - db-postgres-02-state:/var/tmp
+
+volumes:
+  db-postgres-02-state:

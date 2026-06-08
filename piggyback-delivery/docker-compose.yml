@@ -1,0 +1,23 @@
+# Meridian Retail demo: run the WHOLE estate behind ONE piggyback delivery host.
+#   docker compose up --build -d
+#   docker compose logs -f
+#
+# One container runs the delivery shell + every estate host's serve.py as an
+# internal child. Checkmk polls only the delivery shell (agent 6559); the estate
+# hosts arrive as piggyback and are added in Checkmk as piggyback hosts (no agent
+# port override). Combined control panel on 8099.
+#
+# Build context is the repo root (the image needs every host's serve.py).
+services:
+  cmk-demo-gateway:
+    build:
+      context: ..
+      dockerfile: piggyback-delivery/Dockerfile
+    container_name: cmk-demo-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6559:6556"   # Check_MK agent (the delivery shell)
+      - "127.0.0.1:8099:8080"   # combined estate control panel
+    environment:
+      DELIVERY_HOSTNAME: cmk-demo-gateway
+      # ESTATE_HOSTS: "web-frontend-01,app-worker-01,db-postgres-01"  # optional subset

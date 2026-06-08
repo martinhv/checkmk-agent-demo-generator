@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+
+# Build/packaging artifacts — never commit archives
+*.tar
+*.tar.gz
+*.tgz
+*.tar.xz
+*.tar.bz2
+*.zip

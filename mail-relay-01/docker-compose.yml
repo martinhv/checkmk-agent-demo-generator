@@ -1,0 +1,17 @@
+# Meridian Retail demo: mail-relay-01 — downstream MX unreachable -> deferred queue backlog.
+#   docker compose up --build -d
+#   docker compose logs -f
+#
+# Published on 127.0.0.1 as 6564 (agent) / 8094 (admin). In Checkmk, add the
+# host with IP 127.0.0.1 and set the "Checkmk agent port" override to 6564.
+services:
+  mail-relay-01:
+    build: .
+    container_name: mail-relay-01
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6564:6556"   # Check_MK agent
+      - "127.0.0.1:8094:8080"   # admin toggle/UI
+    environment:
+      CMK_HOSTNAME: mail-relay-01
+      START_STATE: healthy

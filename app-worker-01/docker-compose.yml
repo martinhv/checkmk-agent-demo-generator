@@ -1,0 +1,17 @@
+# Meridian Retail demo: app-worker-01 — memory leak -> OOM -> service flap.
+#   docker compose up --build -d
+#   docker compose logs -f
+#
+# Published on 127.0.0.1 as 6562 (agent) / 8092 (admin). In Checkmk, add the
+# host with IP 127.0.0.1 and set the "Checkmk agent port" override to 6562.
+services:
+  app-worker-01:
+    build: .
+    container_name: app-worker-01
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6562:6556"   # Check_MK agent
+      - "127.0.0.1:8092:8080"   # admin toggle/UI
+    environment:
+      CMK_HOSTNAME: app-worker-01
+      START_STATE: healthy

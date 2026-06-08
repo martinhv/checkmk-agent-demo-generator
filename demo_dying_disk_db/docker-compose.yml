@@ -1,0 +1,20 @@
+# Conf #12 demo: fake database host (Theme 2, "Explain with AI").
+#   docker compose up --build -d
+#   docker compose logs -f
+#
+# Port plan on the demo laptop: 6556 is the laptop's own Checkmk agent. This
+# demo publishes 6557 (agent) and 8081 (admin toggle/UI). NOTE: the payment-api
+# demo (demo_broken_http_service) also uses 6557 — stop it first, or change one
+# side's host port if both demos must run at once. In Checkmk, add the host
+# with IP 127.0.0.1 and set the "Checkmk agent port" override to 6557.
+services:
+  db-postgres-01:
+    build: .
+    container_name: db-postgres-01
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6557:6556"   # Check_MK agent -> localhost:6557 (override port in Checkmk)
+      - "127.0.0.1:8081:8080"   # admin toggle   -> curl localhost:8081/admin/degrade|break|heal
+    environment:
+      CMK_HOSTNAME: db-postgres-01
+      START_STATE: healthy      # discover while healthy! (SMART baselines at discovery)

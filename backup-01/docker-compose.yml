@@ -1,0 +1,22 @@
+# Meridian Retail demo: backup-01 — steady-green restic backup host.
+#   docker compose up --build -d
+#   docker compose logs -f
+#
+# Published on 127.0.0.1 as 6566 (agent) / 8096 (admin). In Checkmk, add the
+# host with IP 127.0.0.1 and set the "Checkmk agent port" override to 6566.
+services:
+  backup-01:
+    build: .
+    container_name: backup-01
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6566:6566"   # Checkmk agent (plaintext TCP)
+      - "127.0.0.1:8096:8080"   # Status UI / JSON endpoint
+    environment:
+      CMK_HOSTNAME: backup-01
+      STATE_FILE: /var/tmp/cmk-demo-backup-state.json
+    volumes:
+      - backup01-state:/var/tmp
+
+volumes:
+  backup01-state:

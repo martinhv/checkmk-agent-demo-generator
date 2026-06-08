@@ -1,0 +1,31 @@
+# Conf #12 demo: fake dependency host.
+#   docker compose up --build -d
+#   docker compose logs -f
+#
+# The laptop's own Checkmk agent owns 6556, so the demo agent is published on
+# 6557 instead (no sudo, both run side by side). In Checkmk, add the host with
+# IP 127.0.0.1 and set the "Checkmk agent port" override to 6557.
+# NOTE: the db demo (demo_dying_disk_db) also uses 6557 — stop it first, or
+# change one side's host port if both demos must run at once.
+services:
+  payment-api:
+    build: .
+    container_name: checkout-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6557:6556"   # Check_MK agent  -> localhost:6557 (override port in Checkmk)
+      - "127.0.0.1:8080:8080"   # HTTP endpoint   -> check_http / check_httpv2 here
+    environment:
+      CMK_HOSTNAME: checkout-api
+      START_BROKEN: "1"        # start in the incident state; heal it live during the demo
+      BROKEN_DELAY_MS: "1500"  # added latency while broken (sells the slow check_http)
+    volumes:
+      # counter/uptime/incident persistence (serve.py writes
+      # /var/tmp/cmk-demo-payment-api-state.json): without this, every
+      # `docker compose up --build` resets the counters -> Checkmk's
+      # rate-based services (Disk IO, Kernel Perf, Interface) go stale for
+      # minutes, and a redeploy mid-demo would reset the running incident.
+      - demo-state:/var/tmp
+
+volumes:
+  demo-state:
