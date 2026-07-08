@@ -58,7 +58,10 @@ new hosts use 6560–6567 so they never collide with each other or the originals
    plus every host's `serve.py` internally; Checkmk polls only the delivery
    shell (agent **6559**, control panel **8099**) and the estate hosts are added
    as **piggyback** hosts — no per-host agent port. The shell emits only a
-   minimal agent section. See `piggyback-delivery/README.md`.
+   minimal agent section. The site setup is one command as well:
+   `piggyback-delivery/setup-checkmk-site.py` (REST API — folder, hosts, rule,
+   discovery, activate; idempotent, `--remove` to tear down). See
+   `piggyback-delivery/README.md`.
 
 | Host | agent TCP | admin/HTTP |
 |---|---|---|

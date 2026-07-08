@@ -66,7 +66,54 @@ then `<<<<host>>>>` blocks):
 nc 127.0.0.1 6559 | grep -E '^<<<<|^Hostname:'
 ```
 
-## 2. Set it up in Checkmk
+## 2. Set it up in Checkmk — one command
+
+`setup-checkmk-site.py` does the whole site side through the REST API
+(stdlib-only, idempotent — safe to re-run, e.g. after changing
+`ESTATE_HOSTS`). On a Checkmk dev box the full from-scratch flow is:
+
+```bash
+cmk-dev-install-site              # install today's build + create the v* site
+cd piggyback-delivery
+docker compose up --build -d
+./setup-checkmk-site.py --site    # picks the newest running local v* dev site
+```
+
+`--site` knows the cmk-dev-site conventions — URL `http://localhost/<site>`,
+credentials `cmkadmin`/`cmk` — so no other options are needed; `--site NAME`
+targets a specific local site. For any other site, pass the URL and
+credentials explicitly:
+
+```bash
+./setup-checkmk-site.py --site-url http://localhost/mysite --user automation
+# secret via --secret, $CMK_AUTOMATION_SECRET, or interactive prompt
+```
+
+It needs a site user with Setup write access (e.g. the site's `automation`
+user) and does, in order:
+
+1. asks the running container (control panel `:8099`) which hosts it
+   *actually* carries — an `ESTATE_HOSTS` subset just works;
+2. **heals** every non-healthy host first, because services must be
+   discovered in the healthy state (`db-postgres-01`'s SMART check baselines
+   raw attribute values at discovery — same caveat as the standalone demo);
+3. creates a **Meridian Retail demo** folder (`--folder`, `/` = root), the
+   delivery shell as a normal TCP host with an `agent_ports` rule (6559), and
+   every carried host as a pure piggyback host ("no agent" + "always use and
+   expect piggyback data" + "no IP");
+4. runs service discovery — the **shell first**, because that refresh fetch
+   is what stores everyone else's piggyback payloads on the site;
+5. activates the changes.
+
+Site and container on different machines? Run the script wherever it can
+reach both, and pass `--agent-ip <container host IP as the site sees it>`
+plus `--panel http://<container host>:8099`.
+
+`--remove` (with the same `--site`/`--site-url`/`--folder`) tears everything
+down again — hosts, rule, folder — and leaves anything else on the site
+untouched.
+
+### Manual setup (what the script does, if you'd rather click)
 
 1. **Add the delivery shell as a normal TCP host.** Name
    `cmk-demo-gateway.corp.meridian-retail.com`, IP `127.0.0.1` (or the Docker
@@ -79,20 +126,18 @@ nc 127.0.0.1 6559 | grep -E '^<<<<|^Hostname:'
    `web-frontend-01`, `payment-api`, `app-worker-01`, `app-redis-01`,
    `db-postgres-01`, `db-postgres-02`, `mail-relay-01`, `fileserver-01`,
    `backup-01`, `win-dc-01` (e.g. `payment-api.corp.meridian-retail.com`). For
-   each, set **"Checkmk agent /
-   API integrations" → "Configured API integrations, no Checkmk agent"** so the
-   site does *not* try to poll them over TCP — they receive their data purely
-   via piggyback from the delivery host. (IP address can be left empty / "no
-   IP".)
+   each, set **"Checkmk agent / API integrations" → "No API integrations, no
+   Checkmk agent"**, **"Piggyback" → "Always use and expect piggyback data"**
+   and **"IP address family" → "No IP"** — the site must not poll them over
+   TCP; their data arrives purely via piggyback from the delivery host.
 3. **Discover `db-postgres-01` while it is HEALTHY** — its SMART check baselines
    raw attribute values at discovery time (same caveat as the standalone
    `demo_dying_disk_db`). Discover the rest in any state.
 4. Activate. The whole estate appears, mostly green.
 
-> Tip: the standard *Dynamic host configuration* / *Piggyback* mechanics mean a
-> piggyback host only has data while the delivery host is being polled and is
-> emitting that host's block. If you carry a subset via `ESTATE_HOSTS`, only
-> those piggyback hosts get data.
+> Tip: a piggyback host only has data while the delivery host is being polled
+> and is emitting that host's block. If you carry a subset via `ESTATE_HOSTS`,
+> only those piggyback hosts get data.
 
 ## 3. Combined control panel
 

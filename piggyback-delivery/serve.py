@@ -456,8 +456,10 @@ class HttpHandler(BaseHTTPRequestHandler):
                 return None
         return self._send(200, {
             "delivery_host": DELIVERY_HOSTNAME,
+            "domain": ESTATE_DOMAIN,
             "carried_hosts": [
-                {"name": c.name, "state": c.child_state(), "actions": c.actions}
+                {"name": c.name, "fqdn": c.fqdn, "state": c.child_state(),
+                 "actions": c.actions}
                 for c in CHILDREN],
             "ui": "/admin",
         })

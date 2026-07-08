@@ -44,7 +44,11 @@ host's `serve.py` internally; Checkmk polls only the delivery shell (agent
 `6559`) and you add the estate hosts as piggyback hosts — no per-host agent
 port. The shell itself emits only a minimal agent section. It also gives you a
 single combined control panel (`:8099/admin`) to drive every host's break/heal.
-Reuses each host's `serve.py` unmodified. See `piggyback-delivery/README.md`.
+Reuses each host's `serve.py` unmodified. The Checkmk side is one command too:
+`piggyback-delivery/setup-checkmk-site.py` creates the folder, hosts and rule,
+discovers and activates via the REST API (and `--remove` cleans up again). On
+a dev box, `./setup-checkmk-site.py --site` right after `cmk-dev-install-site`
+needs no further options. See `piggyback-delivery/README.md`.
 
 ## Port map
 
