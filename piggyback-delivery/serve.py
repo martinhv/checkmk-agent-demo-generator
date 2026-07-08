@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -465,26 +466,32 @@ class HttpHandler(BaseHTTPRequestHandler):
 def main() -> None:
     print(f"[boot] piggyback delivery shell={DELIVERY_HOSTNAME!r}  "
           f"agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  hosts={len(CHILDREN)}")
-    for child in CHILDREN:
-        child.spawn()
-    # give children a moment to bind so the first poll already has everyone
-    for child in CHILDREN:
-        child.wait_ready()
 
-    agent = AgentServer(("0.0.0.0", AGENT_PORT), AgentHandler)  # nosec B104
-    http = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), HttpHandler)  # nosec B104
-    threading.Thread(target=agent.serve_forever, daemon=True).start()
-    print(f"[boot] control panel: http://localhost:{HTTP_PORT}/admin")
-    print("[boot] In Checkmk: add ONE TCP host for the delivery shell, then add the")
-    print("[boot] estate hosts as *piggyback* hosts (no agent connection needed).")
+    # native (non-docker) runs: SIGTERM must reap the children too, not just ^C
+    # — install BEFORE spawning so a kill during startup can't leak them
+    def _sigterm(signum, frame):  # noqa: ARG001
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _sigterm)
+
     try:
+        for child in CHILDREN:
+            child.spawn()
+        # give children a moment to bind so the first poll already has everyone
+        for child in CHILDREN:
+            child.wait_ready()
+
+        agent = AgentServer(("0.0.0.0", AGENT_PORT), AgentHandler)  # nosec B104
+        http = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), HttpHandler)  # nosec B104
+        threading.Thread(target=agent.serve_forever, daemon=True).start()
+        print(f"[boot] control panel: http://localhost:{HTTP_PORT}/admin")
+        print("[boot] In Checkmk: add ONE TCP host for the delivery shell, then add the")
+        print("[boot] estate hosts as *piggyback* hosts (no agent connection needed).")
         http.serve_forever()
     except KeyboardInterrupt:
         print("\n[boot] shutting down — terminating children")
+    finally:
         for child in CHILDREN:
             child.terminate()
-        agent.shutdown()
-        http.shutdown()
 
 
 if __name__ == "__main__":

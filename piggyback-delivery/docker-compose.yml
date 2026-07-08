@@ -18,6 +18,7 @@ services:
     ports:
       - "127.0.0.1:6559:6556"   # Check_MK agent (the delivery shell)
       - "127.0.0.1:8099:8080"   # combined estate control panel
-    environment:
-      DELIVERY_HOSTNAME: cmk-demo-gateway
-      # ESTATE_HOSTS: "web-frontend-01,app-worker-01,db-postgres-01"  # optional subset
+# Defaults: DELIVERY_HOSTNAME = cmk-demo-gateway.corp.meridian-retail.com (FQDN,
+# derived from ESTATE_DOMAIN). Uncomment to override:
+#    environment:
+#      ESTATE_HOSTS: "web-frontend-01,app-worker-01,db-postgres-01"  # subset only
