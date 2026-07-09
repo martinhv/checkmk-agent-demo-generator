@@ -943,6 +943,16 @@ class HttpHandler(BaseHTTPRequestHandler):
         if path == "/admin":
             return self._send_html(_admin_page())
 
+        if path == "/admin/shutdown":
+            # localhost demo tool: lets estate.py stop a netsim that runs as
+            # the site user without needing sudo again
+            save_state()
+            self._send(200, {"shutdown": True})
+            threading.Thread(
+                target=lambda: (time.sleep(0.3), os._exit(0)),  # noqa: SLF001
+                daemon=True).start()
+            return None
+
         if path.startswith("/admin/"):
             parts = path[len("/admin/"):].split("/")
             if len(parts) == 2 and parts[1] in ACTION_TO_STATE:

@@ -161,12 +161,15 @@ def _pid_kill(pidfile: str, what: str) -> None:
 # --------------------------------------------------------------------------- #
 #  SNMP walk renderer (must write into the LOCAL site as the site user)
 # --------------------------------------------------------------------------- #
+NETSIM_LOG = "/var/tmp/cmk-demo-estate-netsim.log"
+NETSIM_COPY = "/var/tmp/cmk-demo-netsim.py"
+
+
 def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
     if get_json(SNMP_PANEL + "/") is not None:
         print("  netsim already running")
         return
     netsim = os.path.join(REPO, "snmp", "netsim.py")
-    env_extra = {"NETSIM_ACCESS_SWITCHES": str(args.replicas)}
     if args.walks_dir:
         target = ["--walks-dir", args.walks_dir]
         run_as = None
@@ -175,40 +178,70 @@ def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
         run_as = site_name
     else:
         sys.exit("ERROR: SNMP needs a local site (--site) or --walks-dir")
-
-    if run_as and os.access(f"/omd/sites/{run_as}/var/check_mk", os.W_OK):
-        run_as = None  # already permitted (running as the site user)
+    target += ["--http-port", "8101", "--access-switches", str(args.replicas)]
 
     if run_as:
-        # the site's var dir is only writable by the site user -> sudo.
-        # Validate interactively FIRST (uses the terminal), then launch the
-        # daemon non-interactively against the cached credentials.
+        import pwd
+        try:
+            pwd.getpwnam(run_as)
+        except KeyError:
+            sys.exit(f"ERROR: no user {run_as!r} on this machine — is that "
+                     "an OMD site here? (SNMP needs a LOCAL site)")
+        if os.access(f"/omd/sites/{run_as}/var/check_mk", os.W_OK):
+            run_as = None  # already permitted (running as the site user)
+
+    log = open(NETSIM_LOG, "ab")  # noqa: SIM115
+    if run_as:
+        # Two traps: (1) the repo usually lives under a 0750 home dir the
+        # site user cannot read -> run a world-readable copy; (2) sudo's
+        # cached credential is bound to this terminal (tty_tickets), so a
+        # detached `sudo -n` can't use it -> let sudo authenticate on the
+        # tty itself and background the daemon with -b.
+        shutil.copyfile(netsim, NETSIM_COPY)
+        os.chmod(NETSIM_COPY, 0o644)
         print("  starting netsim as the site user (sudo may prompt)")
-        if subprocess.run(["sudo", "-v"], check=False).returncode != 0:  # noqa: S603, S607
-            sys.exit("ERROR: sudo validation failed — run netsim yourself: "
-                     f"sudo -u {run_as} {netsim} --site {run_as}")
-        cmd = ["sudo", "-n", "-u", run_as, "--",
-               sys.executable, "-u", netsim, *target, "--http-port", "8101"]
+        r = subprocess.run(  # noqa: S603
+            ["sudo", "-u", run_as, "-b", "--",
+             sys.executable, "-u", NETSIM_COPY, *target],
+            stdout=log, stderr=subprocess.STDOUT)
+        if r.returncode != 0:
+            sys.exit("ERROR: sudo failed — run netsim yourself:\n"
+                     f"       sudo -u {run_as} python3 {NETSIM_COPY} "
+                     f"{' '.join(target)}")
     else:
-        cmd = [sys.executable, "-u", netsim, *target, "--http-port", "8101"]
-    env = {**os.environ, **env_extra}
-    log = open("/var/tmp/cmk-demo-estate-netsim.log", "ab")  # noqa: SIM115
-    proc = subprocess.Popen(  # noqa: S603
-        cmd, env=env, stdout=log, stderr=subprocess.STDOUT,
-        start_new_session=True)
-    with open(PIDFILE_NETSIM, "w") as f:
-        f.write(str(proc.pid))
-    wait_for(SNMP_PANEL + "/", "netsim")
-    print(f"  netsim started (pid {proc.pid}, panel {SNMP_PANEL}/admin)")
+        proc = subprocess.Popen(  # noqa: S603
+            [sys.executable, "-u", netsim, *target],
+            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        with open(PIDFILE_NETSIM, "w") as f:
+            f.write(str(proc.pid))
+
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        if get_json(SNMP_PANEL + "/") is not None:
+            print(f"  netsim started (panel {SNMP_PANEL}/admin)")
+            return
+        time.sleep(1)
+    try:
+        with open(NETSIM_LOG) as f:
+            tail = "".join(f.readlines()[-8:])
+    except OSError:
+        tail = "(no log)"
+    sys.exit(f"ERROR: netsim did not come up — last log lines "
+             f"({NETSIM_LOG}):\n{tail}")
 
 
 def netsim_down() -> None:
+    # netsim runs as the site user, so we can't signal it — but its control
+    # panel has a shutdown endpoint (localhost demo tool, by design)
+    if get_json(SNMP_PANEL + "/") is not None:
+        try:
+            urllib.request.urlopen(  # noqa: S310
+                SNMP_PANEL + "/admin/shutdown", timeout=5).read()
+            print("  netsim stopped")
+        except (urllib.error.URLError, OSError):
+            print(f"  WARN: netsim still up but shutdown failed — "
+                  f"stop it yourself (panel {SNMP_PANEL}/admin)")
     _pid_kill(PIDFILE_NETSIM, "netsim")
-    # sudo'd netsim: the pidfile holds the sudo pid; the child usually dies
-    # with it. Best effort: also ask any survivor via its own panel? netsim
-    # has no shutdown endpoint — pkill by pattern as a fallback.
-    subprocess.run(["pkill", "-f", "snmp/netsim.py"],  # noqa: S603, S607
-                   check=False, stderr=subprocess.DEVNULL)
 
 
 # --------------------------------------------------------------------------- #
