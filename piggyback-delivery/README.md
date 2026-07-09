@@ -6,6 +6,21 @@ its own TCP host. Run *this* one host and the entire estate shows up as
 **minimal agent section** — it's just the shell that delivers everyone else's
 data.
 
+## Quick start
+
+On a Checkmk dev box, from zero to the fully monitored estate:
+
+```bash
+cmk-dev-install-site              # install today's build + create the v* site
+cd piggyback-delivery
+docker compose up --build -d      # start the estate container
+./setup-checkmk-site.py --site    # set up the site (newest running v* dev site)
+```
+
+Then open the control panel on <http://localhost:8099/admin> to break/heal
+hosts. For any other site pass `--site-url`/`--user`/`--secret` instead of
+`--site`; details and the manual setup in the sections below.
+
 ## How it works
 
 Checkmk piggyback: any sections an agent wraps in `<<<<other-host>>>>` …
@@ -70,19 +85,12 @@ nc 127.0.0.1 6559 | grep -E '^<<<<|^Hostname:'
 
 `setup-checkmk-site.py` does the whole site side through the REST API
 (stdlib-only, idempotent — safe to re-run, e.g. after changing
-`ESTATE_HOSTS`). On a Checkmk dev box the full from-scratch flow is:
-
-```bash
-cmk-dev-install-site              # install today's build + create the v* site
-cd piggyback-delivery
-docker compose up --build -d
-./setup-checkmk-site.py --site    # picks the newest running local v* dev site
-```
+`ESTATE_HOSTS`); the full from-scratch flow is the quick start at the top.
 
 `--site` knows the cmk-dev-site conventions — URL `http://localhost/<site>`,
-credentials `cmkadmin`/`cmk` — so no other options are needed; `--site NAME`
-targets a specific local site. For any other site, pass the URL and
-credentials explicitly:
+credentials `cmkadmin`/`cmk` — so no other options are needed; without a NAME
+it picks the newest running local `v*` site, `--site NAME` targets a specific
+one. For any other site, pass the URL and credentials explicitly:
 
 ```bash
 ./setup-checkmk-site.py --site-url http://localhost/mysite --user automation

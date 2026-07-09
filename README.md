@@ -77,3 +77,6 @@ docker compose up --build -d
 nc 127.0.0.1 6562 | head        # agent stream (port per host — see its README)
 open http://localhost:8092/admin  # control UI (incident hosts)
 ```
+
+Whole estate at once, including the Checkmk site setup, in three commands:
+see the quick start at the top of `piggyback-delivery/README.md`.
