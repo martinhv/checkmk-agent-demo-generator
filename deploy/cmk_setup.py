@@ -15,23 +15,52 @@ On a Checkmk dev box, sites made by cmk-dev-site / cmk-dev-install-site
 
 What it does (idempotent — safe to re-run):
 
+  0. computes a fingerprint of the intended Setup state (roster, ports, SNMP
+     device set, applicable BI tiers, folder + a SCHEMA_VERSION) and compares
+     it to the one stored as a label on the shell host. Unchanged? It returns
+     in ~1s — the slow discovery + activation is skipped. `--force` re-runs
+     regardless. (Live metric values are NOT in the fingerprint — they change
+     every poll but never the set of discovered services.)
   1. asks the delivery control panel (:8099) which hosts it actually carries
      (so an ESTATE_HOSTS subset — and ESTATE_REPLICAS replication — is
      handled automatically) and HEALS any non-healthy host first — services
      must be discovered in the healthy state (db-postgres-01's SMART check
      baselines raw values at discovery);
-  2. creates a dedicated Setup folder (default: "Meridian Retail demo");
-  3. creates the delivery shell as a normal TCP host (agent port via an
-     "agent_ports" rule) and every estate host as a pure piggyback host
-     (no agent, "always use piggyback data");
+  2. creates a dedicated Setup ROOT folder (default: "Meridian Retail demo")
+     and, beneath it, a role-based subfolder tree (Applications, Databases,
+     Storage, Infrastructure, Windows servers, Network/{Switches,Routers,UPS})
+     so the estate looks like a real infrastructure; each host is sorted into
+     its subfolder by name;
+  3. creates the estate hosts. Self-hosted (datasource delivery): every host
+     is a Checkmk-agent host whose agent source is ONE "Individual program call
+     instead of agent access" rule on the root folder — `cat <dir>/$HOSTNAME$`
+     — inherited by all subfolders, reading the per-host files the delivery
+     shell writes. Cloud (piggyback delivery): the shell is a TCP host (agent
+     port via an "agent_ports" rule) and every estate host is a piggyback host;
   4. if the SNMP simulator (snmp/netsim.py, panel :8101) is running, creates
      its devices as SNMP/no-agent/no-IP hosts plus a "usewalk_hosts" rule
      ("Simulating SNMP by using a stored SNMP walk") scoped to exactly those
      hosts — Checkmk then reads the rendered walk files instead of the
      network (the StoredWalk backend bypasses NO_IP with 127.0.0.1);
   5. runs service discovery — the shell FIRST, because that initial agent
-     fetch is what stores the piggyback payloads the other hosts need;
+     fetch is what stores the piggyback payloads the other hosts need. Hosts
+     that already carry monitored services are skipped (the shell never is:
+     it re-delivers piggyback), so a roster that only grew pays for the new
+     hosts alone; --force rescans everything;
   6. activates the changes.
+
+Deployment modes (--mode, default self-hosted):
+
+  self-hosted  full access to the Checkmk site filesystem. The SNMP layer
+               (stored walks) is available, and the agent hosts use the
+               datasource-program delivery: the shell writes each host's agent
+               output to a file (--agent-output-dir) and Checkmk reads it per
+               host via the "cat $HOSTNAME$" program instead of piggyback.
+               Scales better (no single-shell fetch bottleneck).
+  cloud        Checkmk Cloud (SaaS): no filesystem access. Data can only enter
+               through the agent controller / relay, so the SNMP layer is
+               skipped (--snmp is forced off) and the agent hosts stay on
+               piggyback delivery via the shell.
 
 `--remove` tears the whole thing down again (hosts, rules, BI pack, folder).
 
@@ -45,6 +74,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import os
 import sys
@@ -53,9 +83,73 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+# Bump when a re-run must re-discover even though the roster is unchanged —
+# i.e. whenever the SET OF SERVICES a host discovers changes (a fake agent
+# starts/stops emitting a section) or the Setup objects this script creates
+# change shape (host attributes, rule values, BI tiers). It is mixed into the
+# estate fingerprint (see _estate_fingerprint), so bumping it invalidates the
+# stored fingerprint on every site and forces the full discovery/activation
+# pass once. Pure value changes in existing sections need NO bump — they don't
+# change which services exist.
+#   v2: introduced --mode (self-hosted/cloud); mode is now part of the estate
+#       fingerprint.
+#   v3: datasource delivery (cat program) for self-hosted + hosts sorted into a
+#       role-based subfolder tree; the datasource command and per-host folder
+#       are now part of the fingerprint.
+SCHEMA_VERSION = 3
+
+# Host label on the delivery shell holding the last-activated estate
+# fingerprint. Lives on the site (survives across `estate.py up` runs) and is
+# what lets an unchanged re-run skip discovery + activation entirely.
+FINGERPRINT_LABEL = "meridian_demo/fingerprint"
+
 RULE_DESCRIPTION = "Meridian Retail demo: agent port of the piggyback delivery shell"
 BI_RULE_DESCRIPTION = "Meridian Retail demo: payments platform business service"
 SNMP_RULE_DESCRIPTION = "Meridian Retail demo: stored SNMP walks (snmp/netsim.py)"
+DATASOURCE_RULE_DESCRIPTION = (
+    "Meridian Retail demo: agent output via datasource program (cat $HOSTNAME$)")
+
+# --- Folder taxonomy --------------------------------------------------------
+# Hosts are sorted into a role-based subfolder tree under the estate root so
+# the demo looks like a real infrastructure (not one flat folder). Each role
+# maps to a chain of (folder-name, title) under the root; nested chains (the
+# network gear) become sub-subfolders. Classification is by host short-name
+# prefix so replicas (web-frontend-02, ...) land next to their originals.
+FOLDER_TAXONOMY: dict[str, list[tuple[str, str]]] = {
+    "applications":   [("applications", "Applications")],
+    "databases":      [("databases", "Databases")],
+    "storage":        [("storage", "Storage")],
+    "infrastructure": [("infrastructure", "Infrastructure")],
+    "windows":        [("windows", "Windows servers")],
+    "net_switches":   [("network", "Network"), ("switches", "Switches")],
+    "net_routers":    [("network", "Network"), ("routers", "Routers & WAN")],
+    "net_ups":        [("network", "Network"), ("ups", "UPS & power")],
+    "network":        [("network", "Network")],
+}
+_AGENT_ROLE_PREFIXES = [
+    ("web-frontend", "applications"), ("payment-api", "applications"),
+    ("app-worker", "applications"), ("app-redis", "applications"),
+    ("db-postgres", "databases"),
+    ("fileserver", "storage"), ("backup", "storage"),
+    ("mail-relay", "infrastructure"), ("win-dc", "windows"),
+]
+
+
+def _agent_role(short: str) -> str:
+    for prefix, role in _AGENT_ROLE_PREFIXES:
+        if short.startswith(prefix):
+            return role
+    return "infrastructure"
+
+
+def _snmp_role(short: str) -> str:
+    if short.startswith("sw-"):
+        return "net_switches"
+    if short.startswith(("wan", "router", "rtr")):
+        return "net_routers"
+    if short.startswith("ups"):
+        return "net_ups"
+    return "network"
 
 # --- BI pack: "Payments platform" -------------------------------------------
 # Tier rules (worst-of) feeding one top rule; leaves reference services by
@@ -235,24 +329,54 @@ def heal_estate(panel: str, hosts: list[dict]) -> None:
 # --------------------------------------------------------------------------- #
 #  Setup objects
 # --------------------------------------------------------------------------- #
-def folder_id(folder_name: str) -> str:
-    # REST API folder idents use "~" as path separator ("~" = root)
-    return "~" if folder_name in ("", "/", "~") else "~" + folder_name.strip("/~")
+def _folder_segs(folder: str) -> tuple[str, ...]:
+    """Normalise a folder path in any notation ("~a~b", "/a/b", "a/b") to its
+    tuple of segments; root -> ()."""
+    return tuple(s for s in str(folder).replace("~", "/").split("/") if s)
 
-def ensure_folder(api: CmkApi, folder_name: str, title: str) -> str:
-    ident = folder_id(folder_name)
+
+def folder_ident(*parts: str) -> str:
+    """REST API folder ident ("~" = root, "~" separates segments). Each part
+    may itself be a multi-segment path in any notation; all are flattened."""
+    segs: list[str] = []
+    for p in parts:
+        segs.extend(_folder_segs(p))
+    return "~" + "~".join(segs) if segs else "~"
+
+
+# kept for the fingerprint/teardown call sites that pass a single folder name
+def folder_id(folder_name: str) -> str:
+    return folder_ident(folder_name)
+
+
+def ensure_folder(api: CmkApi, ident: str, title: str, parent: str = "~") -> str:
+    """Create folder `ident` (its own name = the last segment) under `parent`
+    if missing. Root ("~") always exists. Idempotent."""
     if ident == "~":
         return ident
     status, _, _ = api.request("GET", f"/objects/folder_config/{ident}")
     if status == 200:
-        print(f"  folder {ident} exists")
         return ident
+    name = ident.rsplit("~", 1)[-1]
     status, payload, _ = api.request(
         "POST", "/domain-types/folder_config/collections/all",
-        body={"name": ident.lstrip("~"), "title": title, "parent": "~"})
+        body={"name": name, "title": title, "parent": parent})
     if status != 200:
         api_error(f"creating folder {ident}", status, payload)
     print(f"  created folder {ident} ({title!r})")
+    return ident
+
+
+def ensure_folder_chain(api: CmkApi, root_ident: str,
+                        chain: list[tuple[str, str]]) -> str:
+    """Ensure a nested (name, title) chain exists under root_ident (parents
+    first) and return the leaf folder's ident."""
+    parent = root_ident
+    ident = root_ident
+    for name, title in chain:
+        ident = folder_ident(parent, name)
+        ensure_folder(api, ident, title, parent)
+        parent = ident
     return ident
 
 
@@ -273,10 +397,12 @@ def ensure_host(api: CmkApi, name: str, folder: str, attributes: dict) -> None:
         print(f"  created host {name}")
         return
     # reconcile the attributes that carry the topology/datasource contract
-    # (may change between script versions); everything else is left as the
-    # user configured it
+    # (parents, and the agent/piggyback/address-family tags that differ between
+    # the piggyback and datasource delivery modes) so a mode switch on an
+    # existing estate takes effect; everything else is left as the user set it
     current = (existing.get("extensions") or {}).get("attributes") or {}
-    fix = {k: attributes[k] for k in ("parents", "tag_agent")
+    fix = {k: attributes[k]
+           for k in ("parents", "tag_agent", "tag_piggyback", "tag_address_family")
            if k in attributes and current.get(k) != attributes[k]}
     if fix:
         status, payload, _ = api.request(
@@ -289,18 +415,29 @@ def ensure_host(api: CmkApi, name: str, folder: str, attributes: dict) -> None:
         print(f"  host {name} exists")
 
 
-def prune_folder(api: CmkApi, folder: str, keep: set[str]) -> None:
-    """Delete hosts in OUR folder that left the roster (removed host
-    classes, scaled-down replicas) — the folder is fully managed."""
+def _in_subtree(host_folder: str, root_segs: tuple[str, ...]) -> bool:
+    """Is the host's folder the estate root or one of its subfolders?"""
+    hsegs = _folder_segs(host_folder)
+    return bool(root_segs) and hsegs[:len(root_segs)] == root_segs
+
+
+def prune_subtree(api: CmkApi, root_ident: str, keep: set[str]) -> None:
+    """Delete hosts ANYWHERE under the estate root that left the roster
+    (removed host classes, scaled-down replicas) — the whole subtree is fully
+    managed. Guarded against a root ('~') estate so we never mass-delete a
+    shared site."""
+    root_segs = _folder_segs(root_ident)
+    if not root_segs:
+        return  # estate at site root — refuse to prune the whole site
     status, payload, _ = api.request(
         "GET", "/domain-types/host_config/collections/all")
     if status != 200:
         return
     for h in (payload or {}).get("value", []):
         name = h["id"]
-        in_folder = (h.get("extensions", {}).get("folder", "").strip("/~")
-                     == folder.lstrip("~"))
-        if name in keep or not in_folder:
+        if name in keep:
+            continue
+        if not _in_subtree(h.get("extensions", {}).get("folder", ""), root_segs):
             continue
         st, _, _ = api.request("DELETE", f"/objects/host_config/{name}", etag="*")
         if st == 204:
@@ -386,11 +523,61 @@ def ensure_usewalk_rule(api: CmkApi, fqdns: list[str]) -> None:
     print(f"  created usewalk rule ({len(wanted)} devices)")
 
 
-def setup_snmp(api: CmkApi, args: argparse.Namespace, folder: str) -> list[str]:
+def _datasource_command(agent_output_dir: str) -> str:
+    """The 'Individual program call' command line: cat the per-host agent file
+    the delivery shell writes, keyed by the host name Checkmk substitutes."""
+    return f"cat {agent_output_dir.rstrip('/')}/$HOSTNAME$"
+
+
+def ensure_datasource_rule(api: CmkApi, root_ident: str,
+                           agent_output_dir: str) -> None:
+    """ONE 'Individual program call instead of agent access' rule on the estate
+    ROOT folder — inherited by every subfolder, so a single rule serves the
+    whole site: `cat <dir>/$HOSTNAME$`. Only Checkmk-agent hosts run it; the
+    no-agent SNMP devices in the same tree ignore it. Owned by folder+marker,
+    so a second estate (different root folder) keeps its own rule."""
+    command = _datasource_command(agent_output_dir)
+    root_segs = _folder_segs(root_ident)
+    for rule, _hosts in _marked_rules(api, "datasource_programs",
+                                      DATASOURCE_RULE_DESCRIPTION):
+        if _folder_segs(rule.get("extensions", {}).get("folder", "")) != root_segs:
+            continue  # another estate's rule (different root folder)
+        if rule["extensions"].get("value_raw") == repr(command):
+            print("  datasource program rule exists")
+            return
+        api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
+        print("  removed stale datasource program rule")
+    status, payload, _ = api.request(
+        "POST", "/domain-types/rule/collections/all",
+        body={
+            "ruleset": "datasource_programs",
+            "folder": root_ident,
+            "properties": {"description": DATASOURCE_RULE_DESCRIPTION,
+                           "disabled": False},
+            "value_raw": repr(command),
+            "conditions": {},
+        })
+    if status != 200:
+        api_error("creating the datasource program rule", status, payload)
+    print(f"  created datasource program rule ({command!r})")
+
+
+def delete_datasource_rule(api: CmkApi, root_ident: str) -> None:
+    root_segs = _folder_segs(root_ident)
+    for rule, _hosts in _marked_rules(api, "datasource_programs",
+                                      DATASOURCE_RULE_DESCRIPTION):
+        if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
+            api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
+            print("  deleted datasource program rule")
+
+
+def setup_snmp(api: CmkApi, args: argparse.Namespace,
+               leaf_for: "Callable[[str], str]") -> list[str]:
     """SNMP devices as no-agent/no-IP hosts reading stored walks — this IS
     the estate's network layer: the campus core switch sw-core-01 tops the
     parent topology, every other device (and, in setup(), every server)
-    hangs off it. Returns the device FQDNs. The StoredWalk backend bypasses
+    hangs off it. Sorted into the Network/{Switches,Routers,UPS} subfolders
+    via leaf_for(). Returns the device FQDNs. The StoredWalk backend bypasses
     NO_IP and substitutes 127.0.0.1, so the hosts need no address at all."""
     info = panel_get(args.snmp_panel, optional=True)
     if info is None or "devices" not in info:
@@ -421,10 +608,30 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace, folder: str) -> list[str]:
         }
         if core_fqdn and dev["fqdn"] != core_fqdn:
             attrs["parents"] = [core_fqdn]
-        ensure_host(api, dev["fqdn"], folder, attrs)
+        ensure_host(api, dev["fqdn"], leaf_for(_snmp_role(short)), attrs)
         fqdns.append(dev["fqdn"])
     ensure_usewalk_rule(api, fqdns)
     return fqdns
+
+
+def _planned_snmp(args: argparse.Namespace) -> list[tuple[str, str | None]]:
+    """The (fqdn, parent) pairs setup_snmp WOULD create — a read-only,
+    heal-free, create-free preview used only for the fingerprint. Mirrors
+    setup_snmp's parenting (every non-core device hangs off the campus core)."""
+    if args.snmp == "off":
+        return []
+    info = panel_get(args.snmp_panel, optional=True)
+    if info is None or "devices" not in info:
+        if args.snmp == "on":
+            die(f"--snmp on, but the netsim panel at {args.snmp_panel} does "
+                "not answer — start snmp/netsim.py first (estate.py does "
+                "this automatically)")
+        return []
+    devices = info["devices"]
+    core = next((d["fqdn"] for s, d in devices.items()
+                 if s.startswith("sw-core")), None)
+    return [(d["fqdn"], core if core and d["fqdn"] != core else None)
+            for d in devices.values()]
 
 
 def snmp_teardown_names(args: argparse.Namespace) -> list[str]:
@@ -581,7 +788,32 @@ def _wait_for_discovery(api: CmkApi, host: str, timeout: float) -> None:
     die(f"discovery on {host} did not finish (last HTTP status {status})")
 
 
-def discover(api: CmkApi, host: str, timeout: float = 180.0) -> None:
+def _monitored_service_count(api: CmkApi, host: str) -> int | None:
+    """How many services the host already carries in the 'monitored' phase —
+    i.e. discovery has run AND the services were accepted into monitoring. A
+    cheap read: this endpoint returns the stored discovery state (the
+    DiscoveryAction.NONE path) without contacting the data source. Returns 0
+    for a never-discovered host, None if the state can't be read."""
+    status, payload, _ = api.request("GET", f"/objects/service_discovery/{host}")
+    if status != 200:
+        return None
+    table = ((payload or {}).get("extensions") or {}).get("check_table") or {}
+    return sum(1 for v in table.values()
+               if (v.get("extensions") or {}).get("service_phase") == "monitored")
+
+
+def discover(api: CmkApi, host: str, timeout: float = 180.0, *,
+             allow_skip: bool = True) -> None:
+    # Skip the (expensive) data-source fetch when the host is already fully
+    # discovered — a re-run only needs to touch NEW hosts. NEVER skip-able for
+    # the shell (allow_skip=False): its refresh is what re-delivers piggyback to
+    # any freshly added child, and the final pass must re-scan for the BI
+    # aggregation service. --force also forces a rescan (allow_skip=False).
+    if allow_skip:
+        n = _monitored_service_count(api, host)
+        if n:
+            print(f"  {host} already has {n} monitored services — skipping discovery")
+            return
     # Two phases: "refresh" actually contacts the data source (async job) —
     # for the shell this fetch is also what stores the piggyback payloads —
     # then the synchronous "fix_all" accepts everything the scan found
@@ -628,6 +860,75 @@ def activate(api: CmkApi, force_foreign: bool, timeout: float = 120.0) -> None:
 
 
 # --------------------------------------------------------------------------- #
+#  Estate fingerprint (skip the slow re-run when nothing changed)
+# --------------------------------------------------------------------------- #
+def _estate_fingerprint(args: argparse.Namespace, delivery: str,
+                        hosts: list[dict],
+                        snmp_plan: list[tuple[str, str | None]]) -> str:
+    """A stable digest of the Setup objects setup() would create: the mode,
+    the root folder, the shell (host/ip/port), every host with its EFFECTIVE
+    parent AND its subfolder, the SNMP device set with parents+subfolders, the
+    datasource command (self-hosted), and which BI tiers apply. Two runs share
+    a fingerprint iff they would produce byte-for-byte the same configuration —
+    so a match means discovery has nothing new to find. Live metric VALUES are
+    deliberately absent (they change every poll but never the service set)."""
+    datasource = args.mode == "self-hosted"
+    carried_fqdns = {h["fqdn"] for h in hosts}
+    parent_ok = carried_fqdns | {f for f, _ in snmp_plan}
+    # (fqdn, effective parent, role/subfolder) — folder moves change the config
+    host_rows = sorted(
+        [h["fqdn"], h["parent"] if h.get("parent") in parent_ok else None,
+         _agent_role(h["name"])]
+        for h in hosts)
+    snmp_rows = sorted([f, p, _snmp_role(f.split(".")[0])] for f, p in snmp_plan)
+    # applicable BI tiers — same "tier present iff a leaf host exists" filter
+    # as ensure_bi_pack, so a scaled-down subset changes the fingerprint
+    fqdn_by_short = {h["name"]: h["fqdn"] for h in hosts}
+    fqdn_by_short.update({f.split(".")[0]: f for f, _ in snmp_plan})
+    tiers = sorted(rid for rid, _, leaves in BI_TIERS
+                   if any(short in fqdn_by_short for short, _ in leaves))
+    canon = {
+        "schema": SCHEMA_VERSION,
+        "mode": args.mode,
+        "folder": folder_id(args.folder),
+        "delivery": [delivery, args.agent_ip, args.agent_port],
+        "hosts": host_rows,
+        "snmp": snmp_rows,
+        "bi_tiers": tiers,
+        "datasource": _datasource_command(args.agent_output_dir) if datasource else None,
+    }
+    blob = json.dumps(canon, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(blob.encode()).hexdigest()[:16]
+    return f"v{SCHEMA_VERSION}-{digest}"
+
+
+def _read_fingerprint(api: CmkApi, delivery: str) -> str | None:
+    """The fingerprint stored on the shell host, or None if the host does not
+    exist yet (first run) or carries no fingerprint label."""
+    host = get_host(api, delivery)
+    if host is None:
+        return None
+    attrs = (host.get("extensions") or {}).get("attributes") or {}
+    return (attrs.get("labels") or {}).get(FINGERPRINT_LABEL)
+
+
+def _write_fingerprint(api: CmkApi, delivery: str, fp: str) -> None:
+    """Persist the fingerprint as a shell-host label (merged with any existing
+    labels). Creates a pending change picked up by the following activate()."""
+    host = get_host(api, delivery)
+    attrs = (host.get("extensions") or {}).get("attributes") or {} if host else {}
+    labels = dict(attrs.get("labels") or {})
+    if labels.get(FINGERPRINT_LABEL) == fp:
+        return
+    labels[FINGERPRINT_LABEL] = fp
+    status, payload, _ = api.request(
+        "PUT", f"/objects/host_config/{delivery}",
+        body={"update_attributes": {"labels": labels}}, etag="*")
+    if status != 200:
+        api_error(f"storing the estate fingerprint on {delivery}", status, payload)
+
+
+# --------------------------------------------------------------------------- #
 #  Top-level flows
 # --------------------------------------------------------------------------- #
 def setup(api: CmkApi, args: argparse.Namespace) -> None:
@@ -641,19 +942,61 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
             "wait a few seconds and re-run")
     print(f"  shell {delivery} carrying {len(hosts)} hosts")
 
+    # Fast path: discovery + double activation is the slow part of setup, and
+    # when the desired configuration is exactly what we last activated there is
+    # nothing new to discover. Compare a fingerprint of the intended Setup
+    # state against the one stored on the shell host and bail out in ~1s if it
+    # matches (--force overrides). Cheap panel reads only — no healing yet.
+    fp = _estate_fingerprint(args, delivery, hosts, _planned_snmp(args))
+    if not args.force:
+        stored = _read_fingerprint(api, delivery)
+        if stored == fp:
+            print(f"* estate already in sync (fingerprint {fp}) — nothing to do"
+                  "\n  (--force re-runs discovery/activation; `estate.py heal` "
+                  "resets demo state)")
+            return
+        if stored:
+            print(f"  configuration changed ({stored} -> {fp}) — reconfiguring")
+
     print("* healing the estate (services must be discovered healthy)")
     heal_estate(args.panel, hosts)
 
-    print("* creating Setup objects")
-    folder = ensure_folder(api, args.folder, "Meridian Retail demo")
-    ensure_host(api, delivery, folder, {
-        "ipaddress": args.agent_ip,
-        # all-agents: TCP agent AND the BI special agent below — plain
-        # cmk-agent would let a configured special agent REPLACE the TCP
-        # fetch and cut off the piggyback delivery
-        "tag_agent": "all-agents",
-    })
-    ensure_port_rule(api, delivery, args.agent_port)
+    # self-hosted => datasource delivery (files + "cat" program); cloud stays
+    # on piggyback (no filesystem access). See the module docstring.
+    datasource = args.mode == "self-hosted"
+
+    print("* creating Setup objects (folder tree)")
+    root_ident = ensure_folder(api, folder_ident(args.folder),
+                               "Meridian Retail demo")
+    # lazily create + cache each role's leaf folder under the estate root
+    _leaf: dict[str, str] = {}
+
+    def leaf_for(role: str) -> str:
+        if role not in _leaf:
+            _leaf[role] = ensure_folder_chain(api, root_ident,
+                                              FOLDER_TAXONOMY[role])
+        return _leaf[role]
+
+    # the delivery shell sits at the estate root; the datasource rule lives
+    # there too and is inherited by every subfolder below
+    if datasource:
+        # all-agents on the shell too: its Checkmk-agent source is the "cat"
+        # datasource program (its own minimal file) AND the BI special agent.
+        # No IP / no agent-port rule — nothing is polled over TCP.
+        ensure_host(api, delivery, root_ident, {
+            "tag_agent": "all-agents",
+            "tag_address_family": "no-ip",
+            "tag_piggyback": "no-piggyback",
+        })
+    else:
+        ensure_host(api, delivery, root_ident, {
+            "ipaddress": args.agent_ip,
+            # all-agents: TCP agent AND the BI special agent below — plain
+            # cmk-agent would let a configured special agent REPLACE the TCP
+            # fetch and cut off the piggyback delivery
+            "tag_agent": "all-agents",
+        })
+        ensure_port_rule(api, delivery, args.agent_port)
     carried_fqdns = {h["fqdn"] for h in hosts}
 
     # the SNMP devices are the network path — create them FIRST so the
@@ -661,22 +1004,39 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
     snmp_fqdns: list[str] = []
     if args.snmp != "off":
         print("* creating the SNMP network devices (stored walks)")
-        snmp_fqdns = setup_snmp(api, args, folder)
+        snmp_fqdns = setup_snmp(api, args, leaf_for)
 
     parent_ok = carried_fqdns | set(snmp_fqdns)
     for h in hosts:
-        attrs = {
-            "tag_agent": "no-agent",
-            "tag_piggyback": "piggyback",
-            "tag_address_family": "no-ip",
-        }
+        if datasource:
+            # Checkmk-agent host whose agent source is the "cat $HOSTNAME$"
+            # datasource program (one root-folder rule below, inherited by all
+            # subfolders). no-ip: is_tcp comes from the agent tag, not the
+            # address family, so the program still runs and the host needs no
+            # IP/ping. no-piggyback so it doesn't also pick up an (empty)
+            # piggyback source.
+            attrs = {
+                "tag_agent": "cmk-agent",
+                "tag_address_family": "no-ip",
+                "tag_piggyback": "no-piggyback",
+            }
+        else:
+            attrs = {
+                "tag_agent": "no-agent",
+                "tag_piggyback": "piggyback",
+                "tag_address_family": "no-ip",
+            }
         # only reference parents that actually exist in the site (without
         # the SNMP layer the servers simply have no parent)
         if h.get("parent") in parent_ok:
             attrs["parents"] = [h["parent"]]
-        ensure_host(api, h["fqdn"], folder, attrs)
-    prune_folder(api, folder,
-                 {delivery} | carried_fqdns | set(snmp_fqdns))
+        ensure_host(api, h["fqdn"], leaf_for(_agent_role(h["name"])), attrs)
+    prune_subtree(api, root_ident,
+                  {delivery} | carried_fqdns | set(snmp_fqdns))
+
+    if datasource:
+        print("* creating the datasource program rule (cat $HOSTNAME$)")
+        ensure_datasource_rule(api, root_ident, args.agent_output_dir)
 
     print("* creating the Payments platform BI pack")
     fqdn_by_short = {h["name"]: h["fqdn"] for h in hosts}
@@ -686,20 +1046,30 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
 
     print("* running service discovery (shell first — its fetch delivers the "
           "piggyback data)")
-    discover(api, delivery)
+    # the shell is always (re)scanned: its refresh re-delivers piggyback for
+    # any newly added child. The children/SNMP devices skip discovery when
+    # they already carry monitored services, so a roster that grew by one host
+    # only pays for that one host (--force rescans everything).
+    skip = not args.force
+    discover(api, delivery, allow_skip=False)
     for h in hosts:
-        discover(api, h["fqdn"])
+        discover(api, h["fqdn"], allow_skip=skip)
     for fqdn in snmp_fqdns:
-        discover(api, fqdn)
+        discover(api, fqdn, allow_skip=skip)
 
     print("* activating changes")
     activate(api, args.force_foreign)
 
     # the BI special agent only yields the aggregation once the estate is
-    # live in the core, so the business service needs a second look
+    # live in the core, so the business service needs a second look (never
+    # skipped — the shell already has services, but not yet the BI one)
     print("* discovering the business service on the shell")
     time.sleep(10)
-    discover(api, delivery)
+    discover(api, delivery, allow_skip=False)
+    # stamp the fingerprint so the next unchanged `up` short-circuits; this PUT
+    # is a pending change the final activate() below flushes together with the
+    # business-service discovery
+    _write_fingerprint(api, delivery, fp)
     activate(api, args.force_foreign)
 
     snmp_line = (f"\n  - network panel:  {args.snmp_panel}/admin   "
@@ -724,22 +1094,25 @@ def teardown(api: CmkApi, args: argparse.Namespace) -> None:
         names += snmp_teardown_names(args)
         names.append(info["delivery_host"])
     except SystemExit:
-        print("  (panel unreachable — deleting all hosts in the folder instead)")
+        print("  (panel unreachable — deleting all hosts under the folder "
+              "tree instead)")
+        root_segs = _folder_segs(folder_ident(args.folder))
         status, payload, _ = api.request(
             "GET", "/domain-types/host_config/collections/all")
         if status == 200:
             names = [h["id"] for h in (payload or {}).get("value", [])
-                     if h.get("extensions", {}).get("folder", "").strip("/~")
-                     == folder_id(args.folder).lstrip("~")]
+                     if _in_subtree(h.get("extensions", {}).get("folder", ""),
+                                    root_segs)]
     delete_bi_objects(api)
     _delete_marked_rules(api, "usewalk_hosts", SNMP_RULE_DESCRIPTION, set(names))
     _delete_marked_rules(api, "special_agents:bi", BI_RULE_DESCRIPTION, set(names))
+    delete_datasource_rule(api, folder_ident(args.folder))
     for name in names:
         status, _, _ = api.request("DELETE", f"/objects/host_config/{name}", etag="*")
         if status == 204:
             print(f"  deleted host {name}")
     _delete_marked_rules(api, "agent_ports", RULE_DESCRIPTION, set(names))
-    ident = folder_id(args.folder)
+    ident = folder_ident(args.folder)
     if ident != "~":
         status, _, _ = api.request(
             "DELETE", f"/objects/folder_config/{ident}",
@@ -775,18 +1148,38 @@ def main(argv: list[str] | None = None) -> None:
                    help="published delivery agent port")
     p.add_argument("--panel", default="http://localhost:8099",
                    help="delivery control panel URL (from where this script runs)")
+    p.add_argument("--mode", choices=("self-hosted", "cloud"),
+                   default="self-hosted",
+                   help="self-hosted = full site-filesystem access (SNMP layer "
+                        "possible); cloud = Checkmk Cloud/SaaS, agent data only "
+                        "(forces --snmp off)")
     p.add_argument("--snmp", choices=("auto", "on", "off"), default="auto",
                    help="include the SNMP devices: auto = if the netsim panel "
                         "answers, on = require it, off = skip")
     p.add_argument("--snmp-panel", default="http://localhost:8101",
                    help="netsim control panel URL (snmp/netsim.py)")
     p.add_argument("--folder", default="meridian_demo",
-                   help="Setup folder for the estate ('/' = root)")
+                   help="Setup ROOT folder for the estate ('/' = site root); "
+                        "hosts are sorted into role subfolders beneath it")
+    p.add_argument("--agent-output-dir", default="/var/tmp/cmk-demo-agent-output",
+                   help="self-hosted: directory holding the per-host agent "
+                        "files read by the 'cat $HOSTNAME$' datasource program")
     p.add_argument("--force-foreign", action="store_true",
                    help="activate even if other users have pending changes")
+    p.add_argument("--force", action="store_true",
+                   help="reconfigure even if the estate fingerprint is "
+                        "unchanged (re-run discovery + activation)")
     p.add_argument("--remove", action="store_true",
                    help="tear down: delete the hosts, rule and folder again")
     args = p.parse_args(argv)
+
+    # cloud has no site filesystem, so the SNMP layer (stored walk files) is
+    # impossible there — force it off (and reject an explicit --snmp on).
+    if args.mode == "cloud":
+        if args.snmp == "on":
+            p.error("--mode cloud cannot deploy the SNMP layer (no site "
+                    "filesystem for stored walks) — drop --snmp on")
+        args.snmp = "off"
 
     if bool(args.site) == bool(args.site_url):
         p.error("pass either --site (local dev site) or --site-url URL")

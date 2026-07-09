@@ -9,9 +9,26 @@ again with `down`.
     ./estate.py up --site                  # full estate on the newest dev site
     ./estate.py up --site v300 --scale minimal
     ./estate.py up --site --scale standard --replicas 5   # ~50-host estate
+    ./estate.py up --site-url ... --mode cloud            # Checkmk Cloud (SaaS)
+    ./estate.py replace --site             # tear down + fresh deploy in one go
     ./estate.py status
     ./estate.py break sw-access-01         # or heal/degrade, any host/device
     ./estate.py down --site
+
+Hosts are sorted into a role-based subfolder tree (Applications, Databases,
+Storage, Infrastructure, Windows servers, Network/…) under the estate root so
+the demo reads like a real infrastructure.
+
+Deployment modes (--mode, default self-hosted):
+
+  self-hosted  we have access to the Checkmk site's filesystem, so the full
+               estate is possible — including the SNMP layer, whose stored
+               walk files are written straight into the site. Behaves as it
+               always has.
+  cloud        Checkmk Cloud (SaaS): no access to the site filesystem. Data
+               can only arrive through the agent controller / relay, so the
+               SNMP layer (which needs walk files on disk) is skipped and only
+               the agent-based (piggyback) hosts are deployed.
 
 Scales (--scale):
 
@@ -61,6 +78,16 @@ PANEL = "http://localhost:8099"       # piggyback shell control panel
 SNMP_PANEL = "http://localhost:8101"  # netsim control panel
 PIDFILE_SHELL = "/var/tmp/cmk-demo-estate-shell.pid"
 PIDFILE_NETSIM = "/var/tmp/cmk-demo-estate-netsim.pid"
+# self-hosted: per-host agent files the site's "cat" datasource program reads.
+# World-readable, NOT under the site — no sudo needed; docker bind-mounts it.
+AGENT_OUTPUT_DIR = "/var/tmp/cmk-demo-agent-output"
+
+
+def delivery_for(mode: str) -> str:
+    """How estate hosts' agent data reaches Checkmk. Self-hosted uses the
+    file + datasource-program path (better scaling); cloud has no filesystem
+    access, so it stays on piggyback via the agent controller/relay."""
+    return "datasource" if mode == "self-hosted" else "piggyback"
 
 SCALES = {
     "minimal": {"hosts": "payment-api,db-postgres-01", "snmp": False},
@@ -99,14 +126,31 @@ def shell_env(args: argparse.Namespace) -> dict[str, str]:
     return {
         "ESTATE_HOSTS": SCALES[args.scale]["hosts"],
         "ESTATE_REPLICAS": str(args.replicas),
+        "DELIVERY_MODE": delivery_for(args.mode),
     }
 
 
+def _ensure_output_dir() -> None:
+    """datasource mode: the host dir must exist and be world-readable BEFORE
+    docker mounts it (else docker root-creates it) so the site user can cat."""
+    os.makedirs(AGENT_OUTPUT_DIR, exist_ok=True)
+    try:
+        os.chmod(AGENT_OUTPUT_DIR, 0o755)
+    except OSError:
+        pass
+
+
 def shell_up(args: argparse.Namespace) -> None:
+    datasource = delivery_for(args.mode) == "datasource"
+    if datasource:
+        _ensure_output_dir()
     if args.runtime == "docker":
         if not shutil.which("docker"):
             sys.exit("ERROR: docker not found — use --runtime native")
         env = {**os.environ, **shell_env(args)}
+        if datasource:
+            # compose bind-mounts this host path to the container's /agent-output
+            env["ESTATE_AGENT_OUTPUT_DIR"] = AGENT_OUTPUT_DIR
         r = sh(["docker", "compose", "up", "--build", "-d"],
                cwd=os.path.join(REPO, "deploy", "piggyback"), env=env)
         if r.returncode != 0:
@@ -118,6 +162,8 @@ def shell_up(args: argparse.Namespace) -> None:
         return
     env = {**os.environ, **shell_env(args),
            "AGENT_PORT": "6559", "HTTP_PORT": "8099"}
+    if datasource:
+        env["AGENT_OUTPUT_DIR"] = AGENT_OUTPUT_DIR
     log = open("/var/tmp/cmk-demo-estate-shell.log", "ab")  # noqa: SIM115
     proc = subprocess.Popen(  # noqa: S603
         [sys.executable, "-u", os.path.join(REPO, "deploy", "piggyback", "serve.py")],
@@ -263,6 +309,10 @@ def cmk_args(args: argparse.Namespace, extra: list[str]) -> list[str]:
         out += ["--site"] + ([args.site] if args.site not in (None, "auto") else [])
     if args.force_foreign:
         out += ["--force-foreign"]
+    if getattr(args, "force", False):
+        out += ["--force"]
+    if getattr(args, "mode", None):
+        out += ["--mode", args.mode]
     return out
 
 
@@ -280,14 +330,25 @@ def resolve_site_name(args: argparse.Namespace) -> str | None:
 # --------------------------------------------------------------------------- #
 def cmd_up(args: argparse.Namespace) -> None:
     snmp = SCALES[args.scale]["snmp"] and not args.no_snmp
-    print(f"== estate up: scale={args.scale} replicas={args.replicas} "
-          f"snmp={'on' if snmp else 'off'} runtime={args.runtime}")
+    if args.mode == "cloud" and snmp:
+        # cloud has no site filesystem to write stored walks into — the SNMP
+        # layer simply isn't possible there, so drop it (agent hosts stay)
+        print("  cloud mode: skipping the SNMP layer (no site-filesystem "
+              "access for stored walks)")
+        snmp = False
+    print(f"== estate up: mode={args.mode} scale={args.scale} "
+          f"replicas={args.replicas} snmp={'on' if snmp else 'off'} "
+          f"runtime={args.runtime}")
 
-    print("* starting the piggyback shell")
+    delivery = delivery_for(args.mode)
+    print(f"* starting the delivery shell ({delivery})")
     shell_up(args)
     info = wait_for(PANEL + "/", "the delivery shell")
     print(f"  shell {info['delivery_host']} carrying "
           f"{len(info['carried_hosts'])} hosts")
+    if delivery == "datasource":
+        print(f"  agent files under {AGENT_OUTPUT_DIR} "
+              "(read per host via a 'cat $HOSTNAME$' datasource rule)")
 
     site_name = resolve_site_name(args) if (snmp or args.site or args.site_url) else None
 
@@ -302,7 +363,9 @@ def cmd_up(args: argparse.Namespace) -> None:
         return
 
     print("* configuring Checkmk (deploy/cmk_setup.py)")
-    cmk_setup.main(cmk_args(args, ["--snmp", "on" if snmp else "off"]))
+    cmk_setup.main(cmk_args(args, [
+        "--snmp", "on" if snmp else "off",
+        "--agent-output-dir", AGENT_OUTPUT_DIR]))
 
 
 def cmd_down(args: argparse.Namespace) -> None:
@@ -320,6 +383,16 @@ def cmd_down(args: argparse.Namespace) -> None:
     print("* stopping the piggyback shell")
     shell_down(args)
     print("Done.")
+
+
+def cmd_replace(args: argparse.Namespace) -> None:
+    """Full teardown + fresh deploy in one go (down, then up). Removing the
+    estate deletes the shell host and its stored fingerprint, so the following
+    up always runs the complete discovery/activation — no fast-path skip."""
+    print("== estate replace (down + up)")
+    cmd_down(args)
+    print()
+    cmd_up(args)
 
 
 def cmd_status(_args: argparse.Namespace) -> None:
@@ -385,24 +458,43 @@ def main() -> None:
         epilog="\n".join(__doc__.split("\n")[3:]))
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    def add_up_args(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--mode", choices=("self-hosted", "cloud"),
+                            default="self-hosted",
+                            help="self-hosted = full access to the site "
+                                 "filesystem (SNMP layer + datasource files); "
+                                 "cloud = Checkmk Cloud/SaaS, piggyback agent "
+                                 "data only, SNMP layer skipped")
+        parser.add_argument("--scale", choices=sorted(SCALES), default="full")
+        parser.add_argument("--replicas", type=int, default=1, metavar="N",
+                            help="stamp out every replicable host class N times")
+        parser.add_argument("--runtime", choices=("docker", "native"),
+                            default="docker", help="how to run the delivery shell")
+        parser.add_argument("--no-snmp", action="store_true",
+                            help="skip the SNMP layer even at --scale full")
+        parser.add_argument("--force", action="store_true",
+                            help="reconfigure Checkmk even if nothing changed "
+                                 "(re-run discovery + activation); by default an "
+                                 "unchanged re-run short-circuits in ~1s")
+        parser.add_argument("--walks-dir",
+                            help="write SNMP walks here instead of into the site "
+                                 "(no sudo needed; for inspection only)")
+        add_site_args(parser)
+
     up = sub.add_parser("up", help="start simulators + configure Checkmk")
-    up.add_argument("--scale", choices=sorted(SCALES), default="full")
-    up.add_argument("--replicas", type=int, default=1, metavar="N",
-                    help="stamp out every replicable host class N times")
-    up.add_argument("--runtime", choices=("docker", "native"), default="docker",
-                    help="how to run the piggyback shell")
-    up.add_argument("--no-snmp", action="store_true",
-                    help="skip the SNMP layer even at --scale full")
-    up.add_argument("--walks-dir",
-                    help="write SNMP walks here instead of into the site "
-                         "(no sudo needed; for inspection only)")
-    add_site_args(up)
+    add_up_args(up)
     up.set_defaults(func=cmd_up)
 
     down = sub.add_parser("down", help="teardown Checkmk objects + stop everything")
     down.add_argument("--runtime", choices=("docker", "native"), default="docker")
     add_site_args(down)
     down.set_defaults(func=cmd_down)
+
+    replace = sub.add_parser(
+        "replace", aliases=["redeploy"],
+        help="full teardown + fresh deploy (down then up)")
+    add_up_args(replace)
+    replace.set_defaults(func=cmd_replace)
 
     st = sub.add_parser("status", help="what is running, which host is in which state")
     st.set_defaults(func=cmd_status)

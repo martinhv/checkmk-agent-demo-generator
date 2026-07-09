@@ -31,10 +31,19 @@ default = all. Scale UP with ESTATE_REPLICAS=N: every replicable host class
 is stamped out N times (web-frontend-01, -02, ... -0N) — the original keeps
 its incident toggles, the replicas run steady green as estate background.
 
+Delivery mode (DELIVERY_MODE): `piggyback` (default, as above) or `datasource`
+— the latter writes each host's agent output to a file (AGENT_OUTPUT_DIR) and
+Checkmk reads it per host via a `cat $FILENAME$` datasource program instead of
+piggyback. Better scaling (no single-shell fetch bottleneck), self-hosted only
+(needs filesystem access). See deploy/cmk_setup.py for the matching site setup.
+
 Config via env:
   DELIVERY_HOSTNAME  name of the shell host        (default: cmk-demo-gateway)
   AGENT_PORT         TCP port Checkmk polls         (default: 6556)
   HTTP_PORT          combined /admin control port   (default: 8080)
+  DELIVERY_MODE      piggyback | datasource         (default: piggyback)
+  AGENT_OUTPUT_DIR   datasource: where files go     (default: /var/tmp/...)
+  AGENT_OUTPUT_INTERVAL  datasource: refresh seconds (default: 20)
   ESTATE_HOSTS       comma list of host names to carry (default: all)
   ESTATE_REPLICAS    replica multiplier for replicable classes (default: 1)
   AGENT_VERSION      version in the delivery header (default: 2.5.0-...)
@@ -66,6 +75,22 @@ AGENT_PORT = int(os.environ.get("AGENT_PORT", "6556"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "2.5.0-2026.04.03")
 CHILD_AGENT_BASE = int(os.environ.get("CHILD_AGENT_BASE", "7600"))
+
+# Delivery mode — how the estate hosts' agent data reaches Checkmk:
+#   piggyback   (default) the shell's own agent embeds every child as a
+#               <<<<host>>>> piggyback block; Checkmk polls only the shell.
+#   datasource  (self-hosted) each child's agent output is written to a file
+#               and Checkmk reads it per host via a "cat $FILENAME$" datasource
+#               program ("Individual program call instead of agent access").
+#               Scales better (no single-shell fetch bottleneck, no piggyback
+#               dependency) but needs filesystem access, so it's self-hosted
+#               only. The shell then emits ONLY its own minimal section.
+DELIVERY_MODE = os.environ.get("DELIVERY_MODE", "piggyback")
+# Where the per-host agent files are written in datasource mode. Must be
+# readable by the site user running the "cat" program (a world-readable path
+# like /var/tmp works without any sudo — the file need not live under the site).
+AGENT_OUTPUT_DIR = os.environ.get("AGENT_OUTPUT_DIR", "/var/tmp/cmk-demo-agent-output")
+AGENT_OUTPUT_INTERVAL = float(os.environ.get("AGENT_OUTPUT_INTERVAL", "20"))
 
 REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -292,6 +317,10 @@ def _delivery_minimal() -> str:
 
 def build_delivery_output() -> bytes:
     out = bytearray(_delivery_minimal().encode("utf-8"))
+    # in datasource mode the children are delivered as files (see the writer
+    # below), so the shell carries only its own minimal section
+    if DELIVERY_MODE == "datasource":
+        return bytes(out)
     for child in CHILDREN:
         payload = child.fetch_agent()
         if not payload:
@@ -302,6 +331,51 @@ def build_delivery_output() -> bytes:
             out += b"\n"
         out += b"<<<<>>>>\n"
     return bytes(out)
+
+
+# --------------------------------------------------------------------------- #
+#  Datasource mode: write each host's agent output to a file
+# --------------------------------------------------------------------------- #
+def _write_file(name: str, payload: bytes) -> bool:
+    """Atomically write one host's agent output to <AGENT_OUTPUT_DIR>/<name>
+    (tmp + rename so a half-written file is never cat'd), world-readable so the
+    site user's datasource program can read it. Empty payload -> keep the last
+    good file rather than truncate it to nothing."""
+    if not payload:
+        return False
+    path = os.path.join(AGENT_OUTPUT_DIR, name)
+    tmp = os.path.join(AGENT_OUTPUT_DIR, f".{name}.tmp")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(payload)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+        return True
+    except OSError as exc:
+        print(f"[files] WARN: writing {path} failed: {exc}")
+        return False
+
+
+def write_agent_files() -> int:
+    """One pass: the shell's own minimal section plus every child's full agent
+    output, each to its own file named by the FQDN Checkmk uses ($HOSTNAME$)."""
+    os.makedirs(AGENT_OUTPUT_DIR, exist_ok=True)
+    try:
+        os.chmod(AGENT_OUTPUT_DIR, 0o755)
+    except OSError:
+        pass
+    wrote = _write_file(DELIVERY_HOSTNAME, _delivery_minimal().encode("utf-8"))
+    for child in CHILDREN:
+        wrote += _write_file(child.fqdn, child.fetch_agent())
+    return int(wrote)
+
+
+def agent_file_writer() -> None:
+    while True:
+        time.sleep(AGENT_OUTPUT_INTERVAL)
+        n = write_agent_files()
+        print(f"[files] refreshed {n}/{len(CHILDREN) + 1} agent files "
+              f"in {AGENT_OUTPUT_DIR}")
 
 
 # --------------------------------------------------------------------------- #
@@ -510,7 +584,7 @@ class HttpHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print(f"[boot] piggyback delivery shell={DELIVERY_HOSTNAME!r}  "
+    print(f"[boot] delivery shell={DELIVERY_HOSTNAME!r}  mode={DELIVERY_MODE}  "
           f"agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  hosts={len(CHILDREN)}")
 
     # native (non-docker) runs: SIGTERM must reap the children too, not just ^C
@@ -529,9 +603,22 @@ def main() -> None:
         agent = AgentServer(("0.0.0.0", AGENT_PORT), AgentHandler)  # nosec B104
         http = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), HttpHandler)  # nosec B104
         threading.Thread(target=agent.serve_forever, daemon=True).start()
+
+        if DELIVERY_MODE == "datasource":
+            # write the files ONCE before opening the panel, so that by the time
+            # estate.py sees the panel and starts discovery the datasource
+            # programs (cat) already have something to read
+            n = write_agent_files()
+            print(f"[boot] wrote {n}/{len(CHILDREN) + 1} agent files to "
+                  f"{AGENT_OUTPUT_DIR} (refresh every {AGENT_OUTPUT_INTERVAL:g}s)")
+            threading.Thread(target=agent_file_writer, daemon=True).start()
+            print("[boot] In Checkmk: add each estate host as a Checkmk-agent host and")
+            print("[boot] one 'Individual program call' rule: cat "
+                  f"{AGENT_OUTPUT_DIR}/$HOSTNAME$")
+        else:
+            print("[boot] In Checkmk: add ONE TCP host for the delivery shell, then add")
+            print("[boot] the estate hosts as *piggyback* hosts (no agent connection).")
         print(f"[boot] control panel: http://localhost:{HTTP_PORT}/admin")
-        print("[boot] In Checkmk: add ONE TCP host for the delivery shell, then add the")
-        print("[boot] estate hosts as *piggyback* hosts (no agent connection needed).")
         http.serve_forever()
     except KeyboardInterrupt:
         print("\n[boot] shutting down — terminating children")

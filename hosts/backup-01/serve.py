@@ -306,7 +306,9 @@ def build_agent_output() -> bytes:
                             time.gmtime(now + 330 * 86400))
 
     # ---- timesyncd dynamic timestamps -------------------------------------- #
-    last_sync = now - 612
+    # sawtooths 0->34min (poll interval), anchored to boot so it's continuous
+    # across restarts and independent of push-lagged payload timestamps.
+    last_sync = now - int((now - START) % 2048)
     sync_str  = time.strftime("%a %Y-%m-%d %H:%M:%S UTC", time.gmtime(last_sync))
 
     lines: list[str] = []

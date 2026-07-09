@@ -742,7 +742,11 @@ def build_agent_output(state: str) -> bytes:
     #     ReceiveTimestamp against wall clock (defaults: last sync 7500/10800 s,
     #     last NTP message 3600/7200 s), so both are generated dynamically.
     #     Offset/jitter defaults are 200/500 ms — ours stay in the µs range. ---
-    last_sync = now - 540  # synced ~9 min ago, well inside the 34 min poll
+    # timesyncd re-syncs every poll interval (2048 s); "time since last sync" is
+    # the age of the last real sync event, anchored to boot so it sawtooths
+    # 0->34min continuously across agent restarts instead of sitting pinned
+    # relative to the (push-lagged) payload timestamp.
+    last_sync = now - int((now - START) % 2048)
     sync_str = time.strftime("%a %Y-%m-%d %H:%M:%S UTC", time.gmtime(last_sync))
     offset_us = random.randint(-1800, 1800)
     a("<<<timesyncd>>>")

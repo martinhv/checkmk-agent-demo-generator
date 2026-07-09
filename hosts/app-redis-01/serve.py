@@ -559,7 +559,9 @@ def build_agent_output(state: str) -> bytes:
     a("<<<uptime>>>")
     a(f"{uptime}.00 {int(uptime * 3.6)}.00")
 
-    last_sync = now - 488
+    # sawtooths 0->34min (poll interval), anchored to boot so it's continuous
+    # across restarts and independent of push-lagged payload timestamps.
+    last_sync = now - int((now - START) % 2048)
     sync_str = time.strftime("%a %Y-%m-%d %H:%M:%S UTC", time.gmtime(last_sync))
     offset_us = random.randint(-1600, 1600)
     a("<<<timesyncd>>>")

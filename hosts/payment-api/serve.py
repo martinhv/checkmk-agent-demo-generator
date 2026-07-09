@@ -555,7 +555,9 @@ def build_agent_output(broken: bool) -> bytes:
     #     compares BOTH the [[[epoch]]] marker and the NTPMessage
     #     ReceiveTimestamp against wall clock (defaults: last sync 7500/10800 s,
     #     last NTP message 3600/7200 s), so both are generated dynamically. ---
-    last_sync = now - 620  # synced ~10 min ago, well inside the 34 min poll
+    # sawtooths 0->34min (poll interval), anchored to boot so it's continuous
+    # across restarts and independent of push-lagged payload timestamps.
+    last_sync = now - int((now - START) % 2048)
     sync_str = time.strftime("%a %Y-%m-%d %H:%M:%S UTC", time.gmtime(last_sync))
     offset_us = random.randint(-1800, 1800)
     a("<<<timesyncd>>>")

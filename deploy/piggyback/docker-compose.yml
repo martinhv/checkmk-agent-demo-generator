@@ -22,5 +22,13 @@ services:
       # estate.py sets these; empty = all hosts, no replication
       ESTATE_HOSTS: "${ESTATE_HOSTS:-}"
       ESTATE_REPLICAS: "${ESTATE_REPLICAS:-1}"
+      # delivery mode: piggyback (default) or datasource (self-hosted). In
+      # datasource mode the per-host agent files are written to /agent-output,
+      # bind-mounted to the host so the site's "cat" datasource program can
+      # read them (the container writes them world-readable).
+      DELIVERY_MODE: "${DELIVERY_MODE:-piggyback}"
+      AGENT_OUTPUT_DIR: "/agent-output"
+    volumes:
+      - "${ESTATE_AGENT_OUTPUT_DIR:-/var/tmp/cmk-demo-agent-output}:/agent-output"
 # Defaults: DELIVERY_HOSTNAME = cmk-demo-gateway.corp.meridian-retail.com (FQDN,
 # derived from ESTATE_DOMAIN).

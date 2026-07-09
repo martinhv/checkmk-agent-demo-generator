@@ -100,3 +100,39 @@ Diff any fake host against a real 2.5 Linux agent dump (Ubuntu 24.04, OMD/site s
 - **`<<<mounts>>>`** feeds mount-option checks; `noatime` on a DB volume is the DBA-credible choice.
 - **`postgres_bloat:sep(59)`** completes the mk_postgres family (header `db;schemaname;tablename;tups;…;totalwastedbytes`, instance marker + db list like the other sections); defaults alert at bloat factor 180/200 %, healthy tables sit at 1.1–1.6.
 - Ubuntu 24.04 `/proc/meminfo` has **58 keys** incl. `Zswap`, `Zswapped`, `Unaccepted`, `Balloon`, `DirectMap4k/2M/1G` — match the key set exactly.
+
+## Deploying the estate to a site (`estate.py` + `deploy/cmk_setup.py`)
+
+`estate.py` is the one-command entry (`up`/`down`/`replace`/`status`/`break|degrade|heal`). It runs the delivery shell (`deploy/piggyback/serve.py`, which spawns every `hosts/*/serve.py` as an internal TCP child + a combined `/admin` panel on :8099), optionally the SNMP renderer (`snmp/netsim.py`, :8101), then delegates all Checkmk REST wiring to `deploy/cmk_setup.py` (folder tree → hosts → rules → BI pack → discovery → activation; `--remove` tears down). Everything is stdlib + REST (urllib, no redirect-following so async runs can be polled).
+
+### Deployment modes (`--mode`, default self-hosted)
+
+- **self-hosted**: full site-filesystem access. SNMP layer available; agent hosts use **datasource delivery** (below).
+- **cloud** (Checkmk Cloud/SaaS): no filesystem access → SNMP layer forced off (`--snmp on` is *rejected*), agent hosts stay on **piggyback delivery** (shell is a TCP host; children arrive as `<<<<host>>>>` blocks). `estate.py:delivery_for()` maps self-hosted→datasource, cloud→piggyback. Mode is in the fingerprint, so switching it forces a reconfigure.
+
+### Datasource delivery ("Individual program call instead of agent access")
+
+Scales better than piggyback (no single-shell fetch bottleneck, no piggyback dependency). Source-verified (`cmk/gui/plugins/wato/datasource_programs.py`, `packages/cmk-check-engine/cmk/checkengine/sources/_builder.py`, `cmk/utils/tags.py`):
+
+- Ruleset is **`datasource_programs`**; value is a plain command string with `value_raw = repr(command)`. We use `cat <dir>/$HOSTNAME$` (monitoring macros supported).
+- `_builder._add_agent()` swaps in a `ProgramSource(program=datasource_programs[0])` **instead of** TCP — but only for an `is_tcp`/`is_all_agents_host`. A **`no-agent`** host never calls `_add_agent()`, so it *silently ignores* the rule → the SNMP devices in the same folder tree are unaffected (they're `no-agent`).
+- `is_tcp` is purely the agent tag's `tcp` aux-tag (`cmk-agent`/`all-agents`), **independent of address family**. So datasource hosts are **`cmk-agent` + `no-ip` + `no-piggyback`**: the program runs, no IP/ping is needed, and `no-piggyback` skips the always-added empty PiggybackSource (`_builder` adds one to every host unless tagged `no-piggyback`).
+- The **shell stays `all-agents`** so it gets BOTH its own data (datasource program on its own file) AND the BI special agent; no agent-port rule / no TCP in this mode.
+- **One rule per site**: created on the estate ROOT folder with empty conditions — Checkmk rules apply to a folder *and its subfolders*, so a single `cat $HOSTNAME$` rule covers the whole tree. The rule `folder` field takes the `~`-ident (`~meridian_demo`), same notation as `folder_config`.
+- **The files**: the shell (`DELIVERY_MODE=datasource`) writes each host's full agent output + its own minimal section, atomically (tmp+rename), **world-readable (0644)**, to `/var/tmp/cmk-demo-agent-output` — deliberately NOT under the site: `cat` runs as the site user and reads any world-readable path, so no sudo/site-user write is needed (contrast SNMP walks, which Checkmk demands under the site's snmpwalks dir → why netsim needs sudo). File name = the FQDN (= `$HOSTNAME$`). Docker runtime bind-mounts that host dir into the container. The shell writes once BEFORE opening its panel, so files exist before discovery runs; a writer thread refreshes every ~20 s. In datasource mode `build_delivery_output()` emits ONLY the shell's minimal section (no piggyback wrapping).
+
+### Folder taxonomy (both modes)
+
+Hosts are sorted into a role subfolder tree under the estate root (Applications, Databases, Storage, Infrastructure, Windows servers, Network → {Switches, Routers & WAN, UPS & power}) so it reads like real infra. Classified by short-name prefix (`_agent_role`/`_snmp_role`) so replicas land beside their originals. `folder_ident(*parts)` builds `~a~b` idents (`~` = root and separator); `ensure_folder_chain` creates nested chains parents-first (folder created with `name`=last segment + `parent`=parent ident). `prune_subtree` manages the whole subtree and is **guarded against a site-root (`~`) estate** so it can never mass-delete a shared site.
+
+### Fingerprint fast-path (skip the slow re-run)
+
+Setup stores a SHA of the *intended* config as host label `meridian_demo/fingerprint` on the shell. An unchanged `up` short-circuits in ~1 s (no heal/discovery/activation). Canon covers mode, root folder, shell host/ip/port, every host's `(fqdn, effective parent, role)`, the SNMP set, applicable BI tiers, and the datasource command — everything that changes Setup objects but NOT live metric values (they never change the service set). `SCHEMA_VERSION` is mixed in and prefixes the fingerprint (`v3-…`): **bump it whenever a change alters which services a host discovers** (a fake agent starts/stops emitting a section) or the shape of created objects — it invalidates every stored fingerprint and forces one full pass. Pure value changes need NO bump. `--force` overrides the fast-path.
+
+### Per-host discovery skip
+
+Even on a changed/forced run, `discover()` skips a host that already has **monitored** services (`GET /objects/service_discovery/<host>` → `check_table` entries with `service_phase == "monitored"`; that endpoint uses `DiscoveryAction.NONE` = cheap, reads stored state, no data-source fetch). So a roster that grew by one host only pays for that host. **The shell is never skipped** (`allow_skip=False`): its refresh re-delivers piggyback to any new child AND the final pass must re-scan for the BI aggregation service (which only appears once the estate is live). `--force` sets `allow_skip=False` everywhere.
+
+### `replace` / `redeploy`
+
+`estate.py replace` (alias `redeploy`) = `down` then `up` with the up flags. Teardown deletes the shell host and its fingerprint label, so the following `up` always runs the full discovery/activation.

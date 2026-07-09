@@ -440,7 +440,9 @@ def build_agent_output() -> bytes:  # noqa: PLR0912, PLR0915
     a(f"{uptime}.00 {int(uptime * 3.4)}.00")
 
     # --- timesyncd (dynamic timestamps) -----------------------------------
-    last_sync = now - 580
+    # sawtooths 0->34min (poll interval), anchored to boot so it's continuous
+    # across restarts and independent of push-lagged payload timestamps.
+    last_sync = now - int((now - START) % 2048)
     sync_str  = time.strftime("%a %Y-%m-%d %H:%M:%S UTC", time.gmtime(last_sync))
     offset_us = int(gauge("ntp.offset", 0, amp_abs=1200, phase=1.3, period=600))
     jitter_ms = round(gauge("ntp.jitter", 1.8, amp_abs=0.6, phase=0.7, period=700), 3)
