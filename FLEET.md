@@ -16,6 +16,8 @@ genuine company, not a pile of unrelated test boxes.
 
 | Host | Tier | OS / role | Demo state | Incident story |
 |---|---|---|---|---|
+| `core-gw-01` | network | Ubuntu 24.04 · edge gateway/router (VRRP active) | **steady green** | background — routes the estate to the ISP; top of the parent topology |
+| `leaf-sw-01` | network | Cumulus Linux 5.9 · whitebox ToR access switch | **steady green** | background — every server hangs off its swp ports; parent of the whole rack |
 | `web-frontend-01` | edge | Ubuntu 24.04 · nginx reverse proxy / TLS termination | **steady green** | background — the estate's front door, always healthy |
 | `payment-api` | app | Ubuntu 24.04 · gunicorn + nginx + redis client | incident | HTTP 503 symptom + failed `payment-worker.service` root cause *(existing: `demo_broken_http_service/`)* |
 | `app-worker-01` | app | Ubuntu 24.04 · Java settlement/order worker | incident | **memory leak → swap thrash → OOM kill → service flap** (a *real* resource exhaustion, the mirror image of the dying-disk fake load) |
@@ -44,9 +46,29 @@ Each host listens on a distinct pair so the whole estate can run at once.
 | `db-postgres-02` | 6565 | 8095 |
 | `backup-01` | 6566 | 8096 |
 | `win-dc-01` | 6567 | 8097 |
+| `core-gw-01` | 6568 | 8098 |
+| `leaf-sw-01` | 6569 | 8100² |
 
 ¹ the two original demos both publish 6557 — run one at a time, or re-map. The
 new hosts use 6560–6567 so they never collide with each other or the originals.
+² 8099 is taken by the piggyback delivery control panel.
+
+## Topology (parents + BI)
+
+The estate has an explicit network path for RCA to reason over:
+
+```
+core-gw-01  (gateway/router — no parent)
+  └─ leaf-sw-01  (ToR access switch)
+       └─ every other host (servers, win-dc-01, ...)
+```
+
+The parent relations are declared in the piggyback registry
+(`piggyback-delivery/serve.py`) and applied as the Checkmk `parents` host
+attribute by `setup-checkmk-site.py` — which also creates a **BI pack**
+("Payments platform": network path → customer entry → payment API →
+processing/cache → data layer → storage) plus a `check_bi_aggr` active check
+on the delivery shell, so the business service pages when any tier goes red.
 
 ## Two ways to run the estate
 

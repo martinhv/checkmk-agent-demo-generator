@@ -67,37 +67,46 @@ CHILD_HTTP_BASE = int(os.environ.get("CHILD_HTTP_BASE", "7700"))
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 START = time.time()
 
-# Estate roster: (hostname, directory, toggle actions, extra child env).
+# Estate roster: (hostname, directory, toggle actions, extra child env, parent).
 # `actions` drives the combined control panel; [] = steady-green background.
+# `parent` is the short name of the upstream network device — exposed as an
+# FQDN in the panel JSON and applied as the Checkmk "parents" attribute by
+# setup-checkmk-site.py. Network devices come first so the setup script
+# creates parents before the hosts that reference them.
 _REGISTRY = [
-    ("web-frontend-01", "web-frontend-01", [], {"START_STATE": "healthy"}),
+    ("core-gw-01", "core-gw-01", [], {"START_STATE": "healthy"}, None),
+    ("leaf-sw-01", "leaf-sw-01", [], {"START_STATE": "healthy"}, "core-gw-01"),
+    ("web-frontend-01", "web-frontend-01", [], {"START_STATE": "healthy"},
+     "leaf-sw-01"),
     ("payment-api", "demo_broken_http_service", ["break", "heal"],
-     {"START_BROKEN": "0"}),
+     {"START_BROKEN": "0"}, "leaf-sw-01"),
     ("app-worker-01", "app-worker-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}),
+     {"START_STATE": "healthy"}, "leaf-sw-01"),
     ("app-redis-01", "app-redis-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}),
+     {"START_STATE": "healthy"}, "leaf-sw-01"),
     ("db-postgres-01", "demo_dying_disk_db", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}),
+     {"START_STATE": "healthy"}, "leaf-sw-01"),
     ("db-postgres-02", "db-postgres-02", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}),
+     {"START_STATE": "healthy"}, "leaf-sw-01"),
     ("mail-relay-01", "mail-relay-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}),
+     {"START_STATE": "healthy"}, "leaf-sw-01"),
     ("fileserver-01", "fileserver-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}),
-    ("backup-01", "backup-01", [], {"START_STATE": "healthy"}),
+     {"START_STATE": "healthy"}, "leaf-sw-01"),
+    ("backup-01", "backup-01", [], {"START_STATE": "healthy"}, "leaf-sw-01"),
     ("win-dc-01", "win-dc-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}),
+     {"START_STATE": "healthy"}, "leaf-sw-01"),
 ]
 
 
 class Child:
     def __init__(self, idx: int, name: str, directory: str,
-                 actions: list[str], extra_env: dict[str, str]) -> None:
+                 actions: list[str], extra_env: dict[str, str],
+                 parent: str | None) -> None:
         self.name = name
         self.directory = directory
         self.actions = actions
         self.extra_env = extra_env
+        self.parent = parent
         self.agent_port = CHILD_AGENT_BASE + idx
         self.http_port = CHILD_HTTP_BASE + idx
         self.proc: subprocess.Popen | None = None
@@ -202,8 +211,8 @@ class Child:
 _selected = os.environ.get("ESTATE_HOSTS", "").strip()
 _wanted = {h.strip() for h in _selected.split(",") if h.strip()} if _selected else None
 CHILDREN: list[Child] = [
-    Child(i, name, directory, actions, extra)
-    for i, (name, directory, actions, extra) in enumerate(_REGISTRY)
+    Child(i, name, directory, actions, extra, parent)
+    for i, (name, directory, actions, extra, parent) in enumerate(_REGISTRY)
     if _wanted is None or name in _wanted
 ]
 _BY_NAME = {c.name: c for c in CHILDREN}
@@ -459,7 +468,8 @@ class HttpHandler(BaseHTTPRequestHandler):
             "domain": ESTATE_DOMAIN,
             "carried_hosts": [
                 {"name": c.name, "fqdn": c.fqdn, "state": c.child_state(),
-                 "actions": c.actions}
+                 "actions": c.actions,
+                 "parent": f"{c.parent}.{ESTATE_DOMAIN}" if c.parent else None}
                 for c in CHILDREN],
             "ui": "/admin",
         })

@@ -108,10 +108,19 @@ user) and does, in order:
 3. creates a **Meridian Retail demo** folder (`--folder`, `/` = root), the
    delivery shell as a normal TCP host with an `agent_ports` rule (6559), and
    every carried host as a pure piggyback host ("no agent" + "always use and
-   expect piggyback data" + "no IP");
-4. runs service discovery — the **shell first**, because that refresh fetch
+   expect piggyback data" + "no IP") — **with `parents` set from the estate
+   topology** (servers → `leaf-sw-01` → `core-gw-01`, declared in the
+   registry here and re-applied on re-runs);
+4. creates the **"Payments platform" BI pack** — tier rules (network path →
+   customer entry → payment API → processing/cache → data layer → storage)
+   under one worst-of aggregation — plus a `special_agents:bi` rule on the
+   shell, so a **BI Aggregation service pages** when any tier goes red (the
+   shell is created as "all-agents" so the special agent runs *in addition
+   to* the TCP fetch);
+5. runs service discovery — the **shell first**, because that refresh fetch
    is what stores everyone else's piggyback payloads on the site;
-5. activates the changes.
+6. activates, then re-discovers the shell once the estate is live — the BI
+   special agent only reports the aggregation after the first activation.
 
 Site and container on different machines? Run the script wherever it can
 reach both, and pass `--agent-ip <container host IP as the site sees it>`

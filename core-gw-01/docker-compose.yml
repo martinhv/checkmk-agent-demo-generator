@@ -1,0 +1,16 @@
+# Meridian Retail demo: core-gw-01 — datacenter gateway / edge router, steady green.
+#   docker compose up --build -d
+#   docker compose logs -f
+#
+# Published on 127.0.0.1 as 6568 (agent) / 8098 (admin). In Checkmk, add the
+# host with IP 127.0.0.1 and set the "Checkmk agent port" override to 6568.
+services:
+  core-gw-01:
+    build: .
+    container_name: core-gw-01
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6568:6568"   # Check_MK agent (published port)
+      - "127.0.0.1:8098:8098"   # admin status UI (published port)
+    environment:
+      STATE_FILE: /var/tmp/cmk-demo-core-gw-01.json

@@ -21,6 +21,8 @@ clean story.
 
 | Dir | Host | Tier | State | Story |
 |---|---|---|---|---|
+| `core-gw-01/` | Linux edge gateway/router | network | green | routes the estate to the ISP — top of the parent topology |
+| `leaf-sw-01/` | Cumulus Linux ToR switch | network | green | the access switch every server hangs off — parent of the rack |
 | `web-frontend-01/` | nginx reverse proxy / TLS | edge | green | the estate's front door — steady-green background |
 | `demo_broken_http_service/` | `payment-api` (gunicorn+nginx+redis) | app | incident | HTTP 503 symptom + failed `payment-worker.service` root cause |
 | `app-worker-01/` | Java order/settlement worker | app | incident | **memory leak → swap thrash → OOM kill → service flap** (Memory CRIT + failed unit) |
@@ -46,9 +48,12 @@ port. The shell itself emits only a minimal agent section. It also gives you a
 single combined control panel (`:8099/admin`) to drive every host's break/heal.
 Reuses each host's `serve.py` unmodified. The Checkmk side is one command too:
 `piggyback-delivery/setup-checkmk-site.py` creates the folder, hosts and rule,
-discovers and activates via the REST API (and `--remove` cleans up again). On
-a dev box, `./setup-checkmk-site.py --site` right after `cmk-dev-install-site`
-needs no further options. See `piggyback-delivery/README.md`.
+applies the **parent topology** (servers → `leaf-sw-01` → `core-gw-01`),
+creates the **"Payments platform" BI pack** with a pageable business service
+on the shell, discovers and activates via the REST API (and `--remove` cleans
+up again). On a dev box, `./setup-checkmk-site.py --site` right after
+`cmk-dev-install-site` needs no further options. See
+`piggyback-delivery/README.md`.
 
 ## Port map
 

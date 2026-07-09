@@ -49,6 +49,55 @@ import urllib.parse
 import urllib.request
 
 RULE_DESCRIPTION = "Meridian Retail demo: agent port of the piggyback delivery shell"
+BI_RULE_DESCRIPTION = "Meridian Retail demo: payments platform business service"
+
+# --- BI pack: "Payments platform" -------------------------------------------
+# Tier rules (worst-of) feeding one top rule; leaves reference services by
+# (host short name, service regex prefix). Only services every host discovers
+# with DEFAULT rules are used. Hosts not carried (ESTATE_HOSTS subset) are
+# skipped; empty tiers are dropped.
+BI_PACK_ID = "meridian_demo"
+BI_PACK_TITLE = "Meridian Retail demo"
+BI_TOP_RULE_ID = "meridian_payments_platform"
+BI_AGGR_ID = "meridian_payments_platform"
+BI_AGGR_TITLE = "Payments platform"  # = top rule title = aggregation name
+BI_GROUP = "Meridian Retail"
+BI_TIERS = [
+    ("meridian_network_path", "Network path", [
+        ("core-gw-01", "Interface"),
+        ("core-gw-01", "CPU load"),
+        ("leaf-sw-01", "Interface"),
+        ("leaf-sw-01", "CPU load"),
+    ]),
+    ("meridian_customer_entry", "Customer entry", [
+        ("web-frontend-01", "Interface"),
+        ("web-frontend-01", "CPU utilization"),
+        ("web-frontend-01", "Memory"),
+    ]),
+    ("meridian_payment_api", "Payment API", [
+        ("payment-api", "Systemd Service Summary"),
+        ("payment-api", "CPU load"),
+        ("payment-api", "Memory"),
+        ("payment-api", "TCP Connections"),
+    ]),
+    ("meridian_processing", "Processing & cache", [
+        ("app-worker-01", "Memory"),
+        ("app-worker-01", "Systemd Service Summary"),
+        ("app-worker-01", "CPU load"),
+        ("app-redis-01", "Redis MERIDIAN_CACHE"),
+        ("app-redis-01", "Memory"),
+    ]),
+    ("meridian_data_layer", "Data layer", [
+        ("db-postgres-01", "PostgreSQL"),
+        ("db-postgres-01", "Disk IO SUMMARY"),
+        ("db-postgres-01", "CPU load"),
+        ("db-postgres-02", "PostgreSQL Connections"),
+        ("db-postgres-02", "PostgreSQL Instance"),
+    ]),
+    ("meridian_storage", "Storage", [
+        ("fileserver-01", "Filesystem /srv/shares"),
+    ]),
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -199,44 +248,69 @@ def ensure_folder(api: CmkApi, folder_name: str, title: str) -> str:
     return ident
 
 
-def host_exists(api: CmkApi, name: str) -> bool:
-    status, _, _ = api.request("GET", f"/objects/host_config/{name}")
-    return status == 200
+def get_host(api: CmkApi, name: str) -> dict | None:
+    status, payload, _ = api.request("GET", f"/objects/host_config/{name}")
+    return payload if status == 200 else None
 
 
-def ensure_host(api: CmkApi, name: str, folder: str, attributes: dict) -> bool:
-    """Create the host if missing; returns True if it was created."""
-    if host_exists(api, name):
+def ensure_host(api: CmkApi, name: str, folder: str, attributes: dict) -> None:
+    """Create the host if missing; reconcile the parents attribute if not."""
+    existing = get_host(api, name)
+    if existing is None:
+        status, payload, _ = api.request(
+            "POST", "/domain-types/host_config/collections/all",
+            body={"host_name": name, "folder": folder, "attributes": attributes})
+        if status != 200:
+            api_error(f"creating host {name}", status, payload)
+        print(f"  created host {name}")
+        return
+    # reconcile the attributes that carry the topology/datasource contract
+    # (may change between script versions); everything else is left as the
+    # user configured it
+    current = (existing.get("extensions") or {}).get("attributes") or {}
+    fix = {k: attributes[k] for k in ("parents", "tag_agent")
+           if k in attributes and current.get(k) != attributes[k]}
+    if fix:
+        status, payload, _ = api.request(
+            "PUT", f"/objects/host_config/{name}",
+            body={"update_attributes": fix}, etag="*")
+        if status != 200:
+            api_error(f"updating attributes of {name}", status, payload)
+        print(f"  host {name} exists — updated {', '.join(sorted(fix))}")
+    else:
         print(f"  host {name} exists")
-        return False
+
+
+def _marked_rules(api: CmkApi, ruleset: str,
+                  description: str) -> list[tuple[dict, list[str]]]:
+    """All (rule, condition host names) in a ruleset carrying our marker
+    description. Rules are owned per shell host — several estates (different
+    shells) may share a site, so callers must additionally match the hosts."""
     status, payload, _ = api.request(
-        "POST", "/domain-types/host_config/collections/all",
-        body={"host_name": name, "folder": folder, "attributes": attributes})
+        "GET", "/domain-types/rule/collections/all",
+        query={"ruleset_name": ruleset})
     if status != 200:
-        api_error(f"creating host {name}", status, payload)
-    print(f"  created host {name}")
-    return True
+        api_error(f"listing {ruleset} rules", status, payload)
+    marked = []
+    for rule in (payload or {}).get("value", []):
+        ext = rule.get("extensions", {})
+        if ext.get("properties", {}).get("description") != description:
+            continue
+        cond = (ext.get("conditions") or {}).get("host_name") or {}
+        marked.append((rule, cond.get("match_on") or []))
+    return marked
 
 
 def ensure_port_rule(api: CmkApi, delivery_host: str, port: int) -> None:
-    status, payload, _ = api.request(
-        "GET", "/domain-types/rule/collections/all",
-        query={"ruleset_name": "agent_ports"})
-    if status != 200:
-        api_error("listing agent_ports rules", status, payload)
-    for rule in (payload or {}).get("value", []):
-        ext = rule.get("extensions", {})
-        if ext.get("properties", {}).get("description") != RULE_DESCRIPTION:
-            continue
-        cond = (ext.get("conditions") or {}).get("host_name") or {}
-        if (ext.get("value_raw") == str(port)
-                and cond.get("match_on") == [delivery_host]):
+    for rule, hosts in _marked_rules(api, "agent_ports", RULE_DESCRIPTION):
+        if hosts != [delivery_host]:
+            continue  # another estate's shell — leave it alone
+        if rule["extensions"].get("value_raw") == str(port):
             print("  agent port rule exists")
             return
-        # same marker, different port/host (changed --agent-port or domain)
+        # our shell, different port (changed --agent-port)
         api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
         print("  removed stale agent port rule")
-        break
     # root folder, not the demo folder: the explicit host-name condition scopes
     # it, and it keeps working if the delivery host already exists elsewhere
     status, payload, _ = api.request(
@@ -255,17 +329,129 @@ def ensure_port_rule(api: CmkApi, delivery_host: str, port: int) -> None:
     print(f"  created agent port rule ({delivery_host} -> {port})")
 
 
-def delete_port_rule(api: CmkApi) -> None:
-    status, payload, _ = api.request(
-        "GET", "/domain-types/rule/collections/all",
-        query={"ruleset_name": "agent_ports"})
-    if status != 200:
+# --------------------------------------------------------------------------- #
+#  BI pack: tier rules -> top rule -> aggregation -> special-agent service
+# --------------------------------------------------------------------------- #
+def _bi_leaf(fqdn: str, service_regex: str) -> dict:
+    return {"search": {"type": "empty"},
+            "action": {"type": "state_of_service",
+                       "host_regex": fqdn, "service_regex": service_regex}}
+
+
+def _bi_call(rule_id: str) -> dict:
+    return {"search": {"type": "empty"},
+            "action": {"type": "call_a_rule", "rule_id": rule_id,
+                       "params": {"arguments": []}}}
+
+
+def _ensure_bi_object(api: CmkApi, kind: str, ident: str, body: dict,
+                      label: str) -> None:
+    status, _, _ = api.request("GET", f"/objects/{kind}/{ident}")
+    if status == 200:
+        print(f"  {label} exists")
         return
-    for rule in (payload or {}).get("value", []):
-        props = rule.get("extensions", {}).get("properties", {})
-        if props.get("description") == RULE_DESCRIPTION:
+    status, payload, _ = api.request("POST", f"/objects/{kind}/{ident}", body=body)
+    if status != 200:
+        api_error(f"creating {label}", status, payload)
+    print(f"  created {label}")
+
+
+def _bi_rule_body(rule_id: str, title: str, nodes: list[dict]) -> dict:
+    return {
+        "id": rule_id,
+        "pack_id": BI_PACK_ID,
+        "nodes": nodes,
+        "params": {"arguments": []},
+        "node_visualization": {"type": "none", "style_config": {}},
+        "properties": {"title": title, "comment": "", "docu_url": "",
+                       "icon": "", "state_messages": {}},
+        "aggregation_function": {"type": "worst", "count": 1, "restrict_state": 2},
+        "computation_options": {"disabled": False},
+    }
+
+
+def ensure_bi_pack(api: CmkApi, fqdn_by_short: dict[str, str]) -> None:
+    _ensure_bi_object(api, "bi_pack", BI_PACK_ID,
+                      {"title": BI_PACK_TITLE, "contact_groups": [],
+                       "public": True},
+                      f"BI pack {BI_PACK_ID}")
+    top_nodes = []
+    for rule_id, title, leaves in BI_TIERS:
+        nodes = [_bi_leaf(fqdn_by_short[short], svc)
+                 for short, svc in leaves if short in fqdn_by_short]
+        if not nodes:
+            continue  # tier entirely absent from the carried subset
+        _ensure_bi_object(api, "bi_rule", rule_id,
+                          _bi_rule_body(rule_id, title, nodes),
+                          f"BI rule {title!r}")
+        top_nodes.append(_bi_call(rule_id))
+    if not top_nodes:
+        print("  no BI tiers applicable — skipping aggregation")
+        return
+    _ensure_bi_object(api, "bi_rule", BI_TOP_RULE_ID,
+                      _bi_rule_body(BI_TOP_RULE_ID, BI_AGGR_TITLE, top_nodes),
+                      f"BI rule {BI_AGGR_TITLE!r}")
+    _ensure_bi_object(api, "bi_aggregation", BI_AGGR_ID, {
+        "id": BI_AGGR_ID,
+        "pack_id": BI_PACK_ID,
+        "groups": {"names": [BI_GROUP], "paths": []},
+        "node": _bi_call(BI_TOP_RULE_ID),
+        "aggregation_visualization": {"ignore_rule_styles": False,
+                                      "layout_id": "builtin_default",
+                                      "line_style": "round"},
+        "computation_options": {"disabled": False,
+                                "escalate_downtimes_as_warn": False,
+                                "use_hard_states": False},
+        "comment": "",
+        "customer": None,
+    }, f"BI aggregation {BI_AGGR_TITLE!r}")
+
+
+def ensure_bi_service_rule(api: CmkApi, delivery_host: str) -> None:
+    """special_agents:bi on the shell -> a 'BI Aggregation' service that goes
+    red with the payments platform. Requires the shell to be 'all-agents'
+    (special agent IN ADDITION TO the TCP agent)."""
+    if any(hosts == [delivery_host] for _, hosts in
+           _marked_rules(api, "special_agents:bi", BI_RULE_DESCRIPTION)):
+        print("  BI service rule exists")
+        return
+    value = {"options": [{"site": ("local", None),
+                          "filter": {"aggr_name": [BI_AGGR_TITLE]}}]}
+    status, payload, _ = api.request(
+        "POST", "/domain-types/rule/collections/all",
+        body={
+            "ruleset": "special_agents:bi",
+            "folder": "/",
+            "properties": {"description": BI_RULE_DESCRIPTION, "disabled": False},
+            "value_raw": repr(value),
+            "conditions": {
+                "host_name": {"match_on": [delivery_host], "operator": "one_of"},
+            },
+        })
+    if status != 200:
+        api_error("creating the BI service rule", status, payload)
+    print(f"  created BI service rule ({delivery_host})")
+
+
+def delete_bi_objects(api: CmkApi) -> None:
+    # order matters: aggregation -> top rule -> tier rules -> pack
+    for kind, ident in ([("bi_aggregation", BI_AGGR_ID),
+                         ("bi_rule", BI_TOP_RULE_ID)]
+                        + [("bi_rule", rid) for rid, _, _ in BI_TIERS]
+                        + [("bi_pack", BI_PACK_ID)]):
+        status, _, _ = api.request("DELETE", f"/objects/{kind}/{ident}", etag="*")
+        if status in (200, 204):
+            print(f"  deleted {kind} {ident}")
+
+
+def _delete_marked_rules(api: CmkApi, ruleset: str, description: str,
+                         estate_hosts: set[str]) -> None:
+    """Delete our marker rules, but only those scoped to hosts of THIS estate
+    (the ones being torn down) — a second estate's rules survive."""
+    for rule, hosts in _marked_rules(api, ruleset, description):
+        if hosts and set(hosts) <= estate_hosts:
             api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
-            print("  deleted agent port rule")
+            print(f"  deleted rule {description!r}")
 
 
 # --------------------------------------------------------------------------- #
@@ -353,15 +539,28 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
     folder = ensure_folder(api, args.folder, "Meridian Retail demo")
     ensure_host(api, delivery, folder, {
         "ipaddress": args.agent_ip,
-        "tag_agent": "cmk-agent",
+        # all-agents: TCP agent AND the BI special agent below — plain
+        # cmk-agent would let a configured special agent REPLACE the TCP
+        # fetch and cut off the piggyback delivery
+        "tag_agent": "all-agents",
     })
     ensure_port_rule(api, delivery, args.agent_port)
-    for h in hosts:
-        ensure_host(api, h["fqdn"], folder, {
+    carried_fqdns = {h["fqdn"] for h in hosts}
+    for h in hosts:  # roster order is parents-first (network devices lead)
+        attrs = {
             "tag_agent": "no-agent",
             "tag_piggyback": "piggyback",
             "tag_address_family": "no-ip",
-        })
+        }
+        # only reference parents that are actually carried (ESTATE_HOSTS
+        # subsets may omit the network devices)
+        if h.get("parent") in carried_fqdns:
+            attrs["parents"] = [h["parent"]]
+        ensure_host(api, h["fqdn"], folder, attrs)
+
+    print("* creating the Payments platform BI pack")
+    ensure_bi_pack(api, {h["name"]: h["fqdn"] for h in hosts})
+    ensure_bi_service_rule(api, delivery)
 
     print("* running service discovery (shell first — its fetch delivers the "
           "piggyback data)")
@@ -370,6 +569,13 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
         discover(api, h["fqdn"])
 
     print("* activating changes")
+    activate(api, args.force_foreign)
+
+    # the BI special agent only yields the aggregation once the estate is
+    # live in the core, so the business service needs a second look
+    print("* discovering the business service on the shell")
+    time.sleep(10)
+    discover(api, delivery)
     activate(api, args.force_foreign)
 
     print(f"""
@@ -385,7 +591,9 @@ def teardown(api: CmkApi, args: argparse.Namespace) -> None:
     names: list[str] = []
     try:
         info = panel_get(args.panel)
-        names = [info["delivery_host"]] + [h["fqdn"] for h in info["carried_hosts"]]
+        # children before their parents (roster is parents-first), shell last
+        names = [h["fqdn"] for h in reversed(info["carried_hosts"])]
+        names.append(info["delivery_host"])
     except SystemExit:
         print("  (panel unreachable — deleting all hosts in the folder instead)")
         status, payload, _ = api.request(
@@ -394,11 +602,13 @@ def teardown(api: CmkApi, args: argparse.Namespace) -> None:
             names = [h["id"] for h in (payload or {}).get("value", [])
                      if h.get("extensions", {}).get("folder", "").strip("/~")
                      == folder_id(args.folder).lstrip("~")]
+    delete_bi_objects(api)
+    _delete_marked_rules(api, "special_agents:bi", BI_RULE_DESCRIPTION, set(names))
     for name in names:
         status, _, _ = api.request("DELETE", f"/objects/host_config/{name}", etag="*")
         if status == 204:
             print(f"  deleted host {name}")
-    delete_port_rule(api)
+    _delete_marked_rules(api, "agent_ports", RULE_DESCRIPTION, set(names))
     ident = folder_id(args.folder)
     if ident != "~":
         status, _, _ = api.request(
