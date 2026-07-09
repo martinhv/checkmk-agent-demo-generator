@@ -4,7 +4,7 @@
 #
 # Port plan on the demo laptop: 6556 is the laptop's own Checkmk agent. This
 # demo publishes 6557 (agent) and 8081 (admin toggle/UI). NOTE: the payment-api
-# demo (demo_broken_http_service) also uses 6557 — stop it first, or change one
+# demo (hosts/payment-api) also uses 6557 — stop it first, or change one
 # side's host port if both demos must run at once. In Checkmk, add the host
 # with IP 127.0.0.1 and set the "Checkmk agent port" override to 6557.
 services:

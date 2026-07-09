@@ -1,34 +1,39 @@
 #!/usr/bin/env python3
-"""One-shot Checkmk site setup for the piggyback delivery estate.
+"""One-shot Checkmk site setup for the demo estate (agent + SNMP side).
 
-Automates section "Set it up in Checkmk" of the README via the Checkmk REST
-API — instead of clicking through Setup, run ONE command against a running
-delivery container and a Checkmk site:
+The REST-API deployment engine behind ../estate.py — usually you run THAT.
+Standalone use against a running estate works exactly like before:
 
-    ./setup-checkmk-site.py --site-url http://localhost/prod \
+    ./cmk_setup.py --site-url http://localhost/prod \
         --user automation --secret '...'
 
 On a Checkmk dev box, sites made by cmk-dev-site / cmk-dev-install-site
 (cmkadmin/cmk, http://localhost/<site>) need no options at all:
 
-    ./setup-checkmk-site.py --site        # newest running local v* dev site
-    ./setup-checkmk-site.py --site v300   # a specific local site
+    ./cmk_setup.py --site        # newest running local v* dev site
+    ./cmk_setup.py --site v300   # a specific local site
 
 What it does (idempotent — safe to re-run):
 
   1. asks the delivery control panel (:8099) which hosts it actually carries
-     (so an ESTATE_HOSTS subset is handled automatically) and HEALS any
-     non-healthy host first — services must be discovered in the healthy
-     state (db-postgres-01's SMART check baselines raw values at discovery);
+     (so an ESTATE_HOSTS subset — and ESTATE_REPLICAS replication — is
+     handled automatically) and HEALS any non-healthy host first — services
+     must be discovered in the healthy state (db-postgres-01's SMART check
+     baselines raw values at discovery);
   2. creates a dedicated Setup folder (default: "Meridian Retail demo");
   3. creates the delivery shell as a normal TCP host (agent port via an
      "agent_ports" rule) and every estate host as a pure piggyback host
      (no agent, "always use piggyback data");
-  4. runs service discovery — the shell FIRST, because that initial agent
+  4. if the SNMP simulator (snmp/netsim.py, panel :8101) is running, creates
+     its devices as SNMP/no-agent/no-IP hosts plus a "usewalk_hosts" rule
+     ("Simulating SNMP by using a stored SNMP walk") scoped to exactly those
+     hosts — Checkmk then reads the rendered walk files instead of the
+     network (the StoredWalk backend bypasses NO_IP with 127.0.0.1);
+  5. runs service discovery — the shell FIRST, because that initial agent
      fetch is what stores the piggyback payloads the other hosts need;
-  5. activates the changes.
+  6. activates the changes.
 
-`--remove` tears the whole thing down again (hosts, rule, folder).
+`--remove` tears the whole thing down again (hosts, rules, BI pack, folder).
 
 Needs: a site user with write access to Setup ("Administrator" role or an
 automation user), and the agent port reachable FROM THE SITE (default
@@ -50,6 +55,7 @@ import urllib.request
 
 RULE_DESCRIPTION = "Meridian Retail demo: agent port of the piggyback delivery shell"
 BI_RULE_DESCRIPTION = "Meridian Retail demo: payments platform business service"
+SNMP_RULE_DESCRIPTION = "Meridian Retail demo: stored SNMP walks (snmp/netsim.py)"
 
 # --- BI pack: "Payments platform" -------------------------------------------
 # Tier rules (worst-of) feeding one top rule; leaves reference services by
@@ -199,14 +205,16 @@ def detect_dev_site() -> str:
 # --------------------------------------------------------------------------- #
 #  Delivery control panel (source of truth for the carried roster)
 # --------------------------------------------------------------------------- #
-def panel_get(panel: str, path: str = "/"):
+def panel_get(panel: str, path: str = "/", *, optional: bool = False):
     try:
         with urllib.request.urlopen(panel.rstrip("/") + path, timeout=10) as r:  # noqa: S310
             return json.loads(r.read())
     except (urllib.error.URLError, OSError, ValueError) as err:
+        if optional:
+            return None
         die(f"cannot reach the delivery control panel at {panel}: {err}\n"
-            "       Is the container running?  cd piggyback-delivery && "
-            "docker compose up --build -d")
+            "       Is the estate running?  ./estate.py up  (or: cd "
+            "deploy/piggyback && docker compose up --build -d)")
 
 
 def heal_estate(panel: str, hosts: list[dict]) -> None:
@@ -327,6 +335,92 @@ def ensure_port_rule(api: CmkApi, delivery_host: str, port: int) -> None:
     if status != 200:
         api_error("creating the agent port rule", status, payload)
     print(f"  created agent port rule ({delivery_host} -> {port})")
+
+
+# --------------------------------------------------------------------------- #
+#  SNMP estate (stored walks rendered by snmp/netsim.py)
+# --------------------------------------------------------------------------- #
+def ensure_usewalk_rule(api: CmkApi, fqdns: list[str]) -> None:
+    """usewalk_hosts ("Simulating SNMP by using a stored SNMP walk") for
+    exactly our devices — root folder, explicit host-name condition, marker
+    description (same ownership pattern as the agent-port rule)."""
+    wanted = sorted(fqdns)
+    for rule, hosts in _marked_rules(api, "usewalk_hosts", SNMP_RULE_DESCRIPTION):
+        if sorted(hosts) == wanted:
+            print("  usewalk rule exists")
+            return
+        # our marker, stale host set (device roster changed) — replace
+        api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
+        print("  removed stale usewalk rule")
+    status, payload, _ = api.request(
+        "POST", "/domain-types/rule/collections/all",
+        body={
+            "ruleset": "usewalk_hosts",
+            "folder": "/",
+            "properties": {"description": SNMP_RULE_DESCRIPTION, "disabled": False},
+            "value_raw": "True",
+            "conditions": {
+                "host_name": {"match_on": wanted, "operator": "one_of"},
+            },
+        })
+    if status != 200:
+        api_error("creating the usewalk_hosts rule", status, payload)
+    print(f"  created usewalk rule ({len(wanted)} devices)")
+
+
+def setup_snmp(api: CmkApi, args: argparse.Namespace, folder: str,
+               carried_fqdns: set[str]) -> list[str]:
+    """SNMP devices as no-agent/no-IP hosts reading stored walks. Returns the
+    device FQDNs (for discovery). The StoredWalk backend bypasses NO_IP and
+    substitutes 127.0.0.1, so the hosts need no address at all."""
+    info = panel_get(args.snmp_panel, optional=True)
+    if info is None or "devices" not in info:
+        if args.snmp == "on":
+            die(f"--snmp on, but the netsim panel at {args.snmp_panel} does "
+                "not answer — start snmp/netsim.py first (estate.py does "
+                "this automatically)")
+        print(f"  netsim panel {args.snmp_panel} not reachable — skipping "
+              "SNMP devices")
+        return []
+    devices = info["devices"]
+
+    # heal first: interface target states are recorded at discovery
+    for short, dev in devices.items():
+        if dev.get("incident") and dev.get("state") != "healthy":
+            print(f"  healing {short} (was: {dev.get('state')})")
+            panel_get(args.snmp_panel, f"/admin/{short}/heal")
+
+    core_fqdn = next((d["fqdn"] for s, d in devices.items()
+                      if s.startswith("sw-core")), None)
+    gw_fqdn = next((f for f in carried_fqdns if f.startswith("core-gw-")), None)
+    fqdns = []
+    for short, dev in sorted(devices.items(),
+                             key=lambda kv: not kv[0].startswith("sw-core")):
+        attrs = {
+            "tag_snmp_ds": "snmp-v2",
+            "tag_agent": "no-agent",
+            "tag_address_family": "no-ip",
+        }
+        # topology: campus core hangs off the gateway; everything else off
+        # the core — only reference parents that actually exist in the site
+        parent = gw_fqdn if dev["fqdn"] == core_fqdn else core_fqdn
+        if parent and (parent in carried_fqdns or parent == core_fqdn):
+            attrs["parents"] = [parent]
+        ensure_host(api, dev["fqdn"], folder, attrs)
+        fqdns.append(dev["fqdn"])
+    ensure_usewalk_rule(api, fqdns)
+    return fqdns
+
+
+def snmp_teardown_names(args: argparse.Namespace) -> list[str]:
+    info = panel_get(args.snmp_panel, optional=True)
+    if not info or "devices" not in info:
+        return []
+    # children first: the campus core is everyone's parent, so it must be
+    # deleted last or Checkmk refuses while the references exist
+    devs = sorted(info["devices"].values(),
+                  key=lambda d: d["fqdn"].startswith("sw-core"))
+    return [d["fqdn"] for d in devs]
 
 
 # --------------------------------------------------------------------------- #
@@ -562,11 +656,18 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
     ensure_bi_pack(api, {h["name"]: h["fqdn"] for h in hosts})
     ensure_bi_service_rule(api, delivery)
 
+    snmp_fqdns: list[str] = []
+    if args.snmp != "off":
+        print("* creating the SNMP network devices (stored walks)")
+        snmp_fqdns = setup_snmp(api, args, folder, carried_fqdns)
+
     print("* running service discovery (shell first — its fetch delivers the "
           "piggyback data)")
     discover(api, delivery)
     for h in hosts:
         discover(api, h["fqdn"])
+    for fqdn in snmp_fqdns:
+        discover(api, fqdn)
 
     print("* activating changes")
     activate(api, args.force_foreign)
@@ -578,10 +679,12 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
     discover(api, delivery)
     activate(api, args.force_foreign)
 
+    snmp_line = (f"\n  - network panel:  {args.snmp_panel}/admin   "
+                 "(break/heal the SNMP devices)" if snmp_fqdns else "")
     print(f"""
 Done. The estate is live:
   - monitoring:     {args.site_url.rstrip('/')}/check_mk/
-  - control panel:  {args.panel}/admin   (break/heal any host from one screen)
+  - control panel:  {args.panel}/admin   (break/heal any host from one screen){snmp_line}
 Piggyback hosts only have data while the delivery container runs and is polled.""")
 
 
@@ -591,8 +694,10 @@ def teardown(api: CmkApi, args: argparse.Namespace) -> None:
     names: list[str] = []
     try:
         info = panel_get(args.panel)
+        # SNMP devices first (children of the network path), then the estate
         # children before their parents (roster is parents-first), shell last
-        names = [h["fqdn"] for h in reversed(info["carried_hosts"])]
+        names = snmp_teardown_names(args)
+        names += [h["fqdn"] for h in reversed(info["carried_hosts"])]
         names.append(info["delivery_host"])
     except SystemExit:
         print("  (panel unreachable — deleting all hosts in the folder instead)")
@@ -603,6 +708,7 @@ def teardown(api: CmkApi, args: argparse.Namespace) -> None:
                      if h.get("extensions", {}).get("folder", "").strip("/~")
                      == folder_id(args.folder).lstrip("~")]
     delete_bi_objects(api)
+    _delete_marked_rules(api, "usewalk_hosts", SNMP_RULE_DESCRIPTION, set(names))
     _delete_marked_rules(api, "special_agents:bi", BI_RULE_DESCRIPTION, set(names))
     for name in names:
         status, _, _ = api.request("DELETE", f"/objects/host_config/{name}", etag="*")
@@ -623,9 +729,9 @@ def teardown(api: CmkApi, args: argparse.Namespace) -> None:
     print("Done — estate removed from the site.")
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(
-        description="One-shot Checkmk site setup for the piggyback demo estate.",
+        description="One-shot Checkmk site setup for the demo estate.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--site-url",
                    help="site base URL, e.g. http://localhost/prod")
@@ -645,13 +751,18 @@ def main() -> None:
                    help="published delivery agent port")
     p.add_argument("--panel", default="http://localhost:8099",
                    help="delivery control panel URL (from where this script runs)")
+    p.add_argument("--snmp", choices=("auto", "on", "off"), default="auto",
+                   help="include the SNMP devices: auto = if the netsim panel "
+                        "answers, on = require it, off = skip")
+    p.add_argument("--snmp-panel", default="http://localhost:8101",
+                   help="netsim control panel URL (snmp/netsim.py)")
     p.add_argument("--folder", default="meridian_demo",
                    help="Setup folder for the estate ('/' = root)")
     p.add_argument("--force-foreign", action="store_true",
                    help="activate even if other users have pending changes")
     p.add_argument("--remove", action="store_true",
                    help="tear down: delete the hosts, rule and folder again")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     if bool(args.site) == bool(args.site_url):
         p.error("pass either --site (local dev site) or --site-url URL")

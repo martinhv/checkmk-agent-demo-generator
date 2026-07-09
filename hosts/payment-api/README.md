@@ -28,7 +28,7 @@ keynote (`payment-api`) so you can **add it live** during the Theme 1 demo:
 ## 1. Run it
 
 ```bash
-cd demo_broken_http_service
+cd hosts/payment-api
 docker compose up --build -d
 docker compose logs -f          # watch [boot] / [ctl] / [state] lines
 ```

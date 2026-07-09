@@ -1,0 +1,145 @@
+# snmp/ — the SNMP side of the estate
+
+Fake **network equipment** for the Meridian Retail demo estate. Where the
+server hosts fake a Checkmk *agent* over TCP, network gear is monitored via
+SNMP — and Checkmk ships a first-class simulation hook for that: the rule
+**"Simulating SNMP by using a stored SNMP walk"** (`usewalk_hosts`) makes the
+fetcher read `~/var/check_mk/snmpwalks/<hostname>` instead of talking to the
+network. The StoredWalk backend re-reads the file on **every poll** (no
+caching — verified in `check_mk:packages/cmk-check-engine/cmk/checkengine/
+snmp_backends/stored_walk.py`), so a daemon that keeps rewriting the walk
+with advancing counters produces **live traffic graphs**, real rate checks,
+and stageable incidents — no SNMP stack involved anywhere.
+
+The simulator is **`netsim.py`** — a stdlib-only daemon that renders one
+walk file per device every 30 s with monotonic counters (`Counter`) and
+autocorrelated gauges (`gauge`), exactly the physics of the agent hosts (see
+the repo `CLAUDE.md`). Break/heal control panel on **:8101/admin**,
+persisted state so restarts are invisible. `--access-switches N` stamps out
+N access switches (replicas are steady green; the incident stays on the
+first).
+
+The Checkmk side (hosts as SNMP v2 / no-agent / **no-IP** — the StoredWalk
+backend bypasses NO_IP and substitutes 127.0.0.1, so nothing is ever
+contacted — plus the `usewalk_hosts` rule, discovery, activation) is done by
+**`../deploy/cmk_setup.py`**, which `../estate.py` drives for you.
+
+## The devices
+
+These complement the estate's two *agent-based* network hosts (`core-gw-01`
+gateway, `leaf-sw-01` ToR — Linux-style agents): this is the **SNMP-monitored**
+gear — the office/campus side plus the warehouse WAN. The internet edge stays
+`core-gw-01`'s job.
+
+| Host | Device | State | Story |
+|---|---|---|---|
+| `sw-core-01` | Catalyst 9300 campus core switch (12 × 10G) | steady green | background — CPU/mem/temp/PSU/fans + per-port traffic |
+| `sw-access-01` | Catalyst 9200 access switch (48 × 1G + 2 × 10G uplinks) | **incident** | CRC error storm on uplink Te1/1/1 (WARN), then the link dies (CRIT) and traffic fails over to Te1/1/2 |
+| `rt-wan-01` | Cisco ISR 2921 warehouse WAN router | **incident** | WAN saturation (runaway inventory replication): Gi0/1 ramps 180 → ~940 Mbit/s, CPU climbs past the cisco_cpu defaults (WARN 80 / CRIT 90), output discards appear |
+| `ups-01` | APC Smart-UPS 3000 (AP9631 card) | steady green | battery status/capacity/temp, runtime, output load, self test |
+
+Services per device (all from real Checkmk SNMP plugins, no rules needed):
+`SNMP Info`, `Uptime`, `Interface NN`, `CPU utilization`, `Memory <pool>`,
+`Temperature <sensor>`, `Power <psu>`, `FAN <fan>` on the Cisco boxes;
+`APC Symmetra status`, `Self Test`, `Phase Input/Output/Battery`,
+`Temperature Battery` on the UPS.
+
+## Quick start
+
+```bash
+# the one-stop shop does all of this: ../estate.py up --site
+# by hand instead:
+
+# 1. start the walk renderer AS THE SITE USER (it writes into the site)
+sudo -u heute python3 snmp/netsim.py               # foreground; or use &
+#    (inside a site: plain `python3 netsim.py` uses $OMD_ROOT;
+#     elsewhere: --site heute or --walks-dir /path)
+
+# 2. bootstrap Checkmk (hosts + usewalk rule + discovery + activate)
+deploy/cmk_setup.py --site heute
+
+# 3. drive the incidents
+open http://localhost:8101/admin
+curl localhost:8101/admin/sw-access-01/degrade     # CRC storm  -> WARN
+curl localhost:8101/admin/sw-access-01/break       # link down  -> CRIT
+curl localhost:8101/admin/rt-wan-01/break          # saturation -> CPU CRIT
+curl localhost:8101/admin/sw-access-01/heal
+```
+
+**Discover while HEALTHY.** Two reasons, both baked into the if64 plugin:
+down interfaces are never discovered (default discovery matches
+`ifOperStatus == up` only), and the interface check's target state is the
+one *recorded at discovery* — discovering while the uplink is down would
+bake "down" in as the expected state and the flap would never alert.
+
+Rates need **two poll cycles**: the first check after discovery shows no
+traffic numbers (Checkmk needs a counter delta) — by the second minute the
+graphs are live.
+
+## The incident choreography
+
+### sw-access-01 — dying uplink (`degrade` ~20 min before showtime)
+
+1. `degrade`: Te1/1/1 (service `Interface 49`) develops CRC errors —
+   ~0.04 % of inbound packets, ramping in over ~2 min. That is squarely
+   between the if64 defaults (WARN 0.01 % / CRIT 0.1 % of packets):
+   **WARN**, the classic dying-SFP/bad-patch-cable picture. Traffic still
+   flows; everything else stays green.
+2. auto-escalation (default 20 min, `AUTO_BREAK_AFTER_MIN`) or `break`:
+   the link goes **down** → `Interface 49` **CRIT** (oper status ≠
+   discovered state). Te1/1/2's load roughly doubles — the failover is
+   visible in its graph, corroborating the story without another alert.
+
+### rt-wan-01 — WAN saturation (`degrade`, then `break` at showtime)
+
+1. `degrade`: Gi0/1 climbs 180 → ~600 Mbit/s, CPU to ~70 %. Graphs move,
+   nothing is red (interface bandwidth has **no default levels** — by
+   design the alert comes from the CPU).
+2. `break`: ~940 Mbit/s of the 1G link, CPU ~93 % → `CPU utilization`
+   goes **WARN at 80, CRIT at 90** (cisco_cpu defaults), and output
+   discards appear on the WAN port (visible in the graph, no extra alert).
+   One red service, and the graph next to it explains it.
+
+## How the fake stays honest
+
+- **Walk format** verified against the parser (`stored_walk.py` +
+  `_utils.py`): `.oid value` lines in strict numeric OID order (the backend
+  binary-searches), printable strings raw, binary values (MACs) as quoted
+  uppercase hex **with a trailing space** (`"00 1B 2C 02 00 31 "`) — without
+  that space the parser keeps literal ASCII instead of decoding bytes.
+  Files are written atomically (tmp + rename) so a poll never reads a torn
+  walk.
+- **Counters never go backwards** — same `Counter` accumulator approach as
+  the agent hosts, persisted across restarts (`/var/tmp/cmk-demo-netsim-state.json`).
+  sysUpTime advances continuously; if64 uses it as the rate timestamp.
+- **Traffic conservation**: the access ports' aggregate matches the uplinks
+  (in ↔ out swapped), and the core switch's ports mirror the devices their
+  `ifAlias` names as peers. A network person *will* sum these.
+- **Exactly one plugin family per signal**: the Catalysts expose
+  `cpmCPUTotalPhysicalIndex` → `cisco_cpu_multiitem` (per-entity), the ISR
+  exposes only `cpmCPUTotal5minRev` → classic `cisco_cpu`; enhanced-64
+  vs legacy memory pools likewise. The UPS keeps sysObjectID under
+  `.1.3.6.1.4.1.318` (APC) so the `apc_symmetra` family fires and the
+  generic RFC1628 `ups_*` plugins never do.
+- **Green means green**: every wandering gauge stays clear of its default
+  levels (UPS capacity ≥ ~98 vs lower-levels 95/80, battery temp ~25 vs
+  50/60, output voltage ~231 vs lower-level 220, switch temps vs device
+  thresholds 65/75, …) — checked against each plugin's
+  `check_default_parameters` in the Checkmk source.
+
+## Knobs (env)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ESTATE_DOMAIN` | `corp.meridian-retail.com` | FQDN suffix (must match the hosts in Checkmk) |
+| `HTTP_PORT` | `8101` | control panel port |
+| `RENDER_INTERVAL` | `30` | seconds between walk rewrites |
+| `AUTO_BREAK_AFTER_MIN` | `20` | degraded → broken auto-escalation (0 = off) |
+| `STATE_FILE` | `/var/tmp/cmk-demo-netsim-state.json` | counter/incident persistence |
+
+## Eyeballing without a site
+
+```bash
+python3 netsim.py --walks-dir /tmp/walks --once
+head /tmp/walks/sw-access-01.corp.meridian-retail.com
+```

@@ -27,16 +27,20 @@ It also serves a single combined `/admin` control panel that proxies the
 break/heal toggles to the right child — one screen to drive the whole estate.
 
 Plaintext TCP, stdlib only. Select a subset with ESTATE_HOSTS (comma list);
-default = all.
+default = all. Scale UP with ESTATE_REPLICAS=N: every replicable host class
+is stamped out N times (web-frontend-01, -02, ... -0N) — the original keeps
+its incident toggles, the replicas run steady green as estate background.
 
 Config via env:
   DELIVERY_HOSTNAME  name of the shell host        (default: cmk-demo-gateway)
   AGENT_PORT         TCP port Checkmk polls         (default: 6556)
   HTTP_PORT          combined /admin control port   (default: 8080)
   ESTATE_HOSTS       comma list of host names to carry (default: all)
+  ESTATE_REPLICAS    replica multiplier for replicable classes (default: 1)
   AGENT_VERSION      version in the delivery header (default: 2.5.0-...)
   CHILD_AGENT_BASE   internal child agent port base (default: 7600)
-  CHILD_HTTP_BASE    internal child admin port base (default: 7700)
+  CHILD_HTTP_BASE    internal child admin port base (default: auto after
+                     the agent range, so big estates can't collide)
 """
 from __future__ import annotations
 
@@ -62,40 +66,53 @@ AGENT_PORT = int(os.environ.get("AGENT_PORT", "6556"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "2.5.0-2026.04.03")
 CHILD_AGENT_BASE = int(os.environ.get("CHILD_AGENT_BASE", "7600"))
-CHILD_HTTP_BASE = int(os.environ.get("CHILD_HTTP_BASE", "7700"))
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+HOSTS_DIR = os.path.join(REPO_ROOT, "hosts")
 START = time.time()
 
-# Estate roster: (hostname, directory, toggle actions, extra child env, parent).
+# Estate roster: (hostname, directory under hosts/, toggle actions, extra
+# child env, parent, replicable).
 # `actions` drives the combined control panel; [] = steady-green background.
 # `parent` is the short name of the upstream network device — exposed as an
 # FQDN in the panel JSON and applied as the Checkmk "parents" attribute by
-# setup-checkmk-site.py. Network devices come first so the setup script
+# deploy/cmk_setup.py. Network devices come first so the setup script
 # creates parents before the hosts that reference them.
+# `replicable` marks classes that ESTATE_REPLICAS stamps out N times
+# (web-frontend-02, -03, ...) — replicas run steady green; incident stories
+# stay unique to the original (low noise, one root cause).
 _REGISTRY = [
-    ("core-gw-01", "core-gw-01", [], {"START_STATE": "healthy"}, None),
-    ("leaf-sw-01", "leaf-sw-01", [], {"START_STATE": "healthy"}, "core-gw-01"),
+    ("core-gw-01", "core-gw-01", [], {"START_STATE": "healthy"}, None, False),
+    ("leaf-sw-01", "leaf-sw-01", [], {"START_STATE": "healthy"}, "core-gw-01",
+     False),
     ("web-frontend-01", "web-frontend-01", [], {"START_STATE": "healthy"},
-     "leaf-sw-01"),
-    ("payment-api", "demo_broken_http_service", ["break", "heal"],
-     {"START_BROKEN": "0"}, "leaf-sw-01"),
+     "leaf-sw-01", True),
+    ("payment-api", "payment-api", ["break", "heal"],
+     {"START_BROKEN": "0"}, "leaf-sw-01", False),
     ("app-worker-01", "app-worker-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "leaf-sw-01"),
+     {"START_STATE": "healthy"}, "leaf-sw-01", True),
     ("app-redis-01", "app-redis-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "leaf-sw-01"),
-    ("db-postgres-01", "demo_dying_disk_db", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "leaf-sw-01"),
+     {"START_STATE": "healthy"}, "leaf-sw-01", True),
+    ("db-postgres-01", "db-postgres-01", ["degrade", "break", "heal"],
+     {"START_STATE": "healthy"}, "leaf-sw-01", False),
     ("db-postgres-02", "db-postgres-02", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "leaf-sw-01"),
+     {"START_STATE": "healthy"}, "leaf-sw-01", True),
     ("mail-relay-01", "mail-relay-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "leaf-sw-01"),
+     {"START_STATE": "healthy"}, "leaf-sw-01", True),
     ("fileserver-01", "fileserver-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "leaf-sw-01"),
-    ("backup-01", "backup-01", [], {"START_STATE": "healthy"}, "leaf-sw-01"),
+     {"START_STATE": "healthy"}, "leaf-sw-01", True),
+    ("backup-01", "backup-01", [], {"START_STATE": "healthy"}, "leaf-sw-01",
+     False),
     ("win-dc-01", "win-dc-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "leaf-sw-01"),
+     {"START_STATE": "healthy"}, "leaf-sw-01", True),
 ]
+
+
+def _replica_name(base: str, n: int) -> str:
+    """web-frontend-01 -> web-frontend-02, ... (suffix numbering continues)."""
+    stem = base[:-3] if base.endswith("-01") else base
+    return f"{stem}-{n:02d}"
 
 
 class Child:
@@ -118,7 +135,7 @@ class Child:
 
     @property
     def script(self) -> str:
-        return os.path.join(REPO_ROOT, self.directory, "serve.py")
+        return os.path.join(HOSTS_DIR, self.directory, "serve.py")
 
     def spawn(self) -> None:
         env = dict(os.environ)
@@ -210,10 +227,29 @@ class Child:
 
 _selected = os.environ.get("ESTATE_HOSTS", "").strip()
 _wanted = {h.strip() for h in _selected.split(",") if h.strip()} if _selected else None
+_replicas = max(1, int(os.environ.get("ESTATE_REPLICAS", "1") or "1"))
+
+# roster: selected classes, each replicable class stamped out _replicas times.
+# Replicas force a healthy start and carry no toggle actions — incidents stay
+# unique to the original (low noise, one root cause).
+_roster: list[tuple[str, str, list, dict, str | None]] = []
+for name, directory, actions, extra, parent, replicable in _REGISTRY:
+    if _wanted is not None and name not in _wanted:
+        continue
+    _roster.append((name, directory, actions, extra, parent))
+    if replicable:
+        for n in range(2, _replicas + 1):
+            green = {**extra, "START_STATE": "healthy", "START_BROKEN": "0"}
+            _roster.append((_replica_name(name, n), directory, [], green, parent))
+
+# keep the internal admin ports clear of the agent range however big the
+# estate gets (agent ports occupy CHILD_AGENT_BASE .. +len(_roster))
+CHILD_HTTP_BASE = int(os.environ.get(
+    "CHILD_HTTP_BASE", str(CHILD_AGENT_BASE + max(100, len(_roster) + 10))))
+
 CHILDREN: list[Child] = [
     Child(i, name, directory, actions, extra, parent)
-    for i, (name, directory, actions, extra, parent) in enumerate(_REGISTRY)
-    if _wanted is None or name in _wanted
+    for i, (name, directory, actions, extra, parent) in enumerate(_roster)
 ]
 _BY_NAME = {c.name: c for c in CHILDREN}
 

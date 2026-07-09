@@ -8,3 +8,4 @@ __pycache__/
 *.tar.xz
 *.tar.bz2
 *.zip
+__pycache__/

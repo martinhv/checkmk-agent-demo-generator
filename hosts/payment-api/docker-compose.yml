@@ -5,7 +5,7 @@
 # The laptop's own Checkmk agent owns 6556, so the demo agent is published on
 # 6557 instead (no sudo, both run side by side). In Checkmk, add the host with
 # IP 127.0.0.1 and set the "Checkmk agent port" override to 6557.
-# NOTE: the db demo (demo_dying_disk_db) also uses 6557 — stop it first, or
+# NOTE: the db demo (hosts/db-postgres-01) also uses 6557 — stop it first, or
 # change one side's host port if both demos must run at once.
 services:
   payment-api:

@@ -12,9 +12,10 @@ On a Checkmk dev box, from zero to the fully monitored estate:
 
 ```bash
 cmk-dev-install-site              # install today's build + create the v* site
-cd piggyback-delivery
+../../estate.py up --site         # or by hand:
+cd deploy/piggyback
 docker compose up --build -d      # start the estate container
-./setup-checkmk-site.py --site    # set up the site (newest running v* dev site)
+../cmk_setup.py --site            # set up the site (newest running v* dev site)
 ```
 
 Then open the control panel on <http://localhost:8099/admin> to break/heal
@@ -58,7 +59,7 @@ source of truth.
 ## 1. Run it
 
 ```bash
-cd piggyback-delivery
+cd deploy/piggyback
 docker compose up --build -d      # one container runs the shell + all children
 docker compose logs -f            # watch [pb] spawn lines
 ```
@@ -71,7 +72,7 @@ No Docker? Stdlib-only — run it from the repo root checkout (it finds the host
 dirs relative to itself):
 
 ```bash
-AGENT_PORT=6559 HTTP_PORT=8099 python3 piggyback-delivery/serve.py
+AGENT_PORT=6559 HTTP_PORT=8099 python3 deploy/piggyback/serve.py
 ```
 
 Sanity check (the delivery output should start with the shell's own section,
@@ -83,7 +84,7 @@ nc 127.0.0.1 6559 | grep -E '^<<<<|^Hostname:'
 
 ## 2. Set it up in Checkmk — one command
 
-`setup-checkmk-site.py` does the whole site side through the REST API
+`../cmk_setup.py` does the whole site side through the REST API
 (stdlib-only, idempotent — safe to re-run, e.g. after changing
 `ESTATE_HOSTS`); the full from-scratch flow is the quick start at the top.
 
@@ -93,7 +94,7 @@ it picks the newest running local `v*` site, `--site NAME` targets a specific
 one. For any other site, pass the URL and credentials explicitly:
 
 ```bash
-./setup-checkmk-site.py --site-url http://localhost/mysite --user automation
+../cmk_setup.py --site-url http://localhost/mysite --user automation
 # secret via --secret, $CMK_AUTOMATION_SECRET, or interactive prompt
 ```
 
@@ -149,7 +150,7 @@ untouched.
    TCP; their data arrives purely via piggyback from the delivery host.
 3. **Discover `db-postgres-01` while it is HEALTHY** — its SMART check baselines
    raw attribute values at discovery time (same caveat as the standalone
-   `demo_dying_disk_db`). Discover the rest in any state.
+   `hosts/db-postgres-01`). Discover the rest in any state.
 4. Activate. The whole estate appears, mostly green.
 
 > Tip: a piggyback host only has data while the delivery host is being polled
@@ -188,8 +189,9 @@ Each child also still runs its own full control UI on an internal admin port
 | `AGENT_PORT` | `6556` | agent TCP port Checkmk polls (published 6559) |
 | `HTTP_PORT` | `8080` | combined control panel (published 8099) |
 | `ESTATE_HOSTS` | *(all)* | comma list of host names to carry (short names) |
+| `ESTATE_REPLICAS` | `1` | stamp out every replicable host class N times (web-frontend-02, ... — steady-green copies; incidents stay unique to the originals) |
 | `CHILD_AGENT_BASE` | `7600` | internal child agent port base (`+ registry index`) |
-| `CHILD_HTTP_BASE` | `7700` | internal child admin port base |
+| `CHILD_HTTP_BASE` | *(auto)* | internal child admin port base (placed after the agent range) |
 | `AGENT_VERSION` | `2.5.0-2026.04.03` | version in the delivery header |
 
 Per-host incident timing (`AUTO_BREAK_AFTER_MIN`, `LEAK_FILL_MIN`,

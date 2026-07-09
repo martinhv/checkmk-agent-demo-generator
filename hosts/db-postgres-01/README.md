@@ -83,14 +83,14 @@ The data disk is a **SATA datacenter SSD (Samsung PM893 480 GB)** — believable
 ## 1. Run it
 
 ```bash
-cd demo_dying_disk_db
+cd hosts/db-postgres-01
 docker compose up --build -d
 docker compose logs -f          # watch [boot] / [ctl] lines
 ```
 
 It starts **healthy** (you must discover before breaking). Ports are published
 on `127.0.0.1` as **`6557`** (agent) and **`8081`** (toggle) — 6556 is the
-laptop's own agent. ⚠️ The payment-api demo (`demo_broken_http_service`) also
+laptop's own agent. ⚠️ The payment-api demo (`hosts/payment-api`) also
 publishes 6557: stop it first, or change one side's host port in
 `docker-compose.yml` if you want both demos running at once.
 
@@ -106,9 +106,9 @@ For a host that already runs a real Checkmk agent (e.g. the EC2 demo box),
 keep the genuine agent-controller TLS transport and swap only the payload:
 
 ```bash
-scp -r demo_dying_disk_db ubuntu@<host>:
-ssh ubuntu@<host> sudo '~/demo_dying_disk_db/install-native.sh'
-# undo: sudo ~/demo_dying_disk_db/install-native.sh restore
+scp -r hosts/db-postgres-01 ubuntu@<host>:
+ssh ubuntu@<host> sudo '~/db-postgres-01/install-native.sh'
+# undo: sudo ~/db-postgres-01/install-native.sh restore
 ```
 
 `install-native.sh` is idempotent (re-run it after agent package updates,

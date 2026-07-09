@@ -1,5 +1,5 @@
 # Meridian Retail demo: run the WHOLE estate behind ONE piggyback delivery host.
-#   docker compose up --build -d
+#   docker compose up --build -d          (or let ../../estate.py drive it)
 #   docker compose logs -f
 #
 # One container runs the delivery shell + every estate host's serve.py as an
@@ -11,14 +11,16 @@
 services:
   cmk-demo-gateway:
     build:
-      context: ..
-      dockerfile: piggyback-delivery/Dockerfile
+      context: ../..
+      dockerfile: deploy/piggyback/Dockerfile
     container_name: cmk-demo-gateway
     restart: unless-stopped
     ports:
       - "127.0.0.1:6559:6556"   # Check_MK agent (the delivery shell)
       - "127.0.0.1:8099:8080"   # combined estate control panel
+    environment:
+      # estate.py sets these; empty = all hosts, no replication
+      ESTATE_HOSTS: "${ESTATE_HOSTS:-}"
+      ESTATE_REPLICAS: "${ESTATE_REPLICAS:-1}"
 # Defaults: DELIVERY_HOSTNAME = cmk-demo-gateway.corp.meridian-retail.com (FQDN,
-# derived from ESTATE_DOMAIN). Uncomment to override:
-#    environment:
-#      ESTATE_HOSTS: "web-frontend-01,app-worker-01,db-postgres-01"  # subset only
+# derived from ESTATE_DOMAIN).
