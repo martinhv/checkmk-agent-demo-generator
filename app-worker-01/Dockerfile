@@ -6,8 +6,7 @@ COPY serve.py /opt/worker-demo/serve.py
 
 EXPOSE 6556 8080
 
-ENV CMK_HOSTNAME=app-worker-01 \
-    AGENT_PORT=6556 \
+ENV AGENT_PORT=6556 \
     HTTP_PORT=8080 \
     START_STATE=healthy
 

@@ -13,5 +13,4 @@ services:
       - "127.0.0.1:6560:6556"   # Check_MK agent (published port)
       - "127.0.0.1:8090:8080"   # admin status UI (published port)
     environment:
-      CMK_HOSTNAME: web-frontend-01
       STATE_FILE: /var/tmp/cmk-demo-web-frontend-state.json

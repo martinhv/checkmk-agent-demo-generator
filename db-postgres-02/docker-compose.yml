@@ -17,7 +17,6 @@ services:
       - "127.0.0.1:6565:6556"   # Check_MK agent  -> override port in Checkmk to 6565
       - "127.0.0.1:8095:8080"   # admin toggle/UI -> http://localhost:8095/admin
     environment:
-      CMK_HOSTNAME: db-postgres-02
       START_STATE: healthy
       # MAX_CONNECTIONS: 200    # the connection-levels denominator (default 200)
       # AUTO_BREAK_AFTER_MIN: 18

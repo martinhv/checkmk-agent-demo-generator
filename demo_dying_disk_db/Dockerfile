@@ -7,8 +7,7 @@ COPY serve.py /opt/db-demo/serve.py
 # agent (Checkmk) + admin/toggle endpoint
 EXPOSE 6556 8080
 
-ENV CMK_HOSTNAME=db-postgres-01 \
-    AGENT_PORT=6556 \
+ENV AGENT_PORT=6556 \
     HTTP_PORT=8080 \
     START_STATE=healthy
 

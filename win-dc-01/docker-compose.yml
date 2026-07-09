@@ -14,5 +14,4 @@ services:
       - "127.0.0.1:6567:6556"   # Check_MK agent (Windows format)
       - "127.0.0.1:8097:8080"   # admin toggle/UI
     environment:
-      CMK_HOSTNAME: win-dc-01
       START_STATE: healthy

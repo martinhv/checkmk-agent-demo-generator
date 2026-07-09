@@ -7,8 +7,7 @@ COPY serve.py /opt/db-replica-demo/serve.py
 
 EXPOSE 6556 8080
 
-ENV CMK_HOSTNAME=db-postgres-02 \
-    AGENT_PORT=6556 \
+ENV AGENT_PORT=6556 \
     HTTP_PORT=8080 \
     START_STATE=healthy
 

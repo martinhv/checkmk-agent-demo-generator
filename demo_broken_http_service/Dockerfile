@@ -7,8 +7,7 @@ COPY serve.py /opt/payment-api/serve.py
 # agent (Checkmk) + http (check_http)
 EXPOSE 6556 8080
 
-ENV CMK_HOSTNAME=payment-api \
-    AGENT_PORT=6556 \
+ENV AGENT_PORT=6556 \
     HTTP_PORT=8080 \
     START_BROKEN=1 \
     BROKEN_DELAY_MS=1500

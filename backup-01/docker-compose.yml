@@ -13,7 +13,6 @@ services:
       - "127.0.0.1:6566:6566"   # Checkmk agent (plaintext TCP)
       - "127.0.0.1:8096:8080"   # Status UI / JSON endpoint
     environment:
-      CMK_HOSTNAME: backup-01
       STATE_FILE: /var/tmp/cmk-demo-backup-state.json
     volumes:
       - backup01-state:/var/tmp

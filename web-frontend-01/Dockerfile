@@ -6,8 +6,7 @@ COPY serve.py /opt/web-frontend-demo/serve.py
 
 EXPOSE 6556 8080
 
-ENV CMK_HOSTNAME=web-frontend-01 \
-    AGENT_PORT=6556 \
+ENV AGENT_PORT=6556 \
     HTTP_PORT=8080 \
     STATE_FILE=/var/tmp/cmk-demo-web-frontend-state.json
 

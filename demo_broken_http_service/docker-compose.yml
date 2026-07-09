@@ -16,7 +16,6 @@ services:
       - "127.0.0.1:6557:6556"   # Check_MK agent  -> localhost:6557 (override port in Checkmk)
       - "127.0.0.1:8080:8080"   # HTTP endpoint   -> check_http / check_httpv2 here
     environment:
-      CMK_HOSTNAME: checkout-api
       START_BROKEN: "1"        # start in the incident state; heal it live during the demo
       BROKEN_DELAY_MS: "1500"  # added latency while broken (sells the slow check_http)
     volumes:

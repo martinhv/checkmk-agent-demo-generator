@@ -13,5 +13,4 @@ services:
       - "127.0.0.1:6564:6556"   # Check_MK agent
       - "127.0.0.1:8094:8080"   # admin toggle/UI
     environment:
-      CMK_HOSTNAME: mail-relay-01
       START_STATE: healthy
