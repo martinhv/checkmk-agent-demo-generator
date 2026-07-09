@@ -190,19 +190,22 @@ def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
         if os.access(f"/omd/sites/{run_as}/var/check_mk", os.W_OK):
             run_as = None  # already permitted (running as the site user)
 
-    log = open(NETSIM_LOG, "ab")  # noqa: SIM115
+    log = open(NETSIM_LOG, "wb")  # noqa: SIM115  (fresh log per attempt)
     if run_as:
-        # Two traps: (1) the repo usually lives under a 0750 home dir the
-        # site user cannot read -> run a world-readable copy; (2) sudo's
-        # cached credential is bound to this terminal (tty_tickets), so a
-        # detached `sudo -n` can't use it -> let sudo authenticate on the
-        # tty itself and background the daemon with -b.
+        # Three traps: (1) the repo usually lives under a 0750 home dir the
+        # site user cannot read -> run a world-readable copy; (2) so may the
+        # caller's interpreter (pyenv!) -> use the site's own python;
+        # (3) sudo's cached credential is bound to this terminal
+        # (tty_tickets), so a detached `sudo -n` can't use it -> let sudo
+        # authenticate on the tty itself and background the daemon with -b.
         shutil.copyfile(netsim, NETSIM_COPY)
         os.chmod(NETSIM_COPY, 0o644)
+        site_python = f"/omd/sites/{run_as}/bin/python3"
+        python = site_python if os.path.exists(site_python) else "/usr/bin/python3"
         print("  starting netsim as the site user (sudo may prompt)")
         r = subprocess.run(  # noqa: S603
             ["sudo", "-u", run_as, "-b", "--",
-             sys.executable, "-u", NETSIM_COPY, *target],
+             python, "-u", NETSIM_COPY, *target],
             stdout=log, stderr=subprocess.STDOUT)
         if r.returncode != 0:
             sys.exit("ERROR: sudo failed — run netsim yourself:\n"
