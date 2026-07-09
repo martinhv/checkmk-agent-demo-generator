@@ -25,10 +25,9 @@ Devices (see FLEET.md):
                                                    CPU climbs past 80/90
   ups-01        APC Smart-UPS 3000                 steady green
 
-They complement the estate's two agent-based network hosts (core-gw-01,
-leaf-sw-01 — Linux-style agents): this is the *SNMP-monitored* gear, the
-office/campus side plus the warehouse WAN. The internet edge stays
-core-gw-01's job.
+This IS the estate's network layer: the campus core switch sw-core-01 tops
+the parent topology and every server hangs off it (applied by
+deploy/cmk_setup.py when the SNMP layer is deployed).
 
 Run it AS THE SITE USER (it writes into the site's var directory):
 
@@ -447,11 +446,11 @@ class SwCore(Device):
         rnd = random.Random(41)
         self.ifaces = []
         peers: list[tuple[str, float, float]] = [
-            ("uplink core-gw-01", 30e6, 26e6),
+            ("uplink edge firewall (internet)", 30e6, 26e6),
             ("link sw-access-01 Te1/1/1", 17e6, 11e6),
             ("link sw-access-01 Te1/1/2", 16e6, 11e6),
             ("link rt-wan-01 Gi0/0", 21e6, 24e6),
-            ("link leaf-sw-01 swp31", 45e6, 52e6),
+            ("server rack A trunk", 45e6, 52e6),
         ]
         for n in range(6, 13):                # campus service links
             base_in = rnd.uniform(15e6, 90e6) / 8
@@ -576,9 +575,8 @@ class SwAccess(Device):
 
 
 class RtWan(Device):
-    """Warehouse WAN router — the saturation incident. (The *internet* edge
-    is core-gw-01, an agent host; this box is the 1G leased line to the
-    fulfillment warehouse.)
+    """Warehouse WAN router — the saturation incident. (Not the internet
+    edge: this box is the 1G leased line to the fulfillment warehouse.)
 
     healthy:  Gi0/1 (WAN to the warehouse) runs at ~180 Mbit/s.
     degraded: a bulk transfer (inventory replication gone wrong) pushes it

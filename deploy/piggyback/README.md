@@ -110,7 +110,7 @@ user) and does, in order:
    delivery shell as a normal TCP host with an `agent_ports` rule (6559), and
    every carried host as a pure piggyback host ("no agent" + "always use and
    expect piggyback data" + "no IP") — **with `parents` set from the estate
-   topology** (servers → `leaf-sw-01` → `core-gw-01`, declared in the
+   topology** (servers → the SNMP campus core `sw-core-01`, declared in the
    registry here and re-applied on re-runs);
 4. creates the **"Payments platform" BI pack** — tier rules (network path →
    customer entry → payment API → processing/cache → data layer → storage)

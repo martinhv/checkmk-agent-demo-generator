@@ -17,10 +17,11 @@ Scales (--scale):
 
   minimal    the two classic demos: payment-api + db-postgres-01.
              No network layer, no SNMP. Smallest possible footprint.
-  standard   the full agent estate: 12 hosts incl. the Linux network
-             devices, parent topology and the Payments-platform BI pack.
-  full       standard + the SNMP network gear (Catalyst switches, WAN
-             router, UPS) simulated as stored SNMP walks.   [default]
+  standard   the full agent estate: 10 server hosts and the
+             Payments-platform BI pack (no network layer).
+  full       standard + the network layer: SNMP gear (Catalyst switches,
+             WAN router, UPS) simulated as stored SNMP walks, with the
+             campus core as parent of every server.   [default]
 
   --replicas N multiplies every replicable host class N times (web-frontend-02,
   app-worker-03, ... plus N SNMP access switches) — same stories, bigger

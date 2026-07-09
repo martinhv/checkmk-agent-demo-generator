@@ -12,7 +12,7 @@ command:
 
 Born as demo plumbing for a Checkmk product keynote, grown into a fictional
 **mid-sized company** ("Meridian Retail", an online retailer with an in-house
-payments platform): ~16 hosts across edge/app/data/infra/network tiers,
+payments platform): ~14 hosts across edge/app/data/infra/network tiers,
 parent topology, a pageable BI business service, and one staged incident per
 host — everything stdlib-only Python, no real agents, no SNMP stack. See
 **`FLEET.md`** for the company story, roster, and port map.
@@ -26,7 +26,7 @@ time); `down` removes all of it.
 ```bash
 ./estate.py up --site                          # newest local v* dev site
 ./estate.py up --site v300 --scale minimal     # the classic 2-host demo
-./estate.py up --site --scale standard         # 12 agent hosts, no SNMP
+./estate.py up --site --scale standard         # 10 agent hosts, no SNMP
 ./estate.py up --site --replicas 5             # ~50-host estate, same stories
 ./estate.py up --site-url http://host/prod --user automation --secret ...
 ./estate.py status                             # what runs, who's broken
@@ -36,7 +36,7 @@ time); `down` removes all of it.
 | `--scale` | what you get |
 |---|---|
 | `minimal` | the two classic demos: `payment-api` + `db-postgres-01` |
-| `standard` | the full agent estate: 12 hosts, topology, BI pack |
+| `standard` | the full agent estate: 10 server hosts + BI pack |
 | `full` *(default)* | standard + SNMP network gear via stored walks |
 
 `--replicas N` stamps out every replicable host class N times

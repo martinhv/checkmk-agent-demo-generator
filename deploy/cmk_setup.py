@@ -70,10 +70,10 @@ BI_AGGR_TITLE = "Payments platform"  # = top rule title = aggregation name
 BI_GROUP = "Meridian Retail"
 BI_TIERS = [
     ("meridian_network_path", "Network path", [
-        ("core-gw-01", "Interface"),
-        ("core-gw-01", "CPU load"),
-        ("leaf-sw-01", "Interface"),
-        ("leaf-sw-01", "CPU load"),
+        # the SNMP campus core (only present when the SNMP layer is deployed;
+        # the tier is dropped automatically otherwise)
+        ("sw-core-01", "Interface"),
+        ("sw-core-01", "CPU utilization"),
     ]),
     ("meridian_customer_entry", "Customer entry", [
         ("web-frontend-01", "Interface"),
@@ -289,6 +289,24 @@ def ensure_host(api: CmkApi, name: str, folder: str, attributes: dict) -> None:
         print(f"  host {name} exists")
 
 
+def prune_folder(api: CmkApi, folder: str, keep: set[str]) -> None:
+    """Delete hosts in OUR folder that left the roster (removed host
+    classes, scaled-down replicas) — the folder is fully managed."""
+    status, payload, _ = api.request(
+        "GET", "/domain-types/host_config/collections/all")
+    if status != 200:
+        return
+    for h in (payload or {}).get("value", []):
+        name = h["id"]
+        in_folder = (h.get("extensions", {}).get("folder", "").strip("/~")
+                     == folder.lstrip("~"))
+        if name in keep or not in_folder:
+            continue
+        st, _, _ = api.request("DELETE", f"/objects/host_config/{name}", etag="*")
+        if st == 204:
+            print(f"  pruned stale host {name}")
+
+
 def _marked_rules(api: CmkApi, ruleset: str,
                   description: str) -> list[tuple[dict, list[str]]]:
     """All (rule, condition host names) in a ruleset carrying our marker
@@ -368,11 +386,12 @@ def ensure_usewalk_rule(api: CmkApi, fqdns: list[str]) -> None:
     print(f"  created usewalk rule ({len(wanted)} devices)")
 
 
-def setup_snmp(api: CmkApi, args: argparse.Namespace, folder: str,
-               carried_fqdns: set[str]) -> list[str]:
-    """SNMP devices as no-agent/no-IP hosts reading stored walks. Returns the
-    device FQDNs (for discovery). The StoredWalk backend bypasses NO_IP and
-    substitutes 127.0.0.1, so the hosts need no address at all."""
+def setup_snmp(api: CmkApi, args: argparse.Namespace, folder: str) -> list[str]:
+    """SNMP devices as no-agent/no-IP hosts reading stored walks — this IS
+    the estate's network layer: the campus core switch sw-core-01 tops the
+    parent topology, every other device (and, in setup(), every server)
+    hangs off it. Returns the device FQDNs. The StoredWalk backend bypasses
+    NO_IP and substitutes 127.0.0.1, so the hosts need no address at all."""
     info = panel_get(args.snmp_panel, optional=True)
     if info is None or "devices" not in info:
         if args.snmp == "on":
@@ -392,7 +411,6 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace, folder: str,
 
     core_fqdn = next((d["fqdn"] for s, d in devices.items()
                       if s.startswith("sw-core")), None)
-    gw_fqdn = next((f for f in carried_fqdns if f.startswith("core-gw-")), None)
     fqdns = []
     for short, dev in sorted(devices.items(),
                              key=lambda kv: not kv[0].startswith("sw-core")):
@@ -401,11 +419,8 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace, folder: str,
             "tag_agent": "no-agent",
             "tag_address_family": "no-ip",
         }
-        # topology: campus core hangs off the gateway; everything else off
-        # the core — only reference parents that actually exist in the site
-        parent = gw_fqdn if dev["fqdn"] == core_fqdn else core_fqdn
-        if parent and (parent in carried_fqdns or parent == core_fqdn):
-            attrs["parents"] = [parent]
+        if core_fqdn and dev["fqdn"] != core_fqdn:
+            attrs["parents"] = [core_fqdn]
         ensure_host(api, dev["fqdn"], folder, attrs)
         fqdns.append(dev["fqdn"])
     ensure_usewalk_rule(api, fqdns)
@@ -640,26 +655,34 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
     })
     ensure_port_rule(api, delivery, args.agent_port)
     carried_fqdns = {h["fqdn"] for h in hosts}
-    for h in hosts:  # roster order is parents-first (network devices lead)
+
+    # the SNMP devices are the network path — create them FIRST so the
+    # servers can reference the campus core as their parent
+    snmp_fqdns: list[str] = []
+    if args.snmp != "off":
+        print("* creating the SNMP network devices (stored walks)")
+        snmp_fqdns = setup_snmp(api, args, folder)
+
+    parent_ok = carried_fqdns | set(snmp_fqdns)
+    for h in hosts:
         attrs = {
             "tag_agent": "no-agent",
             "tag_piggyback": "piggyback",
             "tag_address_family": "no-ip",
         }
-        # only reference parents that are actually carried (ESTATE_HOSTS
-        # subsets may omit the network devices)
-        if h.get("parent") in carried_fqdns:
+        # only reference parents that actually exist in the site (without
+        # the SNMP layer the servers simply have no parent)
+        if h.get("parent") in parent_ok:
             attrs["parents"] = [h["parent"]]
         ensure_host(api, h["fqdn"], folder, attrs)
+    prune_folder(api, folder,
+                 {delivery} | carried_fqdns | set(snmp_fqdns))
 
     print("* creating the Payments platform BI pack")
-    ensure_bi_pack(api, {h["name"]: h["fqdn"] for h in hosts})
+    fqdn_by_short = {h["name"]: h["fqdn"] for h in hosts}
+    fqdn_by_short.update({f.split(".")[0]: f for f in snmp_fqdns})
+    ensure_bi_pack(api, fqdn_by_short)
     ensure_bi_service_rule(api, delivery)
-
-    snmp_fqdns: list[str] = []
-    if args.snmp != "off":
-        print("* creating the SNMP network devices (stored walks)")
-        snmp_fqdns = setup_snmp(api, args, folder, carried_fqdns)
 
     print("* running service discovery (shell first — its fetch delivers the "
           "piggyback data)")
@@ -694,10 +717,11 @@ def teardown(api: CmkApi, args: argparse.Namespace) -> None:
     names: list[str] = []
     try:
         info = panel_get(args.panel)
-        # SNMP devices first (children of the network path), then the estate
-        # children before their parents (roster is parents-first), shell last
-        names = snmp_teardown_names(args)
-        names += [h["fqdn"] for h in reversed(info["carried_hosts"])]
+        # children before parents: the servers reference the SNMP campus
+        # core, so they go first, then the SNMP devices (core itself last
+        # inside snmp_teardown_names), then the shell
+        names = [h["fqdn"] for h in reversed(info["carried_hosts"])]
+        names += snmp_teardown_names(args)
         names.append(info["delivery_host"])
     except SystemExit:
         print("  (panel unreachable — deleting all hosts in the folder instead)")

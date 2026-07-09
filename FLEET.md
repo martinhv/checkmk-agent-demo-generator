@@ -18,9 +18,7 @@ genuine company, not a pile of unrelated test boxes.
 
 | Host | Tier | OS / role | Demo state | Incident story |
 |---|---|---|---|---|
-| `core-gw-01` | network | Ubuntu 24.04 · edge gateway/router (VRRP active) | **steady green** | background — routes the estate to the ISP; top of the parent topology |
-| `leaf-sw-01` | network | Cumulus Linux 5.9 · whitebox ToR access switch | **steady green** | background — every server hangs off its swp ports; parent of the whole rack |
-| `sw-core-01` | network | Cisco Catalyst 9300 campus core switch · **SNMP** | **steady green** | background — the office/campus backbone, 12 × 10G *(via stored SNMP walk, `snmp/`)* |
+| `sw-core-01` | network | Cisco Catalyst 9300 campus core switch · **SNMP** | **steady green** | background — the estate's backbone, 12 × 10G, top of the parent topology *(via stored SNMP walk, `snmp/`)* |
 | `sw-access-01` | network | Cisco Catalyst 9200 access switch · **SNMP** | incident | **CRC error storm on uplink Te1/1/1 (WARN) → link dies (CRIT)**, traffic fails over to Te1/1/2 |
 | `rt-wan-01` | network | Cisco ISR 2921 warehouse WAN router · **SNMP** | incident | **WAN saturation**: runaway inventory replication ramps Gi0/1 to ~940 Mbit/s, CPU past the 80/90 defaults, output discards |
 | `ups-01` | network | APC Smart-UPS 3000 · **SNMP** | **steady green** | background — battery/load/temperature corroboration |
@@ -52,13 +50,10 @@ Each host listens on a distinct pair so the whole estate can run at once.
 | `db-postgres-02` | 6565 | 8095 |
 | `backup-01` | 6566 | 8096 |
 | `win-dc-01` | 6567 | 8097 |
-| `core-gw-01` | 6568 | 8098 |
-| `leaf-sw-01` | 6569 | 8100² |
 | SNMP devices (`snmp/netsim.py`) | —³ | 8101 |
 
 ¹ the two original demos both publish 6557 — run one at a time, or re-map. The
 new hosts use 6560–6567 so they never collide with each other or the originals.
-² 8099 is taken by the piggyback delivery control panel.
 ³ the SNMP devices (`sw-core-01`, `sw-access-01`, `rt-wan-01`, `ups-01`) have
 no agent port at all: one daemon (`snmp/netsim.py`) renders stored SNMP walks straight into the
 site (`~/var/check_mk/snmpwalks/`) and Checkmk reads them via the
@@ -70,14 +65,15 @@ panel on 8101.
 The estate has an explicit network path for RCA to reason over:
 
 ```
-core-gw-01  (gateway/router — no parent)
-  ├─ leaf-sw-01  (ToR access switch)
-  │    └─ every other host (servers, win-dc-01, ...)
-  └─ sw-core-01  (campus core switch, SNMP)
-       ├─ sw-access-01  (office access switch, SNMP)
-       ├─ rt-wan-01     (warehouse WAN router, SNMP)
-       └─ ups-01        (rack UPS, SNMP)
+sw-core-01  (campus core switch, SNMP — no parent)
+  ├─ every server (web-frontend-01, payment-api, db-postgres-01, ...)
+  ├─ sw-access-01  (office access switch, SNMP)
+  ├─ rt-wan-01     (warehouse WAN router, SNMP)
+  └─ ups-01        (rack UPS, SNMP)
 ```
+
+The parents only apply when the SNMP layer is deployed (`--scale full`);
+without it the servers simply have no parent.
 
 The parent relations are declared in the piggyback registry
 (`deploy/piggyback/serve.py`) and applied as the Checkmk `parents` host

@@ -26,10 +26,9 @@ contacted — plus the `usewalk_hosts` rule, discovery, activation) is done by
 
 ## The devices
 
-These complement the estate's two *agent-based* network hosts (`core-gw-01`
-gateway, `leaf-sw-01` ToR — Linux-style agents): this is the **SNMP-monitored**
-gear — the office/campus side plus the warehouse WAN. The internet edge stays
-`core-gw-01`'s job.
+This is the estate's network layer: `sw-core-01` tops the parent topology
+(every server hangs off it — applied by `../deploy/cmk_setup.py` when the
+SNMP layer is deployed).
 
 | Host | Device | State | Story |
 |---|---|---|---|
