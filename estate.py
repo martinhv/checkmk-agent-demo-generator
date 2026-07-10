@@ -52,17 +52,17 @@ Scales (--scale):
 
 Moving parts (all stdlib, see the directories):
 
-  deploy/piggyback/   ONE container (or --runtime native: one process) runs
-                      every agent host's serve.py and delivers them as
-                      piggyback — agent :6559, panel :8099
+  deploy/piggyback/   ONE container (docker or podman; or --runtime native:
+                      one process) runs every agent host's serve.py and
+                      delivers them as piggyback — agent :6559, panel :8099
   snmp/netsim.py      renders SNMP walk files into the site's snmpwalks dir
                       every 30 s — panel :8101 (runs as the site user;
                       estate.py uses sudo when needed)
   deploy/cmk_setup.py the REST-API engine (folder, hosts, rules, BI,
                       discovery, activation, teardown) — also usable alone
 
-Requirements: docker compose (unless --runtime native), a running Checkmk
-site, and for SNMP a LOCAL site (walk files are written into it).
+Requirements: docker or podman compose (unless --runtime native), a running
+Checkmk site, and for SNMP a LOCAL site (walk files are written into it).
 """
 from __future__ import annotations
 
@@ -134,9 +134,39 @@ def wait_for(url: str, what: str, timeout: float = 90.0):
     sys.exit(f"ERROR: {what} did not come up within {timeout:g}s ({url})")
 
 
+def wait_for_children(timeout: float = 60.0):
+    """The panel binds its HTTP port as soon as the shell starts, but each
+    carried host is an internal TCP child that needs a moment to produce its
+    first state. cmk_setup.setup() dies if any child still has no state, so
+    block until every carried host reports one (or time out and let cmk_setup
+    surface the precise 'not up yet' message). Matters most when the container
+    was just (re)created — e.g. every podman `up`, which force-recreates."""
+    deadline = time.time() + timeout
+    info = {}
+    while time.time() < deadline:
+        info = get_json(PANEL + "/") or {}
+        hosts = info.get("carried_hosts") or []
+        if hosts and all(h.get("state") is not None for h in hosts):
+            return info
+        time.sleep(1)
+    return info
+
+
 # --------------------------------------------------------------------------- #
-#  Piggyback shell (docker or native)
+#  Piggyback shell (container via compose, or native)
 # --------------------------------------------------------------------------- #
+# Container runtimes drive the shell through a compose provider. docker and
+# podman share the same `<engine> compose ...` surface and read the same
+# docker-compose.yml, so they differ only by the CLI name. "native" runs the
+# shell as a plain background process (no engine).
+COMPOSE_ENGINES = ("docker", "podman")
+
+
+def compose_engine(runtime: str) -> str | None:
+    """The container CLI backing a compose-based runtime, or None for native."""
+    return runtime if runtime in COMPOSE_ENGINES else None
+
+
 def shell_env(args: argparse.Namespace) -> dict[str, str]:
     return {
         "ESTATE_HOSTS": SCALES[args.scale]["hosts"],
@@ -160,17 +190,29 @@ def shell_up(args: argparse.Namespace) -> None:
     datasource = delivery_for(args.mode) == "datasource"
     if datasource:
         _ensure_output_dir()
-    if args.runtime == "docker":
-        if not shutil.which("docker"):
-            sys.exit("ERROR: docker not found — use --runtime native")
+    engine = compose_engine(args.runtime)
+    if engine:
+        if not shutil.which(engine):
+            sys.exit(f"ERROR: {engine} not found — use --runtime native")
         env = {**os.environ, **shell_env(args)}
         if datasource:
-            # compose bind-mounts this host path to the container's /agent-output
+            # compose bind-mounts this host path to the container's /agent-output.
+            # Rootless podman runs the shell as the caller's uid, docker as root;
+            # either way serve.py writes the files 0644 so the site user can cat.
             env["ESTATE_AGENT_OUTPUT_DIR"] = AGENT_OUTPUT_DIR
-        r = sh(["docker", "compose", "up", "--build", "-d"],
-               cwd=os.path.join(REPO, "deploy", "piggyback"), env=env)
+        cmd = [engine, "compose", "up", "--build", "-d"]
+        if engine == "podman":
+            # docker compose diffs the running container against the desired
+            # image+env and recreates it when they differ. podman-compose does
+            # NOT: on a name clash it errors and silently `podman start`s the
+            # existing container, so a rebuilt image or changed env (e.g.
+            # DELIVERY_MODE) is ignored — a stale container is reused. Force the
+            # recreate so `up` always reflects the current build + env. Counters
+            # persist to the state file, so the restart is invisible mid-demo.
+            cmd.append("--force-recreate")
+        r = sh(cmd, cwd=os.path.join(REPO, "deploy", "piggyback"), env=env)
         if r.returncode != 0:
-            sys.exit("ERROR: docker compose up failed")
+            sys.exit(f"ERROR: {engine} compose up failed")
         return
     # native: one background process runs the shell + all children
     if _pid_alive(PIDFILE_SHELL):
@@ -191,9 +233,15 @@ def shell_up(args: argparse.Namespace) -> None:
 
 
 def shell_down(args: argparse.Namespace) -> None:
-    if args.runtime == "docker" and shutil.which("docker"):
-        sh(["docker", "compose", "down"],
-           cwd=os.path.join(REPO, "deploy", "piggyback"))
+    # Best-effort compose-down under whatever engine is installed (the project
+    # is cwd-scoped, so this only touches our own compose file). This means a
+    # default `down` cleans up regardless of which --runtime brought the shell
+    # up — no leftover container blocking the ports on the next `up`.
+    if args.runtime != "native":
+        for engine in COMPOSE_ENGINES:
+            if shutil.which(engine):
+                sh([engine, "compose", "down"],
+                   cwd=os.path.join(REPO, "deploy", "piggyback"))
     _pid_kill(PIDFILE_SHELL, "shell")
 
 
@@ -266,6 +314,11 @@ def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
         # same effect as sudo (docker group membership already grants it),
         # but non-interactive. estate.py down stops it via /admin/shutdown
         # (--rm makes the container vanish when netsim exits).
+        # This trick is docker-specific: it needs the rootful daemon to write
+        # the walk files as an *arbitrary* uid (the site user's). Rootless
+        # podman maps --user through a subuid namespace and can't become the
+        # site user, so with --runtime podman (and no docker) netsim falls
+        # through to the sudo path below.
         import pwd
         pw = pwd.getpwnam(run_as)
         walks = f"/omd/sites/{run_as}/var/check_mk/snmpwalks"
@@ -406,7 +459,8 @@ def cmd_up(args: argparse.Namespace) -> None:
     delivery = delivery_for(args.mode)
     print(f"* starting the delivery shell ({delivery})")
     shell_up(args)
-    info = wait_for(PANEL + "/", "the delivery shell")
+    wait_for(PANEL + "/", "the delivery shell")
+    info = wait_for_children()  # block until children report state (fresh container)
     print(f"  shell {info['delivery_host']} carrying "
           f"{len(info['carried_hosts'])} hosts")
     if delivery == "datasource":
@@ -540,8 +594,11 @@ def main() -> None:
         parser.add_argument("--scale", choices=sorted(SCALES), default="full")
         parser.add_argument("--replicas", type=int, default=1, metavar="N",
                             help="stamp out every replicable host class N times")
-        parser.add_argument("--runtime", choices=("docker", "native"),
-                            default="docker", help="how to run the delivery shell")
+        parser.add_argument("--runtime", choices=("docker", "podman", "native"),
+                            default="docker",
+                            help="how to run the delivery shell: docker/podman "
+                                 "(container via `<engine> compose`) or native "
+                                 "(a plain background process, no engine)")
         parser.add_argument("--no-snmp", action="store_true",
                             help="skip the SNMP layer even at --scale full")
         parser.add_argument("--force", action="store_true",
@@ -558,7 +615,8 @@ def main() -> None:
     up.set_defaults(func=cmd_up)
 
     down = sub.add_parser("down", help="teardown Checkmk objects + stop everything")
-    down.add_argument("--runtime", choices=("docker", "native"), default="docker")
+    down.add_argument("--runtime", choices=("docker", "podman", "native"),
+                      default="docker")
     add_site_args(down)
     down.set_defaults(func=cmd_down)
 
