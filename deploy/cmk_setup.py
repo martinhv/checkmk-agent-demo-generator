@@ -104,7 +104,10 @@ import urllib.request
 #       alert sections dropped, residual-current rule for the Raritan PDUs.
 #   v6: the delivery shell now hangs off the campus core (sw-core-01) like every
 #       server, so sw-core-01 is the estate's single parentless root.
-SCHEMA_VERSION = 6
+#   v7: tiered topology — endpoints hang off access switches, not the core
+#       (servers/shell → sw-access-01; fleet iron → DC ToR round-robin); VMs
+#       are children of their hypervisor; a hypervisor per warehouse.
+SCHEMA_VERSION = 7
 
 # Host label on the delivery shell holding the last-activated estate
 # fingerprint. Lives on the site (survives across `estate.py up` runs) and is
@@ -1112,15 +1115,19 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
         print("* creating the SNMP network devices (stored walks)")
         snmp_fqdns = setup_snmp(api, args, leaf_for)
         ensure_residual_current_rule(api, root_ident)
-    # sw-core-01 tops the path; the shell and every server hang off it, making
-    # it the estate's single parentless root (None with --snmp off: no network
-    # layer, so the servers/shell are simply parentless)
+    # sw-core-01 tops the path (its 12 ports are all switch/router uplink
+    # trunks); endpoints hang off the access switch sw-access-01, which uplinks
+    # to the core — so the core stays the estate's single parentless root.
+    # Both are None with --snmp off (no network layer → hosts are parentless).
     core_fqdn = next((f for f in snmp_fqdns
                       if f.split(".")[0].startswith("sw-core")), None)
+    access_fqdn = next((f for f in snmp_fqdns
+                        if f.split(".")[0].startswith("sw-access")), None)
+    shell_parent = access_fqdn or core_fqdn
 
     # the delivery shell sits at the estate root (the datasource rule lives
-    # there too, inherited by every subfolder below) and hangs off the core
-    # like every server — created after the SNMP layer so the parent exists
+    # there too, inherited by every subfolder below) and hangs off the access
+    # switch like every server — created after the SNMP layer so the parent exists
     if datasource:
         # all-agents on the shell too: its Checkmk-agent source is the "cat"
         # datasource program (its own minimal file) AND the BI special agent.
@@ -1138,15 +1145,19 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
             # fetch and cut off the piggyback delivery
             "tag_agent": "all-agents",
         }
-    if core_fqdn and core_fqdn != delivery:
-        shell_attrs["parents"] = [core_fqdn]
+    if shell_parent and shell_parent != delivery:
+        shell_attrs["parents"] = [shell_parent]
     ensure_host(api, delivery, root_ident, shell_attrs)
     if not datasource:
         ensure_port_rule(api, delivery, args.agent_port)
 
     carried_fqdns = {h["fqdn"] for h in hosts}
     parent_ok = carried_fqdns | set(snmp_fqdns)
-    for h in hosts:
+    # A host whose parent is ANOTHER carried host (a VM naming its hypervisor)
+    # must be created after that parent — the API validates parent existence.
+    # Hosts parented to a switch (SNMP, already created) sort first; VMs last.
+    # Stable sort keeps the roster order within each group.
+    for h in sorted(hosts, key=lambda h: h.get("parent") in carried_fqdns):
         if datasource:
             # Checkmk-agent host whose agent source is the "cat $HOSTNAME$"
             # datasource program (one root-folder rule below, inherited by all

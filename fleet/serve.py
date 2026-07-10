@@ -296,6 +296,9 @@ class LinuxHost:
         self.short = short
         self.spec = spec
         self.os = "linux"
+        # upstream network device (short name), assigned by expand_roster():
+        # the hypervisor for a VM, an access switch for physical iron.
+        self.net_parent: str | None = None
         self.guests = guests or []          # kvm hypervisors: their VMs
         rnd = random.Random(f"{short}:fleet-v1")
         lo, hi = spec.get("uptime_days", (15, 120))
@@ -707,6 +710,8 @@ class WindowsHost:
         self.short = short
         self.spec = spec
         self.os = "windows"
+        # upstream network device (short name), assigned by expand_roster()
+        self.net_parent: str | None = None
         rnd = random.Random(f"{short}:fleet-v1")
         lo, hi = spec.get("uptime_days", (10, 60))
         self.uptime_offset = rnd.uniform(lo, hi) * 86400
@@ -848,6 +853,14 @@ Host = LinuxHost  # for type hints in guests lists
 # --------------------------------------------------------------------------- #
 #  Roster expansion (+ VM -> hypervisor assignment)
 # --------------------------------------------------------------------------- #
+# Access switches the fleet hangs off — names MUST match snmp/netsim.py's
+# REPLAY_ROSTER. Physical DC hosts round-robin across the 8 DC top-of-rack
+# switches; each warehouse's iron sits on that warehouse's first access switch.
+# (Endpoints belong on an access switch, not the 12-port core.)
+DC_TOR = [f"sw-dc-tor-{n:02d}" for n in range(1, 9)]
+WH_SWITCH = {"wh1": "wh1-sw-01", "wh2": "wh2-sw-01"}
+
+
 def expand_roster() -> dict[str, LinuxHost | WindowsHost]:
     wanted = {p.strip() for p in
               os.environ.get("FLEET_CLASSES", "").split(",") if p.strip()} or None
@@ -855,30 +868,61 @@ def expand_roster() -> dict[str, LinuxHost | WindowsHost]:
                if wanted is None or c["prefix"] in wanted]
 
     hosts: dict[str, LinuxHost | WindowsHost] = {}
-    vms: list[LinuxHost | WindowsHost] = []
-    kvm_specs: list[tuple[str, dict]] = []
+    vms_by_site: dict[str, list] = {}
+    hv_specs: list[tuple[str, dict, str]] = []   # (short, cls, site)
 
     for cls in classes:
         first = cls.get("first", 1)
+        site = cls.get("site", "dc")
         for n in range(first, first + cls["count"]):
             short = f"{cls['prefix']}-{n:02d}"
-            if cls["prefix"] == "kvm":
-                kvm_specs.append((short, cls))     # built after VM assignment
+            if cls.get("hypervisor"):
+                hv_specs.append((short, cls, site))   # built after VM assignment
                 continue
             host = (LinuxHost(short, cls) if cls["os"] == "linux"
                     else WindowsHost(short, cls))
             hosts[short] = host
             if cls.get("vm", True):
-                vms.append(host)
+                vms_by_site.setdefault(site, []).append(host)
 
-    # round-robin the VM fleet across the hypervisors; each kvm host's ps
-    # then lists its actual guests as qemu processes (cross-checkable)
-    if kvm_specs:
-        buckets: list[list] = [[] for _ in kvm_specs]
-        for i, vm in enumerate(vms):
-            buckets[i % len(kvm_specs)].append(vm)
-        for (short, cls), guests in zip(kvm_specs, buckets):
-            hosts[short] = LinuxHost(short, cls, guests=guests)
+    # hypervisors grouped by site
+    hv_by_site: dict[str, list] = {}
+    for short, cls, site in hv_specs:
+        hv_by_site.setdefault(site, []).append(short)
+
+    # Round-robin each site's VMs across that site's hypervisors; a VM becomes
+    # a CHILD of its hypervisor (topology) and a qemu process in its ps. A site
+    # with no hypervisor of its own falls back to the DC iron.
+    guests_of: dict[str, list] = {short: [] for short, _, _ in hv_specs}
+    for site, site_vms in vms_by_site.items():
+        pool = hv_by_site.get(site) or hv_by_site.get("dc") or []
+        for i, vm in enumerate(site_vms):
+            if not pool:
+                break
+            hv_short = pool[i % len(pool)]
+            guests_of[hv_short].append(vm)
+            vm.net_parent = hv_short
+
+    # Build the hypervisors with their guests; each hangs off an access switch.
+    dc_rr = 0
+    for short, cls, site in hv_specs:
+        hosts[short] = LinuxHost(short, cls, guests=guests_of[short])
+        if site == "dc":
+            hosts[short].net_parent = DC_TOR[dc_rr % len(DC_TOR)]
+            dc_rr += 1
+        else:
+            hosts[short].net_parent = WH_SWITCH.get(site, DC_TOR[0])
+
+    # Any remaining physical host (e.g. the Veeam server) hangs off a switch too.
+    for short, host in hosts.items():
+        if getattr(host, "net_parent", None):
+            continue
+        site = host.spec.get("site", "dc")
+        if site == "dc":
+            host.net_parent = DC_TOR[dc_rr % len(DC_TOR)]
+            dc_rr += 1
+        else:
+            host.net_parent = WH_SWITCH.get(site, DC_TOR[0])
 
     return hosts
 
@@ -963,7 +1007,7 @@ class HttpHandler(BaseHTTPRequestHandler):
                 "name": h.short, "fqdn": h.fqdn, "os": h.os,
                 "role": h.spec.get("role", "infrastructure"),
                 "descr": h.spec.get("descr", ""),
-                "parent": h.spec.get("parent"),
+                "parent": h.net_parent,
                 "site": h.spec.get("site", "dc"),
             } for h in HOSTS.values()],
             "count": len(HOSTS),

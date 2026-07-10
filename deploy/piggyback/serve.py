@@ -107,32 +107,34 @@ START = time.time()
 # `parent` is the short name of the upstream network device — exposed as an
 # FQDN in the panel JSON and applied as the Checkmk "parents" attribute by
 # deploy/cmk_setup.py. The network layer is the SNMP-simulated gear
-# (snmp/netsim.py): every server hangs off the campus core switch
-# sw-core-01, which is only applied when the SNMP devices are deployed too.
+# (snmp/netsim.py): these servers hang off the access switch sw-access-01
+# (which in turn uplinks to the campus core sw-core-01), applied only when
+# the SNMP devices are deployed too. Endpoints belong on an access switch,
+# not the core — the core's ports are all switch/router uplink trunks.
 # `replicable` marks classes that ESTATE_REPLICAS stamps out N times
 # (web-frontend-02, -03, ...) — replicas run steady green; incident stories
 # stay unique to the original (low noise, one root cause).
 _REGISTRY = [
     ("web-frontend-01", "web-frontend-01", [], {"START_STATE": "healthy"},
-     "sw-core-01", True),
+     "sw-access-01", True),
     ("payment-api", "payment-api", ["break", "heal"],
-     {"START_BROKEN": "0"}, "sw-core-01", False),
+     {"START_BROKEN": "0"}, "sw-access-01", False),
     ("app-worker-01", "app-worker-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-core-01", True),
+     {"START_STATE": "healthy"}, "sw-access-01", True),
     ("app-redis-01", "app-redis-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-core-01", True),
+     {"START_STATE": "healthy"}, "sw-access-01", True),
     ("db-postgres-01", "db-postgres-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-core-01", False),
+     {"START_STATE": "healthy"}, "sw-access-01", False),
     ("db-postgres-02", "db-postgres-02", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-core-01", True),
+     {"START_STATE": "healthy"}, "sw-access-01", True),
     ("mail-relay-01", "mail-relay-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-core-01", True),
+     {"START_STATE": "healthy"}, "sw-access-01", True),
     ("fileserver-01", "fileserver-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-core-01", True),
-    ("backup-01", "backup-01", [], {"START_STATE": "healthy"}, "sw-core-01",
+     {"START_STATE": "healthy"}, "sw-access-01", True),
+    ("backup-01", "backup-01", [], {"START_STATE": "healthy"}, "sw-access-01",
      False),
     ("win-dc-01", "win-dc-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-core-01", True),
+     {"START_STATE": "healthy"}, "sw-access-01", True),
 ]
 
 

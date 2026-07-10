@@ -120,9 +120,28 @@ Windows builder win-dc-01's healthy path — all CLAUDE.md parity rules apply
 automatically to every instance. Fleet DB hosts run their engine as a
 *process only* (no mk_postgres/mysql sections): "plugin not deployed" is
 realistic and cheap. Cross-ref realism: VMs are round-robined onto the
-`kvm-*` hypervisors and each hypervisor's ps lists its actual guests as
-qemu processes (name + memory match the guest profile); hypervisor AnonPages
-is derived from the guest RSS sum, not a static fraction.
+`kvm-*` hypervisors **at their own site** (`expand_roster`) and each
+hypervisor's ps lists its actual guests as qemu processes (name + memory
+match the guest profile); hypervisor AnonPages is derived from the guest RSS
+sum, not a static fraction.
+
+### Network topology (parent/child): tier it, don't flat-fan the core
+
+Checkmk validates a host's `parents` at **creation** time (`POST` 400s if the
+parent host doesn't exist yet) — so the SNMP network layer is created before
+the servers/shell (`setup()`), `setup_snmp` creates core→WAN→rest in order,
+and the host loop creates hypervisors before the VMs that name them (sort by
+`parent in carried_fqdns`). Model the path from the monitoring server outward:
+`sw-core-01` is the single parentless root (its 12 ports are all uplink
+trunks — endpoints never hang off it). Endpoints hang off an **access
+switch** (`sw-access-01`; the fleet iron round-robins across the 8 DC ToR
+`sw-dc-tor-*`), which uplinks to the core. **A VM is a child of its
+hypervisor**, exposed via `net_parent` in the fleet roster JSON (not the
+profile's vestigial `parent=`). Each warehouse has its own hypervisor
+(`wh{1,2}-kvm-01`) so no VM parents across the WAN. Bump `SCHEMA_VERSION` when
+the topology changes. **Known gap:** at company scale the ~22 access/floor
+switches still uplink straight to the 12-port core — a distribution tier
+(HQ floor → dist → core) is the next realism step.
 
 ### SNMP walk replay (`snmp/curate_walks.py` -> `walklib/` -> netsim)
 

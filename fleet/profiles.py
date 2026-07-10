@@ -37,12 +37,17 @@ Schema (dict per class; serve.py applies the defaults):
   uptime_days   (min, max) — each instance picks a value in the range
   mem_profile   (anon_frac, cached_frac, shmem_frac) of RAM    [linux]
 
-VM-to-hypervisor mapping: every linux/windows class with vm=True (default)
-is distributed round-robin across the KVM_CLASS instances; each kvm host's
-ps output lists its guests as qemu processes (cross-checkable realism).
+VM-to-hypervisor mapping (serve.py:expand_roster): every vm=True host is
+distributed round-robin across the hypervisors AT ITS OWN SITE; the VM becomes
+a Checkmk CHILD of that hypervisor and shows up as a qemu process in its ps
+(cross-checkable realism). Physical iron (hypervisors, the Veeam server) hangs
+off an access switch, never the 12-port core. `site` (dc/wh1/wh2) drives both.
+
+`parent=` in the class dicts is vestigial — the network parent is computed in
+expand_roster; only `site` matters now.
 """
 
-# The DC access layer the servers hang off (SNMP side, snmp/netsim.py).
+# `site` codes; the actual network parent is computed in serve.py:expand_roster.
 DC = "sw-core-01"
 WH1 = "rt-wan-01"   # warehouse 1 hosts sit behind the WAN router
 WH2 = "rt-wan-02"
@@ -362,22 +367,52 @@ LINUX_CLASSES = [
 ]
 
 # --------------------------------------------------------------------------- #
-#  Physical KVM hypervisors — the iron under the VM fleet. vm=False: these     #
-#  are not guests; every vm=True host is assigned to one of them round-robin  #
-#  and shows up as a qemu process in its ps output.                            #
+#  Physical KVM hypervisors — the iron under the VM fleet. hypervisor=True     #
+#  (vm=False): these are not guests; every vm=True host is assigned to a       #
+#  hypervisor AT ITS OWN SITE round-robin (serve.py) and shows up as a qemu    #
+#  process in that hypervisor's ps output, and becomes its Checkmk child. The  #
+#  DC iron is 12 big boxes; each warehouse has one local hypervisor for its    #
+#  handful of edge/control VMs (no DC hypervisor reaches across the WAN).      #
 # --------------------------------------------------------------------------- #
-KVM_CLASS = dict(
-    prefix="kvm", count=12, os="linux", role="virtualization", vm=False,
-    descr="KVM hypervisor (physical, Dell R760)", parent=DC,
-    ncpu=48, mem_mb=393216, load1=6.0, net_mbs=(45.0, 45.0),
-    mem_profile=(0.62, 0.12, 0.01),
-    disk=("Micron 7450 MTFDKBG3T8TFR", 3840),
-    fs=[("/var/lib/libvirt/images", 3500, 0.55)],
-    uptime_days=(150, 420),
-    units=[("libvirtd.service", "Virtualization daemon"),
-           ("virtlogd.service", "Virtual machine log manager")],
-    procs=[("root", 2_900_000, 120_000, "/usr/sbin/libvirtd --timeout 120")],
-)
+KVM_CLASSES = [
+    dict(prefix="kvm", count=12, site="dc", os="linux", role="virtualization",
+         vm=False, hypervisor=True,
+         descr="KVM hypervisor (physical, Dell R760)",
+         ncpu=48, mem_mb=393216, load1=6.0, net_mbs=(45.0, 45.0),
+         mem_profile=(0.62, 0.12, 0.01),
+         disk=("Micron 7450 MTFDKBG3T8TFR", 3840),
+         fs=[("/var/lib/libvirt/images", 3500, 0.55)],
+         uptime_days=(150, 420),
+         units=[("libvirtd.service", "Virtualization daemon"),
+                ("virtlogd.service", "Virtual machine log manager")],
+         procs=[("root", 2_900_000, 120_000,
+                 "/usr/sbin/libvirtd --timeout 120")]),
+    # one smaller hypervisor per warehouse, carrying that site's edge/WCS VMs
+    dict(prefix="wh1-kvm", count=1, site="wh1", os="linux",
+         role="virtualization", vm=False, hypervisor=True,
+         descr="Warehouse 1 KVM hypervisor (physical, Dell R660)",
+         ncpu=16, mem_mb=131072, load1=1.5, net_mbs=(6.0, 6.0),
+         mem_profile=(0.55, 0.12, 0.01),
+         disk=("Micron 7450 MTFDKBG1T9TFR", 1920),
+         fs=[("/var/lib/libvirt/images", 1500, 0.40)],
+         uptime_days=(120, 360),
+         units=[("libvirtd.service", "Virtualization daemon"),
+                ("virtlogd.service", "Virtual machine log manager")],
+         procs=[("root", 2_900_000, 120_000,
+                 "/usr/sbin/libvirtd --timeout 120")]),
+    dict(prefix="wh2-kvm", count=1, site="wh2", os="linux",
+         role="virtualization", vm=False, hypervisor=True,
+         descr="Warehouse 2 KVM hypervisor (physical, Dell R660)",
+         ncpu=16, mem_mb=131072, load1=1.5, net_mbs=(6.0, 6.0),
+         mem_profile=(0.55, 0.12, 0.01),
+         disk=("Micron 7450 MTFDKBG1T9TFR", 1920),
+         fs=[("/var/lib/libvirt/images", 1500, 0.40)],
+         uptime_days=(120, 360),
+         units=[("libvirtd.service", "Virtualization daemon"),
+                ("virtlogd.service", "Virtual machine log manager")],
+         procs=[("root", 2_900_000, 120_000,
+                 "/usr/sbin/libvirtd --timeout 120")]),
+]
 
 # --------------------------------------------------------------------------- #
 #  Windows servers                                                             #
@@ -487,8 +522,11 @@ def all_classes() -> list[dict]:
         c.setdefault("os", "linux")
         c.setdefault("vm", True)
         out.append(c)
-    k = dict(KVM_CLASS)
-    out.append(k)
+    for cls in KVM_CLASSES:
+        k = dict(cls)
+        k.setdefault("os", "linux")
+        k.setdefault("vm", False)
+        out.append(k)
     for cls in WINDOWS_CLASSES:
         c = dict(cls)
         c.setdefault("os", "windows")
@@ -502,6 +540,6 @@ if __name__ == "__main__":
     lin = sum(c["count"] for c in classes if c["os"] == "linux")
     win = sum(c["count"] for c in classes if c["os"] == "windows")
     vms = sum(c["count"] for c in classes if c.get("vm", True))
+    hv = sum(c["count"] for c in classes if c.get("hypervisor"))
     print(f"fleet: {lin} linux + {win} windows = {lin + win} hosts "
-          f"({vms} VMs on {KVM_CLASS['count']} hypervisors = "
-          f"{vms / KVM_CLASS['count']:.1f}/host)")
+          f"({vms} VMs on {hv} hypervisors = {vms / hv:.1f}/host)")
