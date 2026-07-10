@@ -67,6 +67,7 @@ Checkmk site, and for SNMP a LOCAL site (walk files are written into it).
 from __future__ import annotations
 
 import argparse
+import filecmp
 import json
 import os
 import shutil
@@ -278,23 +279,32 @@ NETSIM_COPY = "/var/tmp/cmk-demo-netsim.py"
 
 def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
     fleet = SCALES[args.scale]["fleet"] if hasattr(args, "scale") else False
+    netsim = os.path.join(REPO, "snmp", "netsim.py")
     running = get_json(SNMP_PANEL + "/")
     if running is not None:
-        # Reuse a running netsim ONLY if it already renders the device set this
-        # scale needs. The replay fleet is what differs between full and company
-        # scale, and "sw-dc-tor-*" is produced ONLY by the fleet — so its
-        # presence tells us the running netsim's fleet state. On a mismatch
-        # (e.g. switching full -> company) the stale netsim must be stopped and
-        # restarted; otherwise `up` silently keeps the wrong device set and the
-        # fleet devices (ToR switches, ...) never appear. --force does not reach
-        # here, so this is the only thing that makes a scale switch take effect.
+        # A running netsim can be reused ONLY if it still reflects the current
+        # config. It must be stopped and restarted when:
+        #  - the scale changed (fleet on/off) — "sw-dc-tor-*" is fleet-only, so
+        #    its presence reveals the running fleet state;
+        #  - --force was passed;
+        #  - netsim.py changed since launch — the SNMP topology + values (incl.
+        #    REPLAY_ROSTER parents) live in it, and the sudo path runs a copy at
+        #    NETSIM_COPY, so a diff means the running netsim is stale.
+        # Reusing a stale netsim is why SNMP parent edits didn't apply: it kept
+        # serving the OLD parents, so the fingerprint matched and cmk_setup
+        # short-circuited. (Agent-host parents already update: the shell is
+        # rebuilt every up.)
         running_fleet = any(s.startswith("sw-dc-tor")
                             for s in running.get("devices", {}))
-        if running_fleet == fleet:
+        force = bool(getattr(args, "force", False))
+        stale = (os.path.exists(NETSIM_COPY)
+                 and not filecmp.cmp(netsim, NETSIM_COPY, shallow=False))
+        if running_fleet == fleet and not force and not stale:
             print("  netsim already running")
             return
-        print(f"  netsim is running the wrong device set (fleet={running_fleet}, "
-              f"need {fleet}) — restarting it")
+        why = ("--force" if force else "scale change"
+               if running_fleet != fleet else "netsim.py changed")
+        print(f"  restarting netsim ({why})")
         netsim_down()
         deadline = time.time() + 15
         while time.time() < deadline and get_json(SNMP_PANEL + "/") is not None:
@@ -302,7 +312,6 @@ def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
         if get_json(SNMP_PANEL + "/") is not None:
             sys.exit(f"ERROR: could not stop the stale netsim — stop it by hand "
                      f"and re-run:\n       curl {SNMP_PANEL}/admin/shutdown")
-    netsim = os.path.join(REPO, "snmp", "netsim.py")
     if args.walks_dir:
         target = ["--walks-dir", args.walks_dir]
         run_as = None
