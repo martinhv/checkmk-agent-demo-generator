@@ -47,10 +47,12 @@ off an access switch, never the 12-port core. `site` (dc/wh1/wh2) drives both.
 expand_roster; only `site` matters now.
 """
 
-# `site` codes; the actual network parent is computed in serve.py:expand_roster.
+# Vestigial parent hints — kept only so old class dicts stay valid. The real
+# network parent (hypervisor for a VM, access switch for iron) is computed in
+# serve.py:expand_roster from `site`; these values are no longer read.
 DC = "sw-core-01"
-WH1 = "rt-wan-01"   # warehouse 1 hosts sit behind the WAN router
-WH2 = "rt-wan-02"
+WH1 = "wh1"
+WH2 = "wh2"
 
 # --------------------------------------------------------------------------- #
 #  Linux VMs — platform + shared infrastructure                                #

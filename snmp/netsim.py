@@ -580,10 +580,13 @@ class SwAccess(Device):
 
 
 class RtWan(Device):
-    """Warehouse WAN router — the saturation incident. (Not the internet
-    edge: this box is the 1G leased line to the fulfillment warehouse.)
+    """DC WAN head-end router (DC rack A2) — the saturation incident. Aggregates
+    the leased lines to the fulfillment warehouses; each warehouse's own CPE
+    router (rt-wh1-01 / rt-wh2-01) sits BEHIND this box, so the path is
+    core -> rt-wan-01 -> rt-wh{1,2}-01 -> warehouse switch. (Not the internet
+    edge.)
 
-    healthy:  Gi0/1 (WAN to the warehouse) runs at ~180 Mbit/s.
+    healthy:  Gi0/1 (WAN uplink to the warehouse leased lines) runs at ~180 Mbit/s.
     degraded: a bulk transfer (inventory replication gone wrong) pushes it
               to ~600 Mbit/s; CPU follows to ~70 % — visible in every
               graph, nothing red yet.
@@ -607,7 +610,7 @@ class RtWan(Device):
         self.lan = Iface("rt-wan-01", 1, "Gi0/0", "GigabitEthernet0/0",
                          "LAN to sw-core-01 Te1/0/4", 1000, 24e6, 21e6, seed=3)
         self.wan = Iface("rt-wan-01", 2, "Gi0/1", "GigabitEthernet0/1",
-                         "WAN leased line to warehouse DC", 1000,
+                         "WAN leased lines to warehouses (rt-wh1/rt-wh2)", 1000,
                          22.5e6, 19e6, seed=3)
         self.ifaces = [self.lan, self.wan]
 
@@ -973,34 +976,37 @@ REPLAY_ROSTER: list[tuple[int, str, str, str, str, str | None]] = [
      "HQ comms room, rack {n}", "sw-core-01"),
     (1, "env-hq-{n:02d}", "avtech-ra3s", "net_ups",
      "HQ comms room", "sw-core-01"),
-    # --- warehouse 1 (behind rt-wan-01) ----------------------------------------
+    # --- warehouse 1 (CPE router rt-wh1-01, behind the DC head-end rt-wan-01) ---
+    # Path: warehouse switch -> rt-wh1-01 (local CPE) -> rt-wan-01 (DC) -> core.
+    (1, "rt-wh1-{n:02d}", "lancom-router", "net_routers",
+     "warehouse 1, comms room", "rt-wan-01"),
     (3, "wh1-sw-{n:02d}", "procurve-2510", "net_switches",
-     "warehouse 1, hall {n}", "rt-wan-01"),
+     "warehouse 1, hall {n}", "rt-wh1-01"),
     (2, "wh1-sw-{nn:02d}", "hp-2530", "net_switches",
-     "warehouse 1, mezzanine {n}", "rt-wan-01"),
+     "warehouse 1, mezzanine {n}", "rt-wh1-01"),
     (4, "wh1-prt-{n:02d}", "printer-zebra", "printers",
-     "warehouse 1, packing line {n}", "rt-wan-01"),
+     "warehouse 1, packing line {n}", "rt-wh1-01"),
     (1, "wh1-ups-{n:02d}", "apc-symmetra", "net_ups",
-     "warehouse 1, comms room", "rt-wan-01"),
+     "warehouse 1, comms room", "rt-wh1-01"),
     (1, "wh1-pdu-{n:02d}", "raritan-pdu", "net_ups",
-     "warehouse 1, comms room", "rt-wan-01"),
+     "warehouse 1, comms room", "rt-wh1-01"),
     (1, "wh1-env-{n:02d}", "akcp-sensor", "net_ups",
-     "warehouse 1, comms room", "rt-wan-01"),
-    # --- warehouse 2 (behind its own WAN router) --------------------------------
-    (1, "rt-wan-{nn:02d}", "lancom-router", "net_routers",
-     "warehouse 2, comms room", "sw-core-01"),
+     "warehouse 1, comms room", "rt-wh1-01"),
+    # --- warehouse 2 (CPE router rt-wh2-01, behind the DC head-end rt-wan-01) ---
+    (1, "rt-wh2-{n:02d}", "lancom-router", "net_routers",
+     "warehouse 2, comms room", "rt-wan-01"),
     (3, "wh2-sw-{n:02d}", "procurve-2510", "net_switches",
-     "warehouse 2, hall {n}", "rt-wan-02"),
+     "warehouse 2, hall {n}", "rt-wh2-01"),
     (2, "wh2-sw-{nn:02d}", "hp-2530", "net_switches",
-     "warehouse 2, mezzanine {n}", "rt-wan-02"),
+     "warehouse 2, mezzanine {n}", "rt-wh2-01"),
     (4, "wh2-prt-{n:02d}", "printer-zebra", "printers",
-     "warehouse 2, packing line {n}", "rt-wan-02"),
+     "warehouse 2, packing line {n}", "rt-wh2-01"),
     (1, "wh2-ups-{n:02d}", "apc-symmetra", "net_ups",
-     "warehouse 2, comms room", "rt-wan-02"),
+     "warehouse 2, comms room", "rt-wh2-01"),
     (1, "wh2-pdu-{n:02d}", "raritan-pdu", "net_ups",
-     "warehouse 2, comms room", "rt-wan-02"),
+     "warehouse 2, comms room", "rt-wh2-01"),
     (1, "wh2-env-{n:02d}", "akcp-sensor", "net_ups",
-     "warehouse 2, comms room", "rt-wan-02"),
+     "warehouse 2, comms room", "rt-wh2-01"),
     # --- internet edge ----------------------------------------------------------
     (1, "rt-inet-{n:02d}", "lancom-router", "net_routers",
      "DC rack A1, internet backup line", "sw-core-01"),

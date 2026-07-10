@@ -107,7 +107,10 @@ import urllib.request
 #   v7: tiered topology — endpoints hang off access switches, not the core
 #       (servers/shell → sw-access-01; fleet iron → DC ToR round-robin); VMs
 #       are children of their hypervisor; a hypervisor per warehouse.
-SCHEMA_VERSION = 7
+#   v8: warehouse WAN path — each warehouse gets a local CPE router
+#       (rt-wh1-01/rt-wh2-01) behind the DC head-end rt-wan-01; warehouse gear
+#       hangs off its CPE (fixes rt-wan-02 which never existed / collided).
+SCHEMA_VERSION = 8
 
 # Host label on the delivery shell holding the last-activated estate
 # fingerprint. Lives on the site (survives across `estate.py up` runs) and is

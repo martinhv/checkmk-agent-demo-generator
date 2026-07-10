@@ -92,9 +92,9 @@ stay busy, dead ports stay dead), wobbled and restart-persisted.
   internet-edge router.
 - **HQ**: 14 access switches (Aruba 2930F / HP 2530), 2 Extreme WLCs, 12
   office printers (Ricoh/Canon), UPS + PDUs + room sensor.
-- **Warehouses ×2**: 5 access switches each (ProCurve/HP), 4 Zebra label
-  printers each, UPS/PDU/AKCP sensor each, warehouse 2 behind its own
-  `rt-wan-02` (Lancom).
+- **Warehouses ×2**: a local CPE router each (`rt-wh1-01` / `rt-wh2-01`,
+  Lancom), 5 access switches each (ProCurve/HP), 4 Zebra label printers each,
+  UPS/PDU/AKCP sensor each.
 - **DC power/environment**: 3 APC Symmetra UPS, 8 rack PDUs (APC NetShelter,
   Raritan, Gude), 8 environment sensors (AKCP, AVTECH).
 - **Storage & OOB**: 2 Synology NAS, 2 Brocade FC SAN switches, 16 Dell iDRACs
@@ -102,10 +102,11 @@ stay busy, dead ports stay dead), wobbled and restart-persisted.
 
 ### Topology
 
-`sw-core-01` remains the root. DC/HQ devices and servers hang off it;
-warehouse-1 gear behind `rt-wan-01` (which keeps its saturation incident),
-warehouse-2 gear behind the replayed `rt-wan-02`. Every parent is applied as
-the Checkmk `parents` attribute, so RCA has a real path to reason over.
+`sw-core-01` remains the root. DC/HQ endpoints hang off access switches;
+each warehouse follows `warehouse switch -> local CPE router (rt-wh{1,2}-01)
+-> DC WAN head-end rt-wan-01 (which keeps its saturation incident) -> core`.
+Every parent is applied as the Checkmk `parents` attribute, so RCA has a real
+path to reason over.
 
 ### Why these numbers read as real (research summary)
 
