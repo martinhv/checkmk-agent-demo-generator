@@ -88,11 +88,14 @@ rate derives from the RECORDED counter over the RECORDED uptime (busy ports
 stay busy, dead ports stay dead), wobbled and restart-persisted.
 
 - **DC fabric**: 2 HP 5406R distribution (the only DC uplinks to the core),
-  6 Aruba 6200F + 2 Huawei CloudEngine ToR behind them, Fortigate HA pair +
-  ASA DMZ firewall, 2 Kemp load balancers, internet-edge router.
+  6 Aruba 6200F + 2 Huawei CloudEngine ToR behind them, an HP 2530-48G OOB
+  management switch (`sw-dc-oob-01` — iDRACs, rack PDUs, env sensors),
+  Fortigate HA pair + ASA DMZ firewall, 2 Kemp load balancers,
+  internet-edge router.
 - **HQ**: an HP 5406R distribution switch (`sw-hq-dist-01`) to the core, 14
-  access switches (Aruba 2930F / HP 2530) + 2 Extreme WLCs + 12 office
-  printers (Ricoh/Canon) + UPS/PDUs/room sensor behind it.
+  floor switches (Aruba 2930F / HP 2530) + 2 Extreme WLCs + UPS/PDUs/room
+  sensor behind it; the 12 office printers (Ricoh/Canon) each hang off their
+  own floor's switch.
 - **Warehouses ×2**: a local CPE router each (`rt-wh1-01` / `rt-wh2-01`,
   Lancom), 5 access switches each (ProCurve/HP), 4 Zebra label printers each,
   UPS/PDU/AKCP sensor each.
@@ -105,14 +108,17 @@ stay busy, dead ports stay dead), wobbled and restart-persisted.
 
 `sw-core-01` is the root, and its 12x10G ports are all uplink trunks — only
 the distribution switches (`sw-dc-dist-01/02`, `sw-hq-dist-01`), the edge
-firewalls and the WAN/internet routers hang off it (fan-out ~10, not ~90).
-Below that:
+firewalls, the WAN/internet routers and the server-access switch hang off it
+(fan-out ~10, not ~90). Below that:
 - **DC**: `core -> sw-dc-dist-0{1,2} -> sw-dc-tor-0N -> servers`; storage,
-  iDRACs, power/env and load balancers aggregate on the distribution pair.
-- **HQ**: `core -> sw-hq-dist-01 -> sw-hq-fNN -> endpoints` (+ WLCs, printers,
-  power on the HQ distribution).
-- **Warehouses**: `warehouse switch -> local CPE (rt-wh{1,2}-01) -> DC WAN
-  head-end rt-wan-01 (keeps its saturation incident) -> core`.
+  load balancers and NTP on the distribution pair; iDRACs/rack-PDUs/env
+  sensors on the OOB management switch (`sw-dc-oob-01`).
+- **HQ**: `core -> sw-hq-dist-01 -> sw-hq-fNN -> that floor's printer`
+  (+ WLCs and comms-room power on the HQ distribution).
+- **Warehouses**: `printer -> hall switch -> local CPE (rt-wh{1,2}-01, only
+  the 3 hall switches on its LAN ports) -> DC WAN head-end rt-wan-01 (keeps
+  its saturation incident) -> core`; mezzanine switches daisy-chain off
+  hall 1, comms-room UPS/PDU/sensor share hall 1's switch.
 
 Every parent is applied as the Checkmk `parents` attribute, so RCA has a real
 path to reason over.
@@ -164,11 +170,12 @@ panel on 8101.
 The estate has an explicit network path for RCA to reason over:
 
 ```
-sw-core-01  (campus core switch, SNMP — no parent)
-  ├─ every server (web-frontend-01, payment-api, db-postgres-01, ...)
-  ├─ sw-access-01  (office access switch, SNMP)
-  ├─ rt-wan-01     (warehouse WAN router, SNMP)
-  └─ ups-01        (rack UPS, SNMP)
+sw-core-01  (DC core switch, SNMP — no parent)
+  ├─ sw-access-01  (DC server-access switch, SNMP)
+  │    ├─ every server (web-frontend-01, payment-api, db-postgres-01, ...)
+  │    ├─ cmk-demo-gateway (the delivery shell)
+  │    └─ ups-01   (rack UPS, SNMP — its mgmt NIC)
+  └─ rt-wan-01     (DC WAN head-end router, SNMP)
 ```
 
 The parents only apply when the SNMP layer is deployed (`--scale full`);

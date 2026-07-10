@@ -113,7 +113,11 @@ import urllib.request
 #   v9: distribution tier — DC ToR + leaves hang off the sw-dc-dist pair, HQ
 #       gear off a new sw-hq-dist-01; only distribution switches, firewalls and
 #       edge routers uplink to the core (fan-out 88 -> ~10).
-SCHEMA_VERSION = 9
+#   v10: leaf-level realism — DC OOB mgmt switch (sw-dc-oob-01) carrying
+#        iDRACs/PDUs/env sensors; HQ printers on their floor switches;
+#        warehouse printers/power on the hall switches (mezzanine daisy-chain);
+#        ups-01 behind sw-access-01; base devices recast as DC gear.
+SCHEMA_VERSION = 10
 
 # Host label on the delivery shell holding the last-activated estate
 # fingerprint. Lives on the site (survives across `estate.py up` runs) and is
@@ -642,6 +646,26 @@ def delete_datasource_rule(api: CmkApi, root_ident: str) -> None:
             print("  deleted datasource program rule")
 
 
+def _topo_order(devices: dict) -> list[tuple[str, dict]]:
+    """Devices in parents-before-children order (the REST API validates that
+    a named parent exists at creation time). Round-based: emit every device
+    whose parent is already emitted or not part of this device set; sorted
+    within a round for determinism. An (impossible) parent cycle falls back
+    to name order rather than looping forever."""
+    remaining = dict(devices)
+    out: list[tuple[str, dict]] = []
+    while remaining:
+        # ready = parent is unset, or is outside this set (base device /
+        # already emitted — emitted devices are popped from `remaining`)
+        ready = sorted(s for s, d in remaining.items()
+                       if not d.get("parent") or d.get("parent") not in remaining)
+        if not ready:                      # cycle — never expected
+            ready = sorted(remaining)
+        for s in ready:
+            out.append((s, remaining.pop(s)))
+    return out
+
+
 def setup_snmp(api: CmkApi, args: argparse.Namespace,
                leaf_for: "Callable[[str], str]") -> list[str]:
     """SNMP devices as no-agent/no-IP hosts reading stored walks — this IS
@@ -671,14 +695,10 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace,
                       if s.startswith("sw-core")), None)
     fqdn_of = {s: d["fqdn"] for s, d in devices.items()}
     # The REST API rejects a host whose parent does not yet exist, so create in
-    # dependency order: the campus core first, then any device named as a parent
-    # (the WAN routers), then the rest that hang off them.
-    referenced = {d.get("parent") for d in devices.values() if d.get("parent")}
-    order = sorted(devices.items(),
-                   key=lambda kv: (not kv[0].startswith("sw-core"),
-                                   kv[0] not in referenced, kv[0]))
+    # topological order (parents first) — the chains are several levels deep
+    # (printer -> floor switch -> distribution -> core).
     fqdns = []
-    for short, dev in order:
+    for short, dev in _topo_order(devices):
         attrs = {
             "tag_snmp_ds": "snmp-v2",
             "tag_agent": "no-agent",
@@ -698,7 +718,7 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace,
 def _planned_snmp(args: argparse.Namespace) -> list[tuple[str, str | None]]:
     """The (fqdn, parent) pairs setup_snmp WOULD create — a read-only,
     heal-free, create-free preview used only for the fingerprint. Mirrors
-    setup_snmp's parenting (every non-core device hangs off the campus core)."""
+    setup_snmp's parenting (panel-declared parent, campus core as fallback)."""
     if args.snmp == "off":
         return []
     info = panel_get(args.snmp_panel, optional=True)
@@ -725,13 +745,8 @@ def snmp_teardown_names(args: argparse.Namespace) -> list[str]:
     if not info or "devices" not in info:
         return []
     # Delete children before parents (the mirror of the create constraint):
-    # devices naming a parent go first, then the WAN routers, then the core.
-    devices = info["devices"]
-    referenced = {d.get("parent") for d in devices.values() if d.get("parent")}
-    devs = sorted(devices.items(),
-                  key=lambda kv: (kv[0] in referenced,
-                                  kv[0].startswith("sw-core")))
-    return [d["fqdn"] for _, d in devs]
+    # reverse topological order, leaves first, the core last.
+    return [d["fqdn"] for _, d in reversed(_topo_order(info["devices"]))]
 
 
 # --------------------------------------------------------------------------- #

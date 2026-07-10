@@ -129,29 +129,39 @@ sum, not a static fraction.
 
 Checkmk validates a host's `parents` at **creation** time (`POST` 400s if the
 parent host doesn't exist yet) — so the SNMP network layer is created before
-the servers/shell (`setup()`), `setup_snmp` creates core→dist→leaves in order
-(the sort is `(not sw-core, not referenced, name)`; a device's parent must
-sort before it — holds because `rt-wan`<`rt-wh`, `sw-…-dist` are referenced),
-and the host loop creates hypervisors before the VMs that name them (sort by
+the servers/shell (`setup()`), `setup_snmp` creates devices in **topological
+order** (`_topo_order`, parents first; teardown deletes in reverse), and the
+host loop creates hypervisors before the VMs that name them (sort by
 `parent in carried_fqdns`). Model the path from the monitoring server outward,
 **properly tiered — never flat-fan the 12-port core** (its ports are all
 uplink trunks; only distribution switches + edge firewalls + WAN/internet
 routers hang off it, ~10 children):
-- **DC**: `core → sw-dc-dist-0{1,2} → sw-dc-tor-0N → servers`; storage, iDRACs,
-  power/env, LBs aggregate on the distribution pair.
-- **HQ**: `core → sw-hq-dist-01 → sw-hq-fNN → endpoints`.
-- **Warehouses**: `wh switch → local CPE rt-wh{1,2}-01 → DC head-end rt-wan-01 → core`.
+- **DC**: `core → sw-dc-dist-0{1,2} → sw-dc-tor-0N → servers`; storage, LBs and
+  NTP on the distribution pair; **iDRACs/rack-PDUs/env sensors on the dedicated
+  OOB switch** `sw-dc-oob-01` (mgmt network, not the production fabric).
+- **HQ**: `core → sw-hq-dist-01 → sw-hq-fNN → endpoints`; a floor's printer
+  parents its floor switch (1:1 index), not the comms-room dist.
+- **Warehouses**: `device → hall switch → local CPE rt-wh{1,2}-01 (only the 3
+  hall switches on its 4-5 LAN ports) → DC head-end rt-wan-01 → core`;
+  mezzanine switches daisy-chain off hall 1, comms-room power shares hall 1.
 - **A VM is a child of its hypervisor** (`net_parent` in the fleet roster JSON,
   not the profile's vestigial `parent=`); each warehouse has its own hypervisor
   (`wh{1,2}-kvm-01`) so no VM parents across the WAN.
 
-The SNMP tiering lives in `snmp/netsim.py` `REPLAY_ROSTER` (parent column) +
-`SwCore`'s interface aliases (which name the real uplink peers). Bump
-`SCHEMA_VERSION` when the topology changes. **Applying changes:** agent-host
-parents update every `up` (the shell is rebuilt); SNMP parents need netsim to
-restart — `up` does so on `--force`, a scale change, or when `netsim.py`
-differs from the running copy (else a stale netsim serves old parents and the
-fingerprint fast-path skips the update).
+Leaf-placement heuristics that keep it credible: a device parents the switch
+in its OWN location string (floor printer → floor switch, not the dist);
+mgmt NICs (UPS, PDU, iDRAC) never sit on 10G core/dist trunk ports; a small
+CPE router has 4-5 LAN ports, not 12 children; a passive HA firewall port is
+near-idle. The SNMP tiering lives in `snmp/netsim.py` `REPLAY_ROSTER` — its
+parent column supports per-instance `{n:02d}` patterns (same running index as
+the device name, e.g. printers → `"sw-hq-f{n:02d}"`) — plus `SwCore`'s
+interface aliases (they name the real uplink peers; sw-access has TWO uplinks,
+so the core must show two matching ports). Bump `SCHEMA_VERSION` when the
+topology changes. **Applying changes:** agent-host parents update every `up`
+(the shell is rebuilt); SNMP parents need netsim to restart — `up` does so on
+`--force`, a scale change, or when `netsim.py` differs from the running copy
+(else a stale netsim serves old parents and the fingerprint fast-path skips
+the update).
 
 ### SNMP walk replay (`snmp/curate_walks.py` -> `walklib/` -> netsim)
 

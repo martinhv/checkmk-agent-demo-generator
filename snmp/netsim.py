@@ -17,17 +17,18 @@ up each rewrite on its next check cycle.
 
 Devices (see FLEET.md):
 
-  sw-core-01    Catalyst 9300 campus core switch   steady green
-  sw-access-01  Catalyst 9200 access switch        incident: CRC error storm
+  sw-core-01    Catalyst 9300 DC core switch       steady green
+  sw-access-01  Catalyst 9200 server-access switch incident: CRC error storm
                                                    on uplink Te1/1/1 (WARN),
                                                    then the link dies (CRIT)
-  rt-wan-01     ISR 2921 warehouse WAN router      incident: WAN saturation ->
+  rt-wan-01     ISR 2921 DC WAN head-end router    incident: WAN saturation ->
                                                    CPU climbs past 80/90
-  ups-01        APC Smart-UPS 3000                 steady green
+  ups-01        APC Smart-UPS 3000                 steady green (behind
+                                                   sw-access-01)
 
-This IS the estate's network layer: the campus core switch sw-core-01 tops
-the parent topology and every server hangs off it (applied by
-deploy/cmk_setup.py when the SNMP layer is deployed).
+This IS the estate's network layer: the DC core switch sw-core-01 tops the
+parent topology; servers and the UPS hang off sw-access-01, which uplinks to
+the core (applied by deploy/cmk_setup.py when the SNMP layer is deployed).
 
 Run it AS THE SITE USER (it writes into the site's var directory):
 
@@ -436,7 +437,7 @@ class SwCore(Device):
                  "(CAT9K_IOSXE), Version 17.3.4, RELEASE SOFTWARE (fc2), "
                  "Copyright (c) 1986-2021 by Cisco Systems, Inc.")
     sys_objectid = ".1.3.6.1.4.1.9.1.2494"
-    location = "office comms room, floor 1"
+    location = "DC comms room, network row"
     incident = False
     role = "net_switches"
     parent = None
@@ -447,8 +448,12 @@ class SwCore(Device):
         # DC distribution switches, the HQ distribution switch, the edge
         # firewalls and the WAN/internet routers (endpoints live on the access
         # /ToR switches, never here). Aliases name the peer so a specialist can
-        # match the interface table against the parent/child topology; the
-        # distribution trunks carry the most (aggregate DC/HQ traffic).
+        # match the interface table against the parent/child topology:
+        #  - Te1/0/4 <-> rt-wan-01 Gi0/0 (its alias names this port back);
+        #  - Te1/0/9+10 <-> sw-access-01's two uplinks (in <-> out swapped,
+        #    ~half the access-port sums each — see SwAccess, whose broken state
+        #    fails Te1/1/1 over to Te1/1/2);
+        #  - fw-02 is the PASSIVE HA member: heartbeat/sync only, near-idle.
         self.ifaces = []
         peers: list[tuple[str, float, float]] = [
             ("link sw-dc-dist-01 (DC distribution)", 210e6, 240e6),
@@ -456,11 +461,11 @@ class SwCore(Device):
             ("link sw-hq-dist-01 (HQ distribution)", 120e6, 90e6),
             ("link rt-wan-01 Gi0/0 (WAN head-end)", 21e6, 24e6),
             ("link rt-inet-01 (internet edge)", 34e6, 28e6),
-            ("link fw-01 (edge firewall HA)", 30e6, 26e6),
-            ("link fw-02 (edge firewall HA)", 12e6, 10e6),
+            ("link fw-01 (edge firewall HA, active)", 30e6, 26e6),
+            ("link fw-02 (edge firewall HA, passive)", 0.6e6, 0.5e6),
             ("link fw-dmz-01 (DMZ)", 6e6, 5e6),
-            ("link sw-access-01 (server access)", 33e6, 22e6),
-            ("link ups-01 (facility mgmt)", 0.4e6, 0.3e6),
+            ("link sw-access-01 Te1/1/1", 17e6, 11e6),
+            ("link sw-access-01 Te1/1/2", 16e6, 11e6),
             ("(spare)", 0.5e6, 0.4e6),
             ("(spare)", 0.4e6, 0.3e6),
         ]
@@ -483,8 +488,9 @@ class SwCore(Device):
 
 
 class SwAccess(Device):
-    """Access switch — the CRC-error-storm incident (on the FIRST instance;
-    replicas — see --access-switches — are steady-green office floors).
+    """DC server-access switch — carries the classic-roster servers and the
+    delivery shell; the CRC-error-storm incident (on the FIRST instance;
+    replicas — see --access-switches — are steady-green extra server rows).
 
     healthy:  48 x 1G access ports + 2 x 10G uplinks, all green.
     degraded: uplink Te1/1/1 develops CRC errors (bad SFP/patch cable):
@@ -506,7 +512,7 @@ class SwAccess(Device):
     def __init__(self, num: int = 1) -> None:
         self.short = f"sw-access-{num:02d}"
         self.incident = num == 1            # one story; replicas stay green
-        self.location = f"office floor {num + 1}, IDF {num + 1}A"
+        self.location = f"DC row {num}, server access"
         self.uptime_offset = (87 - 3 * num) * 86400
         super().__init__()
         rnd = random.Random(42 + num)       # distinct port mix per switch
@@ -516,7 +522,7 @@ class SwAccess(Device):
         for n in range(1, 49):                # 48 x 1G access ports
             if rnd.random() < 0.70:           # most ports lightly used
                 base_in = rnd.uniform(0.1e6, 3e6) / 8
-            else:                             # a few noisy ones (CCTV, backups)
+            else:                             # a few noisy ones (backups, repl)
                 base_in = rnd.uniform(5e6, 25e6) / 8
             base_out = base_in * rnd.uniform(0.3, 1.0)
             acc_in += base_in
@@ -668,8 +674,11 @@ class RtWan(Device):
 
 
 class Ups(Device):
-    """APC Smart-UPS — steady-green infrastructure corroboration."""
+    """APC Smart-UPS — steady-green infrastructure corroboration. Its
+    management card plugs into the server-access switch (a UPS mgmt NIC on a
+    10G core port would be odd)."""
     short = "ups-01"
+    parent = "sw-access-01"
     uptime_offset = 402 * 86400
     sys_descr = ("APC Web/SNMP Management Card (MB:v4.1.0 PF:v6.9.6 "
                  "PN:apc_hw05_aos_696.bin AF1:v6.9.6 "
@@ -938,6 +947,10 @@ REPLAY_ROSTER: list[tuple[int, str, str, str, str, str | None]] = [
      "DC rack A{n}, top of rack", "sw-dc-dist-01"),
     (2, "sw-dc-tor-{nn:02d}", "huawei-s6730", "net_switches",
      "DC rack B{n}, top of rack", "sw-dc-dist-02"),
+    # dedicated OOB/management switch: iDRACs, rack PDUs and environment
+    # sensors live on the management network, not on the production fabric
+    (1, "sw-dc-oob-{n:02d}", "hp-2530", "net_switches",
+     "DC comms room, OOB management", "sw-dc-dist-01"),
     (2, "fw-{n:02d}", "fortigate", "net_firewalls",
      "DC rack A1 (HA pair, unit {n})", "sw-core-01"),
     (1, "fw-dmz-{n:02d}", "cisco-asa", "net_firewalls",
@@ -949,21 +962,21 @@ REPLAY_ROSTER: list[tuple[int, str, str, str, str, str | None]] = [
     (2, "san-fc-{n:02d}", "brocade-fc", "storage",
      "DC rack B2, SAN fabric {n}", "sw-dc-dist-02"),
     (16, "oob-idrac-{n:02d}", "idrac", "mgmt",
-     "DC rack A{n} (iDRAC)", "sw-dc-dist-01"),
+     "DC rack A{n} (iDRAC)", "sw-dc-oob-01"),
     (1, "ntp-gps-{n:02d}", "meinberg-ntp", "infrastructure",
      "DC comms room, GPS antenna on roof", "sw-dc-dist-02"),
     (3, "ups-dc-{n:02d}", "apc-symmetra", "net_ups",
-     "DC power room, feed {n}", "sw-dc-dist-02"),
+     "DC power room, feed {n}", "sw-dc-oob-01"),
     (4, "pdu-dc-{n:02d}", "apc-pdu", "net_ups",
-     "DC rack A{n}, rack PDU", "sw-dc-dist-02"),
+     "DC rack A{n}, rack PDU", "sw-dc-oob-01"),
     (2, "pdu-dc-{nn:02d}", "raritan-pdu", "net_ups",
-     "DC rack B{n}, rack PDU", "sw-dc-dist-02"),
+     "DC rack B{n}, rack PDU", "sw-dc-oob-01"),
     (2, "pdu-dc-{nnn:02d}", "gude-pdu", "net_ups",
-     "DC rack C{n}, rack PDU", "sw-dc-dist-02"),
+     "DC rack C{n}, rack PDU", "sw-dc-oob-01"),
     (6, "env-dc-{n:02d}", "akcp-sensor", "net_ups",
-     "DC row {n}, hot aisle", "sw-dc-dist-02"),
+     "DC row {n}, hot aisle", "sw-dc-oob-01"),
     (2, "env-dc-{nn:02d}", "avtech-ra3s", "net_ups",
-     "DC comms room {n}", "sw-dc-dist-02"),
+     "DC comms room {n}", "sw-dc-oob-01"),
     # --- HQ office: core -> HQ distribution -> floor switches + leaves --------
     (1, "sw-hq-dist-{n:02d}", "hp-5406r", "net_switches",
      "HQ comms room, distribution", "sw-core-01"),
@@ -973,10 +986,11 @@ REPLAY_ROSTER: list[tuple[int, str, str, str, str, str | None]] = [
      "HQ floor {n}, IDF {n}B", "sw-hq-dist-01"),
     (2, "wlc-{n:02d}", "extreme-wlc", "net_wifi",
      "HQ comms room (controller {n})", "sw-hq-dist-01"),
+    # a floor's printer plugs into that floor's switch (index matches 1:1)
     (6, "prt-hq-{n:02d}", "printer-ricoh", "printers",
-     "HQ floor {n}, print room", "sw-hq-dist-01"),
+     "HQ floor {n}, print room", "sw-hq-f{n:02d}"),
     (6, "prt-hq-{nn:02d}", "printer-canon", "printers",
-     "HQ floor {n}, print room", "sw-hq-dist-01"),
+     "HQ floor {n}, print room", "sw-hq-f{n:02d}"),
     (1, "ups-hq-{n:02d}", "apc-symmetra", "net_ups",
      "HQ comms room", "sw-hq-dist-01"),
     (2, "pdu-hq-{n:02d}", "gude-pdu", "net_ups",
@@ -984,36 +998,40 @@ REPLAY_ROSTER: list[tuple[int, str, str, str, str, str | None]] = [
     (1, "env-hq-{n:02d}", "avtech-ra3s", "net_ups",
      "HQ comms room", "sw-hq-dist-01"),
     # --- warehouse 1 (CPE router rt-wh1-01, behind the DC head-end rt-wan-01) ---
-    # Path: warehouse switch -> rt-wh1-01 (local CPE) -> rt-wan-01 (DC) -> core.
+    # Path: device -> hall switch -> rt-wh1-01 (local CPE) -> rt-wan-01 -> core.
+    # Only the three hall switches plug into the CPE (a small Lancom has 4-5
+    # LAN ports); the mezzanine switches daisy-chain off hall 1, the packing-
+    # line printers plug into their line's switch, and the comms-room power/
+    # env gear shares hall 1's switch.
     (1, "rt-wh1-{n:02d}", "lancom-router", "net_routers",
      "warehouse 1, comms room", "rt-wan-01"),
     (3, "wh1-sw-{n:02d}", "procurve-2510", "net_switches",
      "warehouse 1, hall {n}", "rt-wh1-01"),
     (2, "wh1-sw-{nn:02d}", "hp-2530", "net_switches",
-     "warehouse 1, mezzanine {n}", "rt-wh1-01"),
+     "warehouse 1, mezzanine {n}", "wh1-sw-01"),
     (4, "wh1-prt-{n:02d}", "printer-zebra", "printers",
-     "warehouse 1, packing line {n}", "rt-wh1-01"),
+     "warehouse 1, packing line {n}", "wh1-sw-{n:02d}"),
     (1, "wh1-ups-{n:02d}", "apc-symmetra", "net_ups",
-     "warehouse 1, comms room", "rt-wh1-01"),
+     "warehouse 1, comms room", "wh1-sw-01"),
     (1, "wh1-pdu-{n:02d}", "raritan-pdu", "net_ups",
-     "warehouse 1, comms room", "rt-wh1-01"),
+     "warehouse 1, comms room", "wh1-sw-01"),
     (1, "wh1-env-{n:02d}", "akcp-sensor", "net_ups",
-     "warehouse 1, comms room", "rt-wh1-01"),
+     "warehouse 1, comms room", "wh1-sw-01"),
     # --- warehouse 2 (CPE router rt-wh2-01, behind the DC head-end rt-wan-01) ---
     (1, "rt-wh2-{n:02d}", "lancom-router", "net_routers",
      "warehouse 2, comms room", "rt-wan-01"),
     (3, "wh2-sw-{n:02d}", "procurve-2510", "net_switches",
      "warehouse 2, hall {n}", "rt-wh2-01"),
     (2, "wh2-sw-{nn:02d}", "hp-2530", "net_switches",
-     "warehouse 2, mezzanine {n}", "rt-wh2-01"),
+     "warehouse 2, mezzanine {n}", "wh2-sw-01"),
     (4, "wh2-prt-{n:02d}", "printer-zebra", "printers",
-     "warehouse 2, packing line {n}", "rt-wh2-01"),
+     "warehouse 2, packing line {n}", "wh2-sw-{n:02d}"),
     (1, "wh2-ups-{n:02d}", "apc-symmetra", "net_ups",
-     "warehouse 2, comms room", "rt-wh2-01"),
+     "warehouse 2, comms room", "wh2-sw-01"),
     (1, "wh2-pdu-{n:02d}", "raritan-pdu", "net_ups",
-     "warehouse 2, comms room", "rt-wh2-01"),
+     "warehouse 2, comms room", "wh2-sw-01"),
     (1, "wh2-env-{n:02d}", "akcp-sensor", "net_ups",
-     "warehouse 2, comms room", "rt-wh2-01"),
+     "warehouse 2, comms room", "wh2-sw-01"),
     # --- internet edge ----------------------------------------------------------
     (1, "rt-inet-{n:02d}", "lancom-router", "net_routers",
      "DC rack A1, internet backup line", "sw-core-01"),
@@ -1023,7 +1041,10 @@ REPLAY_ROSTER: list[tuple[int, str, str, str, str, str | None]] = [
 def build_replay_devices(walklib: str) -> list[ReplayDevice]:
     """Expand the roster. Name patterns share a prefix across models
     ({n} starts at 1, {nn} continues after the previous entry with the same
-    prefix, {nnn} after that) so e.g. pdu-dc-01..08 mixes three models."""
+    prefix, {nnn} after that) so e.g. pdu-dc-01..08 mixes three models.
+    The parent column may also carry a "{n:02d}" pattern — substituted with
+    the SAME running index as the device — for per-instance parents (e.g.
+    floor printer prt-hq-07 -> its floor switch sw-hq-f07)."""
     devices: list[ReplayDevice] = []
     next_index: dict[str, int] = {}
     for count, pattern, model_name, role, loc_pattern, parent in REPLAY_ROSTER:
@@ -1041,7 +1062,8 @@ def build_replay_devices(walklib: str) -> list[ReplayDevice]:
                            .replace("{nn:02d}", f"{n:02d}") \
                            .replace("{nnn:02d}", f"{n:02d}")
             location = loc_pattern.replace("{n}", str(n))
-            devices.append(ReplayDevice(short, model, role, location, parent))
+            parent_n = parent.replace("{n:02d}", f"{n:02d}") if parent else parent
+            devices.append(ReplayDevice(short, model, role, location, parent_n))
         next_index[prefix] = start + count
     return devices
 
