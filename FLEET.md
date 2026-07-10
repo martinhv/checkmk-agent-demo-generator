@@ -33,6 +33,95 @@ genuine company, not a pile of unrelated test boxes.
 | `backup-01` | infra | Ubuntu 24.04 · restic backup host | **steady green** | background — last nightly backup job OK (`mk_job`) |
 | `win-dc-01` | infra | Windows Server 2022 · Active Directory DC | incident | **C: drive filling + a stopped critical service** — the one Windows host, different agent format |
 
+## Company scale — the 300-host estate (`--scale company`)
+
+`./estate.py up --site --scale company` grows the estate to **exactly 300
+monitored hosts**, shaped like a real mid-sized online retailer (researched
+against enterprise fleet surveys, network-architecture sizing guides and
+monitoring-vendor sizing docs — see the composition rationale below). The
+classic roster above stays intact and keeps ALL the incident stories; the
+added ~275 hosts are **steady green** background.
+
+| Layer | Hosts | What it is |
+|---|---|---|
+| Classic roster + shell | 11 | the hand-crafted incident hosts above + the delivery shell |
+| Server fleet (`fleet/`) | 173 | ONE process (`fleet/serve.py`) synthesizes 124 Linux + 49 Windows hosts from declarative profiles (`fleet/profiles.py`) |
+| Synthetic SNMP (`snmp/netsim.py`) | 4 | the classic network layer (core/access switch, WAN router, UPS) with its incidents |
+| Walk-replay SNMP (`snmp/walklib/`) | 112 | anonymized REAL device walks replayed with live counters |
+
+### Server fleet composition (the researched shape)
+
+- **12 physical KVM hypervisors** (`kvm-01..12`, Dell R760, 48 cores/384 GiB)
+  carrying the ~160 VMs at 13.3 VMs/host — each hypervisor's `ps` lists its
+  actual guests as qemu processes (cross-checkable against the VM list).
+- **Shop platform** (Linux): svc-catalog/checkout/order/account/inventory,
+  api-gw, shop-search (Elasticsearch), shop-media, queue (RabbitMQ), cache
+  (memcached) — a 2026-credible microservice stack around the classic
+  payment-api story.
+- **Kubernetes**: 3 control-plane + 18 workers (the platform under the
+  microservices).
+- **Back office**: ERP app+DB (MariaDB), BI (Metabase + PostgreSQL warehouse),
+  WMS app+DB, staging copies of the platform (short uptimes — staging gets
+  rebuilt), CI (GitLab + 6 runners + registry), dev sandboxes.
+- **Shared infra** (Linux): DNS, egress proxy, LDAP, VPN, bastion, SFTP, APT
+  mirror, log cluster (OpenSearch), the Checkmk server itself
+  (`monitoring-01`), AWX, Vault, chrony NTP.
+- **Windows (~40 %)**: 2 extra DCs, file/print, 8 RDS session hosts, 5 MSSQL,
+  22 IIS LOB app servers, Dynamics BC (ERP finance), WSUS, PKI, Veeam
+  (physical).
+- **Warehouse edge**: 3 Linux scanner-gateway servers + 1 Windows warehouse
+  control system per fulfillment center.
+
+DB fleet hosts run their engines as *processes only* (no mk_postgres/mysql
+plugin sections) — realistic for boxes where the plugin simply isn't deployed,
+and it keeps the section surface honest.
+
+### SNMP device fleet (replayed real walks, anonymized)
+
+Curated by `snmp/curate_walks.py` from `~/git/zeug_cmk/walks` into
+`snmp/walklib/` — identifying subtrees stripped (LLDP/CDP neighbors, ARP/
+routes, bridge FDBs, RMON, process tables), sysName/contact/location/ifAlias/
+serials/MACs rewritten, IPs remapped, org-specific tokens renamed; the string
+audit (`--audit`) reviews everything that remains. netsim replays each model
+per instance: own identity, advancing uptime, and interface counters whose
+rate derives from the RECORDED counter over the RECORDED uptime (busy ports
+stay busy, dead ports stay dead), wobbled and restart-persisted.
+
+- **DC fabric**: 6 Aruba 6200F + 2 Huawei CloudEngine ToR, 2 HP 5406R
+  distribution, Fortigate HA pair + ASA DMZ firewall, 2 Kemp load balancers,
+  internet-edge router.
+- **HQ**: 14 access switches (Aruba 2930F / HP 2530), 2 Extreme WLCs, 12
+  office printers (Ricoh/Canon), UPS + PDUs + room sensor.
+- **Warehouses ×2**: 5 access switches each (ProCurve/HP), 4 Zebra label
+  printers each, UPS/PDU/AKCP sensor each, warehouse 2 behind its own
+  `rt-wan-02` (Lancom).
+- **DC power/environment**: 3 APC Symmetra UPS, 8 rack PDUs (APC NetShelter,
+  Raritan, Gude), 8 environment sensors (AKCP, AVTECH).
+- **Storage & OOB**: 2 Synology NAS, 2 Brocade FC SAN switches, 16 Dell iDRACs
+  (one per physical box + spares), Meinberg LANTIME GPS NTP appliance.
+
+### Topology
+
+`sw-core-01` remains the root. DC/HQ devices and servers hang off it;
+warehouse-1 gear behind `rt-wan-01` (which keeps its saturation incident),
+warehouse-2 gear behind the replayed `rt-wan-02`. Every parent is applied as
+the Checkmk `parents` attribute, so RCA has a real path to reason over.
+
+### Why these numbers read as real (research summary)
+
+- ~55-60 % of monitored hosts are servers, and 70-80 % of servers are VMs at
+  12-15 VMs per hypervisor (enterprise virtualization surveys).
+- Windows holds ~40 % of the server fleet (AD/file/RDS/MSSQL/LOB inertia),
+  Linux the rest (the retailer's own platform).
+- Network is 3-tier (core → distribution/ToR → access) with ~20 access
+  switches per campus + firewall HA pairs + WLC pairs; APs are managed by the
+  WLCs, not monitored individually.
+- Power chain per rack (PDU) + per room (UPS, sensors) is SNMP-monitored —
+  its absence is a "fake estate" tell.
+- Printers: ~1 monitored office printer per 10-15 HQ staff + label printers
+  per packing line.
+- Out-of-band boards (iDRAC) exist for every physical box.
+
 ## Port map (publish on `127.0.0.1`)
 
 Each host listens on a distinct pair so the whole estate can run at once.

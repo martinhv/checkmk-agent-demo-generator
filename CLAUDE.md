@@ -101,6 +101,112 @@ Diff any fake host against a real 2.5 Linux agent dump (Ubuntu 24.04, OMD/site s
 - **`postgres_bloat:sep(59)`** completes the mk_postgres family (header `db;schemaname;tablename;tups;…;totalwastedbytes`, instance marker + db list like the other sections); defaults alert at bloat factor 180/200 %, healthy tables sit at 1.1–1.6.
 - Ubuntu 24.04 `/proc/meminfo` has **58 keys** incl. `Zswap`, `Zswapped`, `Unaccepted`, `Balloon`, `DirectMap4k/2M/1G` — match the key set exactly.
 
+## Scaling to the 300-host company (`fleet/` + `snmp/walklib/`)
+
+`--scale company` = the classic roster + ~170 synthesized servers + ~110 SNMP
+devices replayed from real walks. Composition is research-backed (FLEET.md).
+
+### Server fleet: ONE process, declarative profiles
+
+Never one process per host at this scale (170 × ~25 MB Python = gone).
+`fleet/serve.py` builds every host's agent output on demand from
+`fleet/profiles.py` (role, hw, processes, units/services); the shell fetches
+per host over HTTP (`/agent/<short>`) and delivers as usual (files or
+piggyback). Per-instance variation is seeded from the host name
+(`random.Random(f"{short}:fleet-v1")`) — uptime, load jitter, MAC, serials,
+UUID differ per instance AND are stable across restarts; counters persist in
+one shared state file. The Linux builder is web-frontend-01 parametrized, the
+Windows builder win-dc-01's healthy path — all CLAUDE.md parity rules apply
+automatically to every instance. Fleet DB hosts run their engine as a
+*process only* (no mk_postgres/mysql sections): "plugin not deployed" is
+realistic and cheap. Cross-ref realism: VMs are round-robined onto the
+`kvm-*` hypervisors and each hypervisor's ps lists its actual guests as
+qemu processes (name + memory match the guest profile); hypervisor AnonPages
+is derived from the guest RSS sum, not a static fraction.
+
+### SNMP walk replay (`snmp/curate_walks.py` -> `walklib/` -> netsim)
+
+Real walks are the cheapest realism (real ENTITY trees, sensors, firmware
+strings) — replay them instead of synthesizing more vendors. Mechanics:
+
+- **Load once per model into a segment template** (static text chunks +
+  sparse dynamic slots); instances render identity (sysName/Location),
+  advancing sysUpTime/hrSystemUptime, and counters. 112 devices render in
+  <0.5 s. TimeTicks trap: some walks store uptime as `d:hh:mm:ss.cc`, not
+  raw ticks — parse both.
+- **Counter rates from the recording**: rate = recorded value / recorded
+  uptime → busy ports stay busy, dead ports stay dead, totals stay plausible
+  against the uptime. Only octets + ucast (32-bit AND HC columns driven by
+  the SAME accumulator, 32-bit emitted mod 2^32); errors/discards stay frozen
+  (rate 0 = green). hrProcessorLoad gets a gentle wobble; everything else is
+  served as recorded.
+- netsim runs as the site user from a /var/tmp copy → estate.py must also
+  copy `walklib/` somewhere world-readable and pass `--walklib` (the repo
+  home is 0750).
+
+### Anonymizing real walks (MANDATORY for zeug_cmk data)
+
+Strip + rewrite at curation time so the checked-in walklib is already clean;
+the audit (`curate_walks.py --audit`) prints every surviving string value for
+review. What actually leaked in practice (all found by the audit):
+
+- **sysName recurs inside other values** (sysDescr, Kemp/Synology "Linux
+  <host> ..." kernel strings) → scrub the recorded sysName everywhere, not
+  just OID .1.5.0.
+- **Neighbor/client tables**: LLDP/CDP, ARP/routes, bridge FDBs — and the
+  non-obvious ones: Aruba CX 802.1X client tables (Kerberos principals
+  `host/NB007.<org>.com` + client MACs in the OID index!), Brocade swEvent
+  logs (login lines with real admin workstation FQDNs).
+- **Org tokens in names**: AP names/SSIDs on the WLC carry site codes,
+  HP/ProCurve config tables carry the org's switch-naming scheme, firewall
+  cluster/VPN names carry site abbreviations → per-model regex subs with
+  deterministic renaming (`{h}` hash keeps distinct names distinct).
+- **Serials hide in strings**: APC puts `SN: xxx` inside sysDescr, Fortigate
+  `Serial#: xxx` in a version string — OID-based serial rewriting alone is
+  not enough, regex the values too.
+- **Oddballs**: Meinberg exposes the admin's NAME and the site's GPS
+  COORDINATES in its enterprise tree; Synology's kernel cmdline embeds the
+  real NIC MACs (`mac1=...`).
+- IPv4 values are remapped deterministically into 10.77.0.0/16 with
+  lookarounds so dotted OID-valued strings survive.
+
+Trimming the privacy trees is also a 60-75 % size cut (RMON alone was half
+the Aruba walk). Never read checks from `.2.1.4/.5/.6/.7/.10/.14/.15/.16/
+.17/.25.4-6/.26` — verified unused by cmk plugins before stripping.
+
+### The green pass: real walks alert (and pend!) out of the box
+
+Real devices were recorded in real states — deploy, list every non-OK
+service, then fix values per model (`set`/`strip` in curate_walks.py).
+What one round of 24 models actually needed:
+
+- **Recorded alerts**: HP switch CPU at 94 % (CRIT at 80/90), unpowered aux
+  PSU slots (state 9 -> CRIT), empty printer toners + active prtAlert tables,
+  ASA mempools at 95/100 % (normal for an ASA, red for cmk), AKCP dry contact
+  in error state, Meinberg GPS antenna disconnected + 90 % flash, iDRAC OS
+  volume at 85 %.
+- **Recorded timestamps age forever**: Fortigate AV/IPS signature ages go
+  CRIT-old permanently -> strip the section; the APC last-self-test date must
+  be rendered dynamically (netsim `apcdate`) or the service is UNKNOWN.
+- **Static counters don't just flatten graphs — they PEND services forever.**
+  `ucd_cpu_util` raises IgnoreResults on a zero jiffie delta EVERY cycle, so
+  a static UCD CPU counter means the service never leaves PEND (staleness
+  shows the never-checked sentinel, output empty). Dynamize `.2021.11.50-66`
+  like the if-counters. Same symptom, different cause: `synology_update`
+  status 3 ("Connecting") makes the check yield NOTHING -> pends forever;
+  set the recorded status to 2.
+- **Defaults that WARN on absent hardware**: raritan_px2 residual current
+  WARNs when the PDU has no such sensors (warn_missing_data=True default) —
+  tune via one estate-folder rule (cmk_setup), like a real admin would.
+- **Upstream bugs surface**: `parse_apc_symmetra_output` crashes on the
+  3.0.0 dev branch (ElPhase.from_dict re-parses ReadingWithState ->
+  TypeError, from c1802b42504) — output-phase rows removed from BOTH the
+  replay walk and the synthetic UPS until fixed upstream.
+
+Verification loop: `estate.py up --force` after service-set changes (the
+per-host discovery skip would otherwise keep stale service sets), plain
+netsim restart for pure value changes.
+
 ## Deploying the estate to a site (`estate.py` + `deploy/cmk_setup.py`)
 
 `estate.py` is the one-command entry (`up`/`down`/`replace`/`status`/`break|degrade|heal`). It runs the delivery shell (`deploy/piggyback/serve.py`, which spawns every `hosts/*/serve.py` as an internal TCP child + a combined `/admin` panel on :8099), optionally the SNMP renderer (`snmp/netsim.py`, :8101), then delegates all Checkmk REST wiring to `deploy/cmk_setup.py` (folder tree → hosts → rules → BI pack → discovery → activation; `--remove` tears down). Everything is stdlib + REST (urllib, no redirect-following so async runs can be polled).

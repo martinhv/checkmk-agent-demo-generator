@@ -96,7 +96,13 @@ import urllib.request
 #   v3: datasource delivery (cat program) for self-hosted + hosts sorted into a
 #       role-based subfolder tree; the datasource command and per-host folder
 #       are now part of the fingerprint.
-SCHEMA_VERSION = 3
+#   v4: the 300-host company estate — fleet hosts + SNMP walk-replay devices,
+#       roles delivered by the panels, per-device SNMP parents, new taxonomy
+#       folders (Firewalls, Load balancers, Wireless, Printers, OOB mgmt,
+#       Hypervisors), bulk discovery.
+#   v5: replay-walk green pass — fortigate signatures/apc output-phase/printer
+#       alert sections dropped, residual-current rule for the Raritan PDUs.
+SCHEMA_VERSION = 5
 
 # Host label on the delivery shell holding the last-activated estate
 # fingerprint. Lives on the site (survives across `estate.py up` runs) and is
@@ -108,6 +114,8 @@ BI_RULE_DESCRIPTION = "Meridian Retail demo: payments platform business service"
 SNMP_RULE_DESCRIPTION = "Meridian Retail demo: stored SNMP walks (snmp/netsim.py)"
 DATASOURCE_RULE_DESCRIPTION = (
     "Meridian Retail demo: agent output via datasource program (cat $HOSTNAME$)")
+RESIDUAL_RULE_DESCRIPTION = (
+    "Meridian Retail demo: PDUs without residual-current sensors stay OK")
 
 # --- Folder taxonomy --------------------------------------------------------
 # Hosts are sorted into a role-based subfolder tree under the estate root so
@@ -120,9 +128,16 @@ FOLDER_TAXONOMY: dict[str, list[tuple[str, str]]] = {
     "databases":      [("databases", "Databases")],
     "storage":        [("storage", "Storage")],
     "infrastructure": [("infrastructure", "Infrastructure")],
+    "virtualization": [("virtualization", "Hypervisors")],
     "windows":        [("windows", "Windows servers")],
+    "printers":       [("printers", "Printers")],
+    "mgmt":           [("oob", "Out-of-band management")],
     "net_switches":   [("network", "Network"), ("switches", "Switches")],
     "net_routers":    [("network", "Network"), ("routers", "Routers & WAN")],
+    "net_firewalls":  [("network", "Network"), ("firewalls", "Firewalls")],
+    "net_loadbalancers": [("network", "Network"),
+                          ("loadbalancers", "Load balancers")],
+    "net_wifi":       [("network", "Network"), ("wireless", "Wireless")],
     "net_ups":        [("network", "Network"), ("ups", "UPS & power")],
     "network":        [("network", "Network")],
 }
@@ -140,6 +155,15 @@ def _agent_role(short: str) -> str:
         if short.startswith(prefix):
             return role
     return "infrastructure"
+
+
+def _host_role(h: dict) -> str:
+    """Panel-delivered role (fleet hosts / netsim devices carry one) with the
+    short-name prefix table as fallback for the classic roster."""
+    role = h.get("role")
+    if role in FOLDER_TAXONOMY:
+        return role
+    return _agent_role(h["name"])
 
 
 def _snmp_role(short: str) -> str:
@@ -562,6 +586,42 @@ def ensure_datasource_rule(api: CmkApi, root_ident: str,
     print(f"  created datasource program rule ({command!r})")
 
 
+def ensure_residual_current_rule(api: CmkApi, root_ident: str) -> None:
+    """The raritan_px2 residual-current check WARNs by default when a PDU has
+    no residual-current sensors at all (warn_missing_data=True) — the replayed
+    Raritan model legitimately lacks them, so tune the default off for the
+    estate folder, exactly like a real admin would."""
+    value = {"warn_missing_data": False, "warn_missing_levels": False}
+    root_segs = _folder_segs(root_ident)
+    for rule, _hosts in _marked_rules(api, "checkgroup_parameters:residual_current",
+                                      RESIDUAL_RULE_DESCRIPTION):
+        if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
+            print("  residual-current rule exists")
+            return
+    status, payload, _ = api.request(
+        "POST", "/domain-types/rule/collections/all",
+        body={
+            "ruleset": "checkgroup_parameters:residual_current",
+            "folder": root_ident,
+            "properties": {"description": RESIDUAL_RULE_DESCRIPTION,
+                           "disabled": False},
+            "value_raw": repr(value),
+            "conditions": {},
+        })
+    if status != 200:
+        api_error("creating the residual-current rule", status, payload)
+    print("  created residual-current rule")
+
+
+def delete_residual_current_rule(api: CmkApi, root_ident: str) -> None:
+    root_segs = _folder_segs(root_ident)
+    for rule, _hosts in _marked_rules(api, "checkgroup_parameters:residual_current",
+                                      RESIDUAL_RULE_DESCRIPTION):
+        if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
+            api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
+            print("  deleted residual-current rule")
+
+
 def delete_datasource_rule(api: CmkApi, root_ident: str) -> None:
     root_segs = _folder_segs(root_ident)
     for rule, _hosts in _marked_rules(api, "datasource_programs",
@@ -598,17 +658,26 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace,
 
     core_fqdn = next((d["fqdn"] for s, d in devices.items()
                       if s.startswith("sw-core")), None)
+    fqdn_of = {s: d["fqdn"] for s, d in devices.items()}
+    # devices referenced as someone's parent (campus core, WAN routers) must
+    # exist before their children name them in the parents attribute
+    referenced = {d.get("parent") for d in devices.values() if d.get("parent")}
+    order = sorted(devices.items(),
+                   key=lambda kv: (not kv[0].startswith("sw-core"),
+                                   kv[0] not in referenced, kv[0]))
     fqdns = []
-    for short, dev in sorted(devices.items(),
-                             key=lambda kv: not kv[0].startswith("sw-core")):
+    for short, dev in order:
         attrs = {
             "tag_snmp_ds": "snmp-v2",
             "tag_agent": "no-agent",
             "tag_address_family": "no-ip",
         }
-        if core_fqdn and dev["fqdn"] != core_fqdn:
-            attrs["parents"] = [core_fqdn]
-        ensure_host(api, dev["fqdn"], leaf_for(_snmp_role(short)), attrs)
+        parent_fqdn = fqdn_of.get(dev.get("parent") or "") or core_fqdn
+        if parent_fqdn and dev["fqdn"] != parent_fqdn:
+            attrs["parents"] = [parent_fqdn]
+        role = dev.get("role") if dev.get("role") in FOLDER_TAXONOMY \
+            else _snmp_role(short)
+        ensure_host(api, dev["fqdn"], leaf_for(role), attrs)
         fqdns.append(dev["fqdn"])
     ensure_usewalk_rule(api, fqdns)
     return fqdns
@@ -630,19 +699,27 @@ def _planned_snmp(args: argparse.Namespace) -> list[tuple[str, str | None]]:
     devices = info["devices"]
     core = next((d["fqdn"] for s, d in devices.items()
                  if s.startswith("sw-core")), None)
-    return [(d["fqdn"], core if core and d["fqdn"] != core else None)
-            for d in devices.values()]
+    fqdn_of = {s: d["fqdn"] for s, d in devices.items()}
+    out = []
+    for d in devices.values():
+        parent = fqdn_of.get(d.get("parent") or "") or core
+        out.append((d["fqdn"], parent if parent != d["fqdn"] else None,
+                    d.get("role")))
+    return out
 
 
 def snmp_teardown_names(args: argparse.Namespace) -> list[str]:
     info = panel_get(args.snmp_panel, optional=True)
     if not info or "devices" not in info:
         return []
-    # children first: the campus core is everyone's parent, so it must be
-    # deleted last or Checkmk refuses while the references exist
-    devs = sorted(info["devices"].values(),
-                  key=lambda d: d["fqdn"].startswith("sw-core"))
-    return [d["fqdn"] for d in devs]
+    # children first: any device referenced as a parent (campus core, the WAN
+    # routers) must be deleted after its children, the core last of all
+    devices = info["devices"]
+    referenced = {d.get("parent") for d in devices.values() if d.get("parent")}
+    devs = sorted(devices.items(),
+                  key=lambda kv: (kv[0] in referenced,
+                                  kv[0].startswith("sw-core")))
+    return [d["fqdn"] for _, d in devs]
 
 
 # --------------------------------------------------------------------------- #
@@ -833,6 +910,51 @@ def discover(api: CmkApi, host: str, timeout: float = 180.0, *,
     print(f"  discovered {host}")
 
 
+def bulk_discover(api: CmkApi, hostnames: list[str],
+                  timeout: float = 3600.0) -> None:
+    """One background bulk-discovery job for many hosts — the per-host REST
+    round-trip (~2-4 s each) would take ~20 min for a 300-host estate; the
+    bulk job scans `bulk_size` hosts per worker batch server-side. The options
+    mirror discover()'s refresh+fix_all (accept everything found)."""
+    status, payload, headers = api.request(
+        "POST", "/domain-types/discovery_run/actions/bulk-discovery-start/invoke",
+        body={
+            "hostnames": hostnames,
+            "options": {
+                "monitor_undecided_services": True,
+                "remove_vanished_services": True,
+                "update_service_labels": True,
+                "update_service_parameters": True,
+                "update_host_labels": True,
+            },
+            "do_full_scan": True,
+            "bulk_size": 10,
+            "ignore_errors": True,
+        })
+    if status not in (200, 303):
+        api_error("starting bulk discovery", status, payload)
+    # the job id is random (bulk_discovery-<id>) — it's only in the redirect
+    location = headers.get("Location") or headers.get("location") or ""
+    job_id = location.rstrip("/").rsplit("/", 1)[-1] or "bulk_discovery"
+    deadline = time.time() + timeout
+    last_print = 0.0
+    while time.time() < deadline:
+        status, payload, _ = api.request(
+            "GET", f"/objects/background_job/{job_id}")
+        ext = (payload or {}).get("extensions") or {}
+        if status == 200 and not ext.get("active", True):
+            state = (ext.get("status") or {}).get("state")
+            print(f"  bulk discovery finished ({len(hostnames)} hosts, "
+                  f"state {state})")
+            return
+        if time.time() - last_print > 30:
+            print(f"  ... bulk discovery running ({len(hostnames)} hosts, "
+                  f"job {job_id})")
+            last_print = time.time()
+        time.sleep(5)
+    die("bulk discovery did not finish in time")
+
+
 def activate(api: CmkApi, force_foreign: bool, timeout: float = 120.0) -> None:
     status, payload, _ = api.request(
         "POST", "/domain-types/activation_run/actions/activate-changes/invoke",
@@ -874,17 +996,19 @@ def _estate_fingerprint(args: argparse.Namespace, delivery: str,
     deliberately absent (they change every poll but never the service set)."""
     datasource = args.mode == "self-hosted"
     carried_fqdns = {h["fqdn"] for h in hosts}
-    parent_ok = carried_fqdns | {f for f, _ in snmp_plan}
+    parent_ok = carried_fqdns | {f for f, _, _ in snmp_plan}
     # (fqdn, effective parent, role/subfolder) — folder moves change the config
     host_rows = sorted(
         [h["fqdn"], h["parent"] if h.get("parent") in parent_ok else None,
-         _agent_role(h["name"])]
+         _host_role(h)]
         for h in hosts)
-    snmp_rows = sorted([f, p, _snmp_role(f.split(".")[0])] for f, p in snmp_plan)
+    snmp_rows = sorted(
+        [f, p, r if r in FOLDER_TAXONOMY else _snmp_role(f.split(".")[0])]
+        for f, p, r in snmp_plan)
     # applicable BI tiers — same "tier present iff a leaf host exists" filter
     # as ensure_bi_pack, so a scaled-down subset changes the fingerprint
     fqdn_by_short = {h["name"]: h["fqdn"] for h in hosts}
-    fqdn_by_short.update({f.split(".")[0]: f for f, _ in snmp_plan})
+    fqdn_by_short.update({f.split(".")[0]: f for f, _, _ in snmp_plan})
     tiers = sorted(rid for rid, _, leaves in BI_TIERS
                    if any(short in fqdn_by_short for short, _ in leaves))
     canon = {
@@ -1005,6 +1129,7 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
     if args.snmp != "off":
         print("* creating the SNMP network devices (stored walks)")
         snmp_fqdns = setup_snmp(api, args, leaf_for)
+        ensure_residual_current_rule(api, root_ident)
 
     parent_ok = carried_fqdns | set(snmp_fqdns)
     for h in hosts:
@@ -1030,7 +1155,7 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
         # the SNMP layer the servers simply have no parent)
         if h.get("parent") in parent_ok:
             attrs["parents"] = [h["parent"]]
-        ensure_host(api, h["fqdn"], leaf_for(_agent_role(h["name"])), attrs)
+        ensure_host(api, h["fqdn"], leaf_for(_host_role(h)), attrs)
     prune_subtree(api, root_ident,
                   {delivery} | carried_fqdns | set(snmp_fqdns))
 
@@ -1052,10 +1177,20 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
     # only pays for that one host (--force rescans everything).
     skip = not args.force
     discover(api, delivery, allow_skip=False)
-    for h in hosts:
-        discover(api, h["fqdn"], allow_skip=skip)
-    for fqdn in snmp_fqdns:
-        discover(api, fqdn, allow_skip=skip)
+    pending: list[str] = []
+    for fqdn in [h["fqdn"] for h in hosts] + snmp_fqdns:
+        if skip and _monitored_service_count(api, fqdn):
+            continue
+        pending.append(fqdn)
+    already = len(hosts) + len(snmp_fqdns) - len(pending)
+    if already:
+        print(f"  {already} hosts already discovered — skipped")
+    if len(pending) >= 10:
+        # big estates: one server-side bulk job instead of per-host REST calls
+        bulk_discover(api, pending)
+    else:
+        for fqdn in pending:
+            discover(api, fqdn, allow_skip=False)
 
     print("* activating changes")
     activate(api, args.force_foreign)
@@ -1107,6 +1242,7 @@ def teardown(api: CmkApi, args: argparse.Namespace) -> None:
     _delete_marked_rules(api, "usewalk_hosts", SNMP_RULE_DESCRIPTION, set(names))
     _delete_marked_rules(api, "special_agents:bi", BI_RULE_DESCRIPTION, set(names))
     delete_datasource_rule(api, folder_ident(args.folder))
+    delete_residual_current_rule(api, folder_ident(args.folder))
     for name in names:
         status, _, _ = api.request("DELETE", f"/objects/host_config/{name}", etag="*")
         if status == 204:

@@ -38,6 +38,7 @@ time); `down` removes all of it.
 | `minimal` | the two classic demos: `payment-api` + `db-postgres-01` |
 | `standard` | the full agent estate: 10 server hosts + BI pack |
 | `full` *(default)* | standard + SNMP network gear via stored walks |
+| `company` | the researched **300-host company**: full + ~170 steady-green servers (`fleet/`, one process) + ~110 SNMP devices replayed from anonymized real walks (`snmp/walklib/`) — see `FLEET.md` |
 
 `--replicas N` stamps out every replicable host class N times
 (`web-frontend-02` …, extra SNMP access switches) — steady-green copies for
@@ -51,7 +52,8 @@ control panels: **:8099/admin** (servers), **:8101/admin** (network).
 | `estate.py` | the CLI — orchestrates everything below |
 | `deploy/` | deployment machinery: `cmk_setup.py` (REST-API site setup/teardown engine, also usable standalone) and `piggyback/` (ONE container that runs every agent host and delivers them as piggyback — agent :6559) |
 | `hosts/` | the agent-based simulators, one dir per host (`serve.py` + Dockerfile + README with the demo choreography) — each still runs standalone via its own `docker compose` |
-| `snmp/` | the SNMP simulator: `netsim.py` renders stored SNMP walk files into the site every 30 s (rule "Simulating SNMP by using a stored SNMP walk"); real if64/cisco/apc plugins, live graphs, no SNMP stack |
+| `fleet/` | the company-scale server bulk: `profiles.py` (declarative roster, ~170 Linux/Windows hosts on 12 KVM hypervisors) + `serve.py` (ONE process synthesizing every agent output) |
+| `snmp/` | the SNMP simulator: `netsim.py` renders stored SNMP walk files into the site every 30 s (rule "Simulating SNMP by using a stored SNMP walk"); real if64/cisco/apc plugins, live graphs, no SNMP stack. `walklib/` holds ~24 anonymized real device walks (made by `curate_walks.py`) that netsim replays as ~110 estate devices |
 | `CLAUDE.md` | the engineering knowledge base (see below) |
 | `FLEET.md` | the company story, host roster, topology, port map |
 

@@ -330,6 +330,8 @@ class Device:
     sys_objectid: str = ""
     location: str = ""
     incident = False
+    role: str = "network"            # folder-taxonomy key (deploy/cmk_setup.py)
+    parent: str | None = "sw-core-01"  # short name of the upstream device
     tagline_effects: dict[str, list[str]] = {}
 
     def __init__(self) -> None:
@@ -436,6 +438,8 @@ class SwCore(Device):
     sys_objectid = ".1.3.6.1.4.1.9.1.2494"
     location = "office comms room, floor 1"
     incident = False
+    role = "net_switches"
+    parent = None
 
     def __init__(self) -> None:
         super().__init__()
@@ -495,6 +499,7 @@ class SwAccess(Device):
                  "(CAT9K_LITE_IOSXE), Version 17.3.4, RELEASE SOFTWARE (fc2), "
                  "Copyright (c) 1986-2021 by Cisco Systems, Inc.")
     sys_objectid = ".1.3.6.1.4.1.9.1.2695"
+    role = "net_switches"
 
     def __init__(self, num: int = 1) -> None:
         self.short = f"sw-access-{num:02d}"
@@ -595,6 +600,7 @@ class RtWan(Device):
     sys_objectid = ".1.3.6.1.4.1.9.1.1639"
     location = "DC rack A2"
     incident = True
+    role = "net_routers"
 
     def __init__(self) -> None:
         super().__init__()
@@ -667,6 +673,7 @@ class Ups(Device):
     sys_objectid = ".1.3.6.1.4.1.318.1.3.27"
     location = "DC rack A2, bottom"
     incident = False
+    role = "net_ups"
 
     def rows(self, now: float) -> list[tuple[str, str]]:
         # apc_symmetra family (detect: sysObjectID startswith .1.3.6.1.4.1.318;
@@ -702,9 +709,10 @@ class Ups(Device):
             (".1.3.6.1.4.1.318.1.1.1.2.2.9.0", str(amps)),
             (".1.3.6.1.4.1.318.1.1.1.3.2.1.0", str(volt_in)),
             (".1.3.6.1.4.1.318.1.1.1.4.1.1.0", "2"),      # output: onLine
-            (".1.3.6.1.4.1.318.1.1.1.4.2.1.0", str(volt_out)),
-            (".1.3.6.1.4.1.318.1.1.1.4.2.3.0", str(load)),
-            (".1.3.6.1.4.1.318.1.1.1.4.2.4.0", str(amps)),
+            # output-phase rows (.4.2.1/.4.2.3/.4.2.4) intentionally absent:
+            # parse_apc_symmetra_output crashes on the 3.0.0 dev branch
+            # (ElPhase.from_dict re-parses ReadingWithState -> TypeError,
+            # introduced in c1802b42504) — restore once fixed upstream
             (".1.3.6.1.4.1.318.1.1.1.7.2.3.0", "1"),      # self test: ok
             (".1.3.6.1.4.1.318.1.1.1.7.2.4.0", diag),
             (".1.3.6.1.4.1.318.1.1.1.7.2.6.0", "1"),      # calibration: ok
@@ -712,6 +720,317 @@ class Ups(Device):
             (".1.3.6.1.4.1.318.1.1.1.11.1.1.0", state_bits),
         ]
         return rows
+
+
+# --------------------------------------------------------------------------- #
+#  Replay layer: anonymized REAL walks (snmp/walklib/, made by curate_walks.py)
+#  replayed as additional estate devices. A walk file is loaded ONCE per model
+#  into a segment template (static text chunks + sparse dynamic slots), then
+#  each instance renders with its own identity (sysName/Location), advancing
+#  uptime, and live interface counters whose base rate is derived from the
+#  RECORDED counter value over the RECORDED uptime — so a busy recorded port
+#  stays busy and a dead one stays dead. Error/discard counters stay frozen
+#  (rate 0 -> the interface checks stay green). Everything else is served
+#  exactly as recorded: real device values are the realism.
+# --------------------------------------------------------------------------- #
+_UPTIME_OID = ".1.3.6.1.2.1.1.3.0"
+_HRUPTIME_OID = ".1.3.6.1.2.1.25.1.1.0"
+# ifTable 32-bit + ifXTable 64-bit counter columns -> logical counter key
+_IF32 = {"10": "ifin", "11": "ifinu", "16": "ifout", "17": "ifoutu"}
+_IFHC = {"6": "ifin", "7": "ifinu", "10": "ifout", "11": "ifoutu"}
+_HRCPU_PREFIX = ".1.3.6.1.2.1.25.3.3.1.2."
+_PAGES_PREFIX = ".1.3.6.1.2.1.43.10.2.1.4."
+_HP_CPU_OID = ".1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0"   # hpSwitchCpuStat (%)
+_APC_DIAG_DATE_OID = ".1.3.6.1.4.1.318.1.1.1.7.2.4.0"  # last self test (M/D/Y)
+
+
+def _ticks(value: str) -> int:
+    """TimeTicks in either raw-int or human 'd:hh:mm:ss.cc' walk format."""
+    value = value.strip()
+    if value.isdigit():
+        return int(value)
+    parts = value.split(":")
+    if len(parts) == 4:
+        d, h, m = (int(p) for p in parts[:3])
+        s = float(parts[3])
+        return int((((d * 24 + h) * 60 + m) * 60 + s) * 100)
+    return 0
+
+
+class ReplayModel:
+    """One parsed walk file, shared by all its instances."""
+
+    _cache: dict[str, "ReplayModel"] = {}
+
+    @classmethod
+    def load(cls, name: str, walklib: str) -> "ReplayModel":
+        if name not in cls._cache:
+            cls._cache[name] = cls(name, os.path.join(walklib, f"{name}.walk"))
+        return cls._cache[name]
+
+    def __init__(self, name: str, path: str) -> None:
+        self.name = name
+        # segments: static text blocks interleaved with dynamic slots
+        # slot = (kind, oid, key, recorded_int)
+        self.segments: list[str | tuple] = []
+        self.rates: dict[str, float] = {}      # counter key -> base rate/s
+        self.uptime_rec = 90 * 86400           # seconds, fallback
+
+        rows: list[tuple[str, str]] = []
+        with open(path) as f:
+            for line in f:
+                oid, _, value = line.rstrip("\n").partition(" ")
+                rows.append((oid, value))
+        for oid, value in rows:
+            if oid == _UPTIME_OID:
+                self.uptime_rec = max(7 * 86400, _ticks(value) / 100.0)
+
+        static: list[str] = []
+
+        def flush() -> None:
+            if static:
+                self.segments.append("".join(static))
+                static.clear()
+
+        for oid, value in rows:
+            slot = self._classify(oid, value)
+            if slot is None:
+                static.append(f"{oid} {value}\n")
+            else:
+                flush()
+                self.segments.append(slot)
+        flush()
+
+    def _classify(self, oid: str, value: str) -> tuple | None:
+        if oid == ".1.3.6.1.2.1.1.5.0":
+            return ("sysname", oid, None, 0)
+        if oid == ".1.3.6.1.2.1.1.6.0":
+            return ("syslocation", oid, None, 0)
+        if oid in (_UPTIME_OID, _HRUPTIME_OID):
+            return ("uptime", oid, None, _ticks(value))
+        if oid == _HP_CPU_OID and value.isdigit():
+            return ("hrcpu", oid, "hp", int(value))
+        # UCD ssCpuRaw*/ssIORaw* jiffie counters: if these stay static, the
+        # ucd_cpu_util check raises IgnoreResults on the zero jiffie delta
+        # EVERY cycle and the service pends forever — advance them at the
+        # recorded average so the recorded utilization ratio is preserved
+        if oid.startswith(".1.3.6.1.4.1.2021.11.") and value.isdigit():
+            col = oid.split(".")[-2]
+            if col.isdigit() and 50 <= int(col) <= 66:
+                key = f"ucd.{col}"
+                self._note_rate(key, int(value))
+                return ("ctr32", oid, key, int(value))
+        if oid == _APC_DIAG_DATE_OID:
+            # a static date would age into the self-test levels eventually —
+            # render "~5 weeks ago" dynamically like the synthetic UPS does
+            return ("apcdate", oid, None, 0)
+        parts = oid.rsplit(".", 1)
+        if oid.startswith(".1.3.6.1.2.1.2.2.1."):
+            col, index = oid.split(".")[-2], parts[1]
+            if col in _IF32 and value.isdigit():
+                key = f"{_IF32[col]}.{index}"
+                self._note_rate(key, int(value))
+                return ("ctr32", oid, key, int(value))
+        if oid.startswith(".1.3.6.1.2.1.31.1.1.1."):
+            col, index = oid.split(".")[-2], parts[1]
+            if col in _IFHC and value.isdigit():
+                key = f"{_IFHC[col]}.{index}"
+                self._note_rate(key, int(value))
+                return ("ctr64", oid, key, int(value))
+        if oid.startswith(_HRCPU_PREFIX) and value.isdigit():
+            return ("hrcpu", oid, oid[len(_HRCPU_PREFIX):], int(value))
+        if oid.startswith(_PAGES_PREFIX) and value.isdigit():
+            key = f"pages.{oid[len(_PAGES_PREFIX):]}"
+            self._note_rate(key, int(value))
+            return ("ctr32", oid, key, int(value))
+        return None
+
+    def _note_rate(self, key: str, recorded: int) -> None:
+        # base rate: the average the REAL device sustained over its recorded
+        # uptime (32-bit wraps make this an underestimate — fine, stays green)
+        cap = 25e6 if "if" in key and key.split(".")[0].endswith("in") else 25e6
+        rate = min(cap, recorded / self.uptime_rec)
+        prev = self.rates.get(key)
+        self.rates[key] = max(prev, rate) if prev is not None else rate
+
+
+class ReplayDevice(Device):
+    """One estate instance of a replayed walk model."""
+
+    incident = False
+
+    def __init__(self, short: str, model: ReplayModel, role: str,
+                 location: str, parent: str | None) -> None:
+        self.short = short
+        self.role = role
+        self.location = location
+        self.parent = parent
+        self.model = model
+        super().__init__()
+        rnd = random.Random(f"{short}:replay-v1")
+        self.rate_jit = rnd.uniform(0.7, 1.3)
+        self.uptime_extra = rnd.uniform(0, 120) * 86400   # instances differ
+        self.phase = rnd.uniform(0, 6.28)
+        self._counters: dict[str, Counter] = {}
+
+    def _counter(self, key: str, recorded: int) -> Counter:
+        c = self._counters.get(key)
+        if c is None:
+            c = Counter(f"{self.short}.{key}", phase=self.phase
+                        + (hash(key) % 63) / 10.0, amp=0.30,
+                        start=float(recorded))
+            self._counters[key] = c
+        return c
+
+    def walk(self, now: float) -> str:
+        elapsed = now - START + self.uptime_extra
+        sampled: dict[str, int] = {}
+        parts: list[str] = []
+        for seg in self.model.segments:
+            if isinstance(seg, str):
+                parts.append(seg)
+                continue
+            kind, oid, key, rec = seg
+            if kind == "sysname":
+                parts.append(f"{oid} {self.fqdn}\n")
+            elif kind == "syslocation":
+                parts.append(f"{oid} {self.location}\n")
+            elif kind == "uptime":
+                parts.append(f"{oid} {int(rec + elapsed * 100) % U32}\n")
+            elif kind == "hrcpu":
+                v = gauge(f"{self.short}.hrcpu.{key}", rec, amp_abs=3.0,
+                          phase=self.phase, period=900)
+                parts.append(f"{oid} {max(1, min(97, int(round(v))))}\n")
+            elif kind == "apcdate":
+                diag = time.strftime("%m/%d/%Y",
+                                     time.localtime(now - 37 * 86400))
+                parts.append(f"{oid} {diag}\n")
+            else:  # ctr32 / ctr64
+                if key not in sampled:
+                    rate = self.model.rates.get(key, 0.0) * self.rate_jit
+                    sampled[key] = self._counter(key, rec).sample(rate)
+                v = sampled[key] % U32 if kind == "ctr32" else sampled[key]
+                parts.append(f"{oid} {v}\n")
+        return "".join(parts)
+
+    def rows(self, now: float) -> list[tuple[str, str]]:  # pragma: no cover
+        raise NotImplementedError("ReplayDevice renders via walk()")
+
+
+# --------------------------------------------------------------------------- #
+#  Replay roster — the SNMP bulk of the 300-host estate (see FLEET.md).
+#  (count, name pattern, model, role, location pattern, parent)
+#  Roles are folder-taxonomy keys consumed by deploy/cmk_setup.py.
+# --------------------------------------------------------------------------- #
+REPLAY_ROSTER: list[tuple[int, str, str, str, str, str | None]] = [
+    # --- data center fabric ---------------------------------------------------
+    (6, "sw-dc-tor-{n:02d}", "aruba-6200f", "net_switches",
+     "DC rack A{n}, top of rack", "sw-core-01"),
+    (2, "sw-dc-tor-{nn:02d}", "huawei-s6730", "net_switches",
+     "DC rack B{n}, top of rack", "sw-core-01"),
+    (2, "sw-dc-dist-{n:02d}", "hp-5406r", "net_switches",
+     "DC row {n}, end of row", "sw-core-01"),
+    (2, "fw-{n:02d}", "fortigate", "net_firewalls",
+     "DC rack A1 (HA pair, unit {n})", "sw-core-01"),
+    (1, "fw-dmz-{n:02d}", "cisco-asa", "net_firewalls",
+     "DC rack A1, DMZ tier", "sw-core-01"),
+    (2, "lb-{n:02d}", "kemp-lb", "net_loadbalancers",
+     "DC rack A2 (HA pair, unit {n})", "sw-core-01"),
+    (2, "nas-{n:02d}", "synology-nas", "storage",
+     "DC rack B1", "sw-core-01"),
+    (2, "san-fc-{n:02d}", "brocade-fc", "storage",
+     "DC rack B2, SAN fabric {n}", "sw-core-01"),
+    (16, "oob-idrac-{n:02d}", "idrac", "mgmt",
+     "DC rack A{n} (iDRAC)", "sw-core-01"),
+    (1, "ntp-gps-{n:02d}", "meinberg-ntp", "infrastructure",
+     "DC comms room, GPS antenna on roof", "sw-core-01"),
+    (3, "ups-dc-{n:02d}", "apc-symmetra", "net_ups",
+     "DC power room, feed {n}", "sw-core-01"),
+    (4, "pdu-dc-{n:02d}", "apc-pdu", "net_ups",
+     "DC rack A{n}, rack PDU", "sw-core-01"),
+    (2, "pdu-dc-{nn:02d}", "raritan-pdu", "net_ups",
+     "DC rack B{n}, rack PDU", "sw-core-01"),
+    (2, "pdu-dc-{nnn:02d}", "gude-pdu", "net_ups",
+     "DC rack C{n}, rack PDU", "sw-core-01"),
+    (6, "env-dc-{n:02d}", "akcp-sensor", "net_ups",
+     "DC row {n}, hot aisle", "sw-core-01"),
+    (2, "env-dc-{nn:02d}", "avtech-ra3s", "net_ups",
+     "DC comms room {n}", "sw-core-01"),
+    # --- HQ office ------------------------------------------------------------
+    (7, "sw-hq-f{n:02d}", "aruba-2930f", "net_switches",
+     "HQ floor {n}, IDF {n}A", "sw-core-01"),
+    (7, "sw-hq-f{nn:02d}", "hp-2530", "net_switches",
+     "HQ floor {n}, IDF {n}B", "sw-core-01"),
+    (2, "wlc-{n:02d}", "extreme-wlc", "net_wifi",
+     "HQ comms room (controller {n})", "sw-core-01"),
+    (6, "prt-hq-{n:02d}", "printer-ricoh", "printers",
+     "HQ floor {n}, print room", "sw-core-01"),
+    (6, "prt-hq-{nn:02d}", "printer-canon", "printers",
+     "HQ floor {n}, print room", "sw-core-01"),
+    (1, "ups-hq-{n:02d}", "apc-symmetra", "net_ups",
+     "HQ comms room", "sw-core-01"),
+    (2, "pdu-hq-{n:02d}", "gude-pdu", "net_ups",
+     "HQ comms room, rack {n}", "sw-core-01"),
+    (1, "env-hq-{n:02d}", "avtech-ra3s", "net_ups",
+     "HQ comms room", "sw-core-01"),
+    # --- warehouse 1 (behind rt-wan-01) ----------------------------------------
+    (3, "wh1-sw-{n:02d}", "procurve-2510", "net_switches",
+     "warehouse 1, hall {n}", "rt-wan-01"),
+    (2, "wh1-sw-{nn:02d}", "hp-2530", "net_switches",
+     "warehouse 1, mezzanine {n}", "rt-wan-01"),
+    (4, "wh1-prt-{n:02d}", "printer-zebra", "printers",
+     "warehouse 1, packing line {n}", "rt-wan-01"),
+    (1, "wh1-ups-{n:02d}", "apc-symmetra", "net_ups",
+     "warehouse 1, comms room", "rt-wan-01"),
+    (1, "wh1-pdu-{n:02d}", "raritan-pdu", "net_ups",
+     "warehouse 1, comms room", "rt-wan-01"),
+    (1, "wh1-env-{n:02d}", "akcp-sensor", "net_ups",
+     "warehouse 1, comms room", "rt-wan-01"),
+    # --- warehouse 2 (behind its own WAN router) --------------------------------
+    (1, "rt-wan-{nn:02d}", "lancom-router", "net_routers",
+     "warehouse 2, comms room", "sw-core-01"),
+    (3, "wh2-sw-{n:02d}", "procurve-2510", "net_switches",
+     "warehouse 2, hall {n}", "rt-wan-02"),
+    (2, "wh2-sw-{nn:02d}", "hp-2530", "net_switches",
+     "warehouse 2, mezzanine {n}", "rt-wan-02"),
+    (4, "wh2-prt-{n:02d}", "printer-zebra", "printers",
+     "warehouse 2, packing line {n}", "rt-wan-02"),
+    (1, "wh2-ups-{n:02d}", "apc-symmetra", "net_ups",
+     "warehouse 2, comms room", "rt-wan-02"),
+    (1, "wh2-pdu-{n:02d}", "raritan-pdu", "net_ups",
+     "warehouse 2, comms room", "rt-wan-02"),
+    (1, "wh2-env-{n:02d}", "akcp-sensor", "net_ups",
+     "warehouse 2, comms room", "rt-wan-02"),
+    # --- internet edge ----------------------------------------------------------
+    (1, "rt-inet-{n:02d}", "lancom-router", "net_routers",
+     "DC rack A1, internet backup line", "sw-core-01"),
+]
+
+
+def build_replay_devices(walklib: str) -> list[ReplayDevice]:
+    """Expand the roster. Name patterns share a prefix across models
+    ({n} starts at 1, {nn} continues after the previous entry with the same
+    prefix, {nnn} after that) so e.g. pdu-dc-01..08 mixes three models."""
+    devices: list[ReplayDevice] = []
+    next_index: dict[str, int] = {}
+    for count, pattern, model_name, role, loc_pattern, parent in REPLAY_ROSTER:
+        prefix = pattern.split("{")[0]
+        start = next_index.get(prefix, 1)
+        try:
+            model = ReplayModel.load(model_name, walklib)
+        except OSError as exc:
+            print(f"[replay] WARN: model {model_name} unavailable ({exc}) — "
+                  f"skipping {count}x {prefix}*")
+            continue
+        for i in range(count):
+            n = start + i
+            short = pattern.replace("{n:02d}", f"{n:02d}") \
+                           .replace("{nn:02d}", f"{n:02d}") \
+                           .replace("{nnn:02d}", f"{n:02d}")
+            location = loc_pattern.replace("{n}", str(n))
+            devices.append(ReplayDevice(short, model, role, location, parent))
+        next_index[prefix] = start + count
+    return devices
 
 
 DEVICES: list[Device] = []
@@ -838,18 +1157,14 @@ def _fmt_duration(seconds: float) -> str:
 
 def _admin_page() -> str:
     cards = []
+    steady = [d for d in DEVICES if not d.incident]
     for dev in DEVICES:
+        if not dev.incident:
+            continue  # rendered compactly below
         state = dev.state.get()
         color = STATE_COLORS[state]
         extras = "".join(f"<div class='extra'>{e}</div>"
                          for e in dev.status_extras())
-        if not dev.incident:
-            cards.append(
-                f"<div class='dev' style='border-color:{color}'>"
-                f"<h2>{dev.fqdn}</h2>"
-                f"<span class='badge' style='background:{color}'>steady green</span>"
-                f"<p class='tag'>background device — no toggle</p></div>")
-            continue
         effects = DEVICE_EFFECTS.get(dev.short, {})
         state_cards = []
         for action, target in ACTION_TO_STATE.items():
@@ -905,11 +1220,35 @@ def _admin_page() -> str:
  <h1>network estate control — <b>SNMP walk simulator</b>
  <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
  {''.join(cards)}
+ {_steady_section(steady)}
  <div class="foot">walks: {WALKS_DIR} (rewritten every {RENDER_INTERVAL:g} s)
   · curl API: /admin/&lt;device&gt;/degrade|break|heal · / (JSON status)<br>
   discover hosts in Checkmk while HEALTHY — down interfaces are never
   discovered, and the interface target state is recorded at discovery.</div>
 </body></html>"""
+
+
+def _steady_section(steady: list[Device]) -> str:
+    """Compact chip grid for the (many) steady-green devices."""
+    if not steady:
+        return ""
+    by_role: dict[str, list[Device]] = {}
+    for d in steady:
+        by_role.setdefault(d.role, []).append(d)
+    blocks = []
+    for role in sorted(by_role):
+        chips = " ".join(
+            f"<span class='chip' title='{d.location}'>{d.short}</span>"
+            for d in sorted(by_role[role], key=lambda x: x.short))
+        blocks.append(f"<div class='crole'><b>{role}</b> "
+                      f"({len(by_role[role])})<br>{chips}</div>")
+    return (f"<h2 style='color:#9aa4af;font-size:1.05rem;margin-top:1.6rem'>"
+            f"steady-green devices — {len(steady)} "
+            f"<span style='color:#2e7d32;font-size:.85rem'>no toggles</span></h2>"
+            "<style>.chip{display:inline-block;background:#22313f;color:#9fc59f;"
+            "border-radius:.25rem;padding:.06rem .4rem;margin:.12rem;"
+            "font-size:.78rem}.crole{margin:.5rem 0;color:#9aa4af}</style>"
+            + "".join(blocks))
 
 
 class HttpHandler(BaseHTTPRequestHandler):
@@ -976,6 +1315,9 @@ class HttpHandler(BaseHTTPRequestHandler):
                 "in_state_for_s": round(d.state.since_seconds(), 1),
                 "incident": d.incident,
                 "extras": d.status_extras(),
+                "role": d.role,
+                "parent": d.parent,
+                "location": d.location,
             } for d in DEVICES},
             "walks_dir": WALKS_DIR,
             "render_interval_s": RENDER_INTERVAL,
@@ -1012,6 +1354,18 @@ def main() -> None:
                         default=os.environ.get("NETSIM_DEVICES", ""),
                         help="comma list of device shorts to render "
                              "(default: all)")
+    parser.add_argument("--fleet", action="store_true",
+                        default=os.environ.get("NETSIM_FLEET", "0") == "1",
+                        help="also render the replay fleet (~110 devices from "
+                             "anonymized real walks in --walklib)")
+    parser.add_argument("--walklib",
+                        default=os.environ.get(
+                            "NETSIM_WALKLIB",
+                            os.path.join(os.path.dirname(
+                                os.path.abspath(__file__)), "walklib")),
+                        help="directory with the curated model walks "
+                             "(walklib/*.walk; estate.py copies it to a "
+                             "site-readable location)")
     parser.add_argument("--once", action="store_true",
                         help="render one set of walks and exit (no daemon)")
     args = parser.parse_args()
@@ -1030,6 +1384,11 @@ def main() -> None:
     DEVICES = [SwCore()]
     DEVICES += [SwAccess(n) for n in range(1, max(1, args.access_switches) + 1)]
     DEVICES += [RtWan(), Ups()]
+    if args.fleet:
+        replay = build_replay_devices(args.walklib)
+        DEVICES += replay
+        print(f"[boot] replay fleet: {len(replay)} devices from "
+              f"{len(ReplayModel._cache)} walk models ({args.walklib})")
     if args.devices.strip():
         wanted = {d.strip() for d in args.devices.split(",") if d.strip()}
         DEVICES = [d for d in DEVICES if d.short in wanted]
@@ -1049,7 +1408,11 @@ def main() -> None:
         threading.Thread(target=auto_break_watchdog, daemon=True).start()
 
     http = ThreadingHTTPServer(("0.0.0.0", args.http_port), HttpHandler)  # nosec B104
-    print(f"[boot] devices: {', '.join(d.fqdn for d in DEVICES)}")
+    if len(DEVICES) <= 8:
+        print(f"[boot] devices: {', '.join(d.fqdn for d in DEVICES)}")
+    else:
+        print(f"[boot] devices: {len(DEVICES)} "
+              f"({sum(1 for d in DEVICES if d.incident)} with incident toggles)")
     print(f"[boot] walks:   {WALKS_DIR} (every {RENDER_INTERVAL:g} s)")
     print(f"[boot] control: http://localhost:{args.http_port}/admin")
     print("[boot] IMPORTANT: run service discovery in Checkmk while HEALTHY —")

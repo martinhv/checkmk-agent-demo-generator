@@ -24,7 +24,24 @@ backend bypasses NO_IP and substitutes 127.0.0.1, so nothing is ever
 contacted — plus the `usewalk_hosts` rule, discovery, activation) is done by
 **`../deploy/cmk_setup.py`**, which `../estate.py` drives for you.
 
-## The devices
+## The replay fleet (`--fleet`, company scale)
+
+At `--scale company` netsim additionally replays **~110 devices from
+anonymized real walks** (`walklib/*.walk`, 24 models: Aruba/HP/Huawei
+switches, Fortigate + ASA firewalls, Kemp load balancers, Extreme WLCs,
+Ricoh/Canon/Zebra printers, APC/Raritan/Gude power, AKCP/AVTECH sensors,
+Synology NAS, Brocade FC, Dell iDRAC, Meinberg NTP). Each instance gets its
+own sysName/sysLocation, an advancing uptime, and live interface counters
+whose base rate derives from the *recorded* counter over the *recorded*
+uptime — busy ports stay busy, dead ports stay dead. Roster in
+`REPLAY_ROSTER` (netsim.py).
+
+The walklib is produced by **`curate_walks.py`** from `~/git/zeug_cmk/walks`
+— strip + scrub + audit, so no customer-identifying data enters this repo
+(see `../CLAUDE.md`, "Anonymizing real walks"). Re-run it only when adding
+models; the curated files are checked in.
+
+## The synthetic devices
 
 This is the estate's network layer: `sw-core-01` tops the parent topology
 (every server hangs off it — applied by `../deploy/cmk_setup.py` when the

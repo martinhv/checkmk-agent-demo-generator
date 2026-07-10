@@ -46,6 +46,10 @@ Config via env:
   AGENT_OUTPUT_INTERVAL  datasource: refresh seconds (default: 20)
   ESTATE_HOSTS       comma list of host names to carry (default: all)
   ESTATE_REPLICAS    replica multiplier for replicable classes (default: 1)
+  ESTATE_FLEET       "1": also spawn fleet/serve.py (ONE process carrying the
+                     ~140 steady-green bulk hosts of the 300-host estate) and
+                     deliver its hosts alongside the classic roster
+  FLEET_HTTP_PORT    fleet child's internal HTTP port (default: 8102)
   AGENT_VERSION      version in the delivery header (default: 2.5.0-...)
   CHILD_AGENT_BASE   internal child agent port base (default: 7600)
   CHILD_HTTP_BASE    internal child admin port base (default: auto after
@@ -247,6 +251,99 @@ class Child:
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
 
+
+# --------------------------------------------------------------------------- #
+#  Fleet: ONE child process (fleet/serve.py) carries the steady-green bulk of
+#  the 300-host estate. Each of its hosts is exposed here as a FleetHost that
+#  duck-types Child (fetch_agent / child_state / ...), so delivery (piggyback
+#  blocks, datasource files) and the panel JSON treat them like any child.
+# --------------------------------------------------------------------------- #
+ESTATE_FLEET = os.environ.get("ESTATE_FLEET", "0") == "1"
+FLEET_HTTP_PORT = int(os.environ.get("FLEET_HTTP_PORT", "8102"))
+FLEET_SCRIPT = os.path.join(REPO_ROOT, "fleet", "serve.py")
+
+
+class FleetManager:
+    """Owns the single fleet child process and its roster."""
+
+    def __init__(self) -> None:
+        self.proc: subprocess.Popen | None = None
+        self.base = f"http://127.0.0.1:{FLEET_HTTP_PORT}"
+
+    def spawn(self) -> None:
+        env = dict(os.environ)
+        env.update({"HTTP_PORT": str(FLEET_HTTP_PORT),
+                    "STATE_FILE": "/var/tmp/cmk-demo-fleet-state.json"})
+        self.proc = subprocess.Popen(  # noqa: S603
+            [sys.executable, "-u", FLEET_SCRIPT], env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"[pb] spawned fleet manager http=127.0.0.1:{FLEET_HTTP_PORT}")
+
+    def roster(self, timeout: float = 20.0) -> list[dict]:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(  # noqa: S310
+                        self.base + "/", timeout=3) as r:
+                    return json.loads(r.read())["fleet"]
+            except (urllib.error.URLError, OSError, ValueError):
+                time.sleep(0.5)
+        print("[pb] WARN: fleet manager did not answer — fleet hosts skipped")
+        return []
+
+    def fetch_agent(self, short: str, timeout: float = 6.0) -> bytes:
+        try:
+            with urllib.request.urlopen(  # noqa: S310
+                    f"{self.base}/agent/{short}", timeout=timeout) as r:
+                return r.read()
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"[pb] WARN: fleet fetch {short} failed: {exc}")
+            return b""
+
+    def terminate(self) -> None:
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+
+
+class FleetHost:
+    """Child-shaped adapter for one fleet host (always steady-green)."""
+
+    actions: list[str] = []
+
+    def __init__(self, mgr: FleetManager, info: dict) -> None:
+        self.mgr = mgr
+        self.name = info["name"]
+        self.fqdn = info["fqdn"]
+        self.parent = info.get("parent")
+        self.role = info.get("role")
+        self.os = info.get("os")
+        self.descr = info.get("descr", "")
+
+    def fetch_agent(self) -> bytes:
+        return self.mgr.fetch_agent(self.name)
+
+    def child_state(self) -> str:
+        return "healthy"
+
+    def fetch_meta(self) -> dict | None:
+        return {"state": "healthy", "in_state_for_s": time.time() - START,
+                "action_to_state": {},
+                "states": {"healthy": {
+                    "label": "HEALTHY", "color": "#2e7d32",
+                    "tagline": f"{self.descr} — steady-green fleet host, "
+                               "no incident and no toggle.",
+                    "effects": ["all services green, values wobble naturally",
+                                "part of the 300-host estate bulk "
+                                "(fleet/profiles.py)"]}}}
+
+    def toggle(self, action: str) -> bool:  # noqa: ARG002
+        return False
+
+    def terminate(self) -> None:
+        pass  # the FleetManager owns the process
+
+
+FLEET_MGR = FleetManager() if ESTATE_FLEET else None
 
 _selected = os.environ.get("ESTATE_HOSTS", "").strip()
 _wanted = {h.strip() for h in _selected.split(",") if h.strip()} if _selected else None
@@ -488,7 +585,10 @@ def _overview_page() -> str:
     rows = []
     colors = {"healthy": "#2e7d32", "degraded": "#f9a825", "broken": "#c62828",
               None: "#666"}
+    fleet = [c for c in CHILDREN if isinstance(c, FleetHost)]
     for c in CHILDREN:
+        if isinstance(c, FleetHost):
+            continue  # rendered compactly below the classic roster
         state = c.child_state()
         badge = (f"<span class='b' style='background:{colors.get(state, '#666')}'>"
                  f"{(state or 'n/a').upper()}</span>")
@@ -522,12 +622,36 @@ def _overview_page() -> str:
 </style></head><body>
  <h1>piggyback estate — delivery shell <b>{DELIVERY_HOSTNAME}</b>
   <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
- <p class="sub">{len(CHILDREN)} hosts carried as piggyback. This shell emits only a
-  minimal agent section; everyone below arrives wrapped in <code>&lt;&lt;&lt;&lt;host&gt;&gt;&gt;&gt;</code>.</p>
+ <p class="sub">{len(CHILDREN)} hosts carried. This shell emits only a
+  minimal agent section; everyone below arrives as piggyback blocks or
+  per-host datasource files.</p>
  <table>{''.join(rows)}</table>
+ {_fleet_section(fleet)}
  <div class="foot">curl: /admin/&lt;host&gt;/&lt;degrade|break|heal&gt; · / (JSON status).
   Click <b>&#9432; info</b> on any host to see exactly which Checkmk services change in each state.</div>
 </body></html>"""
+
+
+def _fleet_section(fleet: list["FleetHost"]) -> str:
+    if not fleet:
+        return ""
+    by_role: dict[str, list[FleetHost]] = {}
+    for h in fleet:
+        by_role.setdefault(h.role or "other", []).append(h)
+    blocks = []
+    for role in sorted(by_role):
+        names = " ".join(f"<span class='fh' title='{h.descr}'>{h.name}</span>"
+                         for h in sorted(by_role[role], key=lambda x: x.name))
+        blocks.append(f"<div class='frole'><b>{role}</b> "
+                      f"({len(by_role[role])})<br>{names}</div>")
+    return (f"<h2 style='color:#9aa4af;font-size:1.05rem;margin-top:1.6rem'>"
+            f"steady-green fleet — {len(fleet)} hosts "
+            f"<span style='color:#2e7d32;font-size:.85rem'>all healthy, "
+            "no toggles</span></h2>"
+            "<style>.fh{display:inline-block;background:#22313f;color:#9fc59f;"
+            "border-radius:.25rem;padding:.06rem .4rem;margin:.12rem;"
+            "font-size:.78rem}.frole{margin:.5rem 0;color:#9aa4af}</style>"
+            + "".join(blocks))
 
 
 class HttpHandler(BaseHTTPRequestHandler):
@@ -577,7 +701,9 @@ class HttpHandler(BaseHTTPRequestHandler):
             "carried_hosts": [
                 {"name": c.name, "fqdn": c.fqdn, "state": c.child_state(),
                  "actions": c.actions,
-                 "parent": f"{c.parent}.{ESTATE_DOMAIN}" if c.parent else None}
+                 "parent": f"{c.parent}.{ESTATE_DOMAIN}" if c.parent else None,
+                 **({"role": c.role, "os": c.os}
+                    if isinstance(c, FleetHost) else {})}
                 for c in CHILDREN],
             "ui": "/admin",
         })
@@ -596,9 +722,18 @@ def main() -> None:
     try:
         for child in CHILDREN:
             child.spawn()
+        if FLEET_MGR:
+            FLEET_MGR.spawn()
         # give children a moment to bind so the first poll already has everyone
         for child in CHILDREN:
             child.wait_ready()
+        if FLEET_MGR:
+            fleet_hosts = [FleetHost(FLEET_MGR, info)
+                           for info in FLEET_MGR.roster()]
+            CHILDREN.extend(fleet_hosts)
+            _BY_NAME.update({h.name: h for h in fleet_hosts})
+            print(f"[boot] fleet: carrying {len(fleet_hosts)} steady-green "
+                  f"bulk hosts (total {len(CHILDREN)})")
 
         agent = AgentServer(("0.0.0.0", AGENT_PORT), AgentHandler)  # nosec B104
         http = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), HttpHandler)  # nosec B104
@@ -625,6 +760,8 @@ def main() -> None:
     finally:
         for child in CHILDREN:
             child.terminate()
+        if FLEET_MGR:
+            FLEET_MGR.terminate()
 
 
 if __name__ == "__main__":

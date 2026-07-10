@@ -39,6 +39,12 @@ Scales (--scale):
   full       standard + the network layer: SNMP gear (Catalyst switches,
              WAN router, UPS) simulated as stored SNMP walks, with the
              campus core as parent of every server.   [default]
+  company    the researched ~300-host company estate: full + the steady-green
+             server fleet (fleet/profiles.py: ~170 Linux/Windows hosts on 12
+             KVM hypervisors) + ~110 SNMP devices replayed from anonymized
+             real walks (snmp/walklib: switches, firewalls, load balancers,
+             printers, UPS/PDUs, sensors, NAS/SAN, iDRACs). Self-hosted only
+             (the SNMP layer needs the site filesystem).
 
   --replicas N multiplies every replicable host class N times (web-frontend-02,
   app-worker-03, ... plus N SNMP access switches) — same stories, bigger
@@ -90,10 +96,19 @@ def delivery_for(mode: str) -> str:
     return "datasource" if mode == "self-hosted" else "piggyback"
 
 SCALES = {
-    "minimal": {"hosts": "payment-api,db-postgres-01", "snmp": False},
-    "standard": {"hosts": "", "snmp": False},   # "" = the whole roster
-    "full": {"hosts": "", "snmp": True},
+    "minimal": {"hosts": "payment-api,db-postgres-01", "snmp": False,
+                "fleet": False},
+    "standard": {"hosts": "", "snmp": False, "fleet": False},  # "" = whole roster
+    "full": {"hosts": "", "snmp": True, "fleet": False},
+    # the researched ~300-host company: full + the steady-green fleet
+    # (fleet/profiles.py, ~170 servers) + the SNMP walk-replay devices
+    # (snmp/walklib, ~110 network/power/printer/storage devices)
+    "company": {"hosts": "", "snmp": True, "fleet": True},
 }
+
+# site-user-readable copies for netsim (the repo usually lives under a 0750
+# home the site user cannot read — see netsim_up)
+WALKLIB_COPY = "/var/tmp/cmk-demo-walklib"
 
 
 def sh(cmd: list[str], **kw) -> subprocess.CompletedProcess:
@@ -126,6 +141,7 @@ def shell_env(args: argparse.Namespace) -> dict[str, str]:
     return {
         "ESTATE_HOSTS": SCALES[args.scale]["hosts"],
         "ESTATE_REPLICAS": str(args.replicas),
+        "ESTATE_FLEET": "1" if SCALES[args.scale]["fleet"] else "0",
         "DELIVERY_MODE": delivery_for(args.mode),
     }
 
@@ -226,6 +242,10 @@ def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
     else:
         sys.exit("ERROR: SNMP needs a local site (--site) or --walks-dir")
     target += ["--http-port", "8101", "--access-switches", str(args.replicas)]
+    fleet = SCALES[args.scale]["fleet"] if hasattr(args, "scale") else False
+    walklib_src = os.path.join(REPO, "snmp", "walklib")
+    if fleet:
+        target += ["--fleet"]
 
     if run_as:
         import pwd
@@ -238,7 +258,41 @@ def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
             run_as = None  # already permitted (running as the site user)
 
     log = open(NETSIM_LOG, "wb")  # noqa: SIM115  (fresh log per attempt)
-    if run_as:
+    if run_as and shutil.which("docker") and \
+            subprocess.run(["sudo", "-n", "true"],  # noqa: S603
+                           capture_output=True).returncode != 0:
+        # No cached sudo credential but docker is available: run netsim in a
+        # container AS THE SITE'S UID with the site's snmpwalks dir mounted —
+        # same effect as sudo (docker group membership already grants it),
+        # but non-interactive. estate.py down stops it via /admin/shutdown
+        # (--rm makes the container vanish when netsim exits).
+        import pwd
+        pw = pwd.getpwnam(run_as)
+        walks = f"/omd/sites/{run_as}/var/check_mk/snmpwalks"
+        state_dir = "/var/tmp/cmk-demo-netsim-docker"
+        os.makedirs(state_dir, exist_ok=True)
+        os.chmod(state_dir, 0o777)  # noqa: S103  (container writes as site uid)
+        cmd = ["docker", "run", "-d", "--rm", "--name", "cmk-demo-netsim",
+               "--user", f"{pw.pw_uid}:{pw.pw_gid}",
+               "-p", "127.0.0.1:8101:8101",
+               "-v", f"{os.path.join(REPO, 'snmp')}:/netsim:ro",
+               "-v", f"{walks}:/walks",
+               "-v", f"{state_dir}:/state",
+               "-e", "STATE_FILE=/state/netsim-state.json",
+               "python:3.12-slim", "python3", "-u", "/netsim/netsim.py",
+               "--walks-dir", "/walks",
+               *[a for a in target if a != "--fleet"],
+               *(["--fleet", "--walklib", "/netsim/walklib"] if fleet else [])]
+        # strip the host-side --site pair; the container writes to /walks
+        cmd = [a for i, a in enumerate(cmd)
+               if not (a == "--site" or (i > 0 and cmd[i - 1] == "--site"))]
+        print("  starting netsim in docker (site uid, no sudo needed)")
+        subprocess.run(["docker", "rm", "-f", "cmk-demo-netsim"],  # noqa: S603
+                       capture_output=True)
+        r = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)  # noqa: S603
+        if r.returncode != 0:
+            sys.exit(f"ERROR: docker netsim failed — see {NETSIM_LOG}")
+    elif run_as:
         # Three traps: (1) the repo usually lives under a 0750 home dir the
         # site user cannot read -> run a world-readable copy; (2) so may the
         # caller's interpreter (pyenv!) -> use the site's own python;
@@ -247,6 +301,13 @@ def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
         # authenticate on the tty itself and background the daemon with -b.
         shutil.copyfile(netsim, NETSIM_COPY)
         os.chmod(NETSIM_COPY, 0o644)
+        if fleet:
+            # the walk-replay models must be readable by the site user too
+            shutil.copytree(walklib_src, WALKLIB_COPY, dirs_exist_ok=True)
+            os.chmod(WALKLIB_COPY, 0o755)
+            for name in os.listdir(WALKLIB_COPY):
+                os.chmod(os.path.join(WALKLIB_COPY, name), 0o644)
+            target += ["--walklib", WALKLIB_COPY]
         site_python = f"/omd/sites/{run_as}/bin/python3"
         python = site_python if os.path.exists(site_python) else "/usr/bin/python3"
         print("  starting netsim as the site user (sudo may prompt)")
@@ -259,6 +320,8 @@ def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
                      f"       sudo -u {run_as} python3 {NETSIM_COPY} "
                      f"{' '.join(target)}")
     else:
+        if fleet:
+            target += ["--walklib", walklib_src]
         proc = subprocess.Popen(  # noqa: S603
             [sys.executable, "-u", netsim, *target],
             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -395,25 +458,34 @@ def cmd_replace(args: argparse.Namespace) -> None:
     cmd_up(args)
 
 
+def _status_lines(items: list[tuple[str, str]]) -> None:
+    """Per-host lines for small rosters; big (company-scale) rosters print
+    the unhealthy hosts only, plus a summary count."""
+    unhealthy = [(n, s) for n, s in items if s not in ("healthy", None, "n/a")]
+    if len(items) <= 20:
+        for name, state in items:
+            mark = "" if state == "healthy" else "   <== not green"
+            print(f"  {name:22} {state or 'n/a'}{mark}")
+        return
+    print(f"  {len(items) - len(unhealthy)} healthy"
+          + (f", {len(unhealthy)} NOT green:" if unhealthy else ", all green"))
+    for name, state in unhealthy:
+        print(f"  {name:22} {state}   <== not green")
+
+
 def cmd_status(_args: argparse.Namespace) -> None:
     shell = get_json(PANEL + "/")
     if shell:
         print(f"shell   UP  {shell['delivery_host']} "
               f"({len(shell['carried_hosts'])} hosts, panel {PANEL}/admin)")
-        for h in shell["carried_hosts"]:
-            state = h.get("state") or "n/a"
-            mark = "" if state == "healthy" else "   <== not green"
-            print(f"  {h['name']:22} {state}{mark}")
+        _status_lines([(h["name"], h.get("state")) for h in shell["carried_hosts"]])
     else:
         print(f"shell   DOWN ({PANEL})")
     net = get_json(SNMP_PANEL + "/")
     if net:
         print(f"netsim  UP  ({len(net['devices'])} devices, "
               f"panel {SNMP_PANEL}/admin, walks {net['walks_dir']})")
-        for short, d in net["devices"].items():
-            state = d.get("state") or "n/a"
-            mark = "" if state == "healthy" else "   <== not green"
-            print(f"  {short:22} {state}{mark}")
+        _status_lines([(s, d.get("state")) for s, d in net["devices"].items()])
     else:
         print(f"netsim  DOWN ({SNMP_PANEL})")
 

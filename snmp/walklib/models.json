@@ -1,0 +1,146 @@
+{
+  "akcp-sensor": {
+    "class": "sensor",
+    "file": "akcp-sensor.walk",
+    "rows": 513,
+    "source": "akcp-sensor-probe"
+  },
+  "apc-pdu": {
+    "class": "pdu",
+    "file": "apc-pdu.walk",
+    "rows": 5312,
+    "source": "apc-netshelterpdu-advanced"
+  },
+  "apc-symmetra": {
+    "class": "ups",
+    "file": "apc-symmetra.walk",
+    "rows": 937,
+    "source": "usv-apc-symmetra-1"
+  },
+  "aruba-2930f": {
+    "class": "switch",
+    "file": "aruba-2930f.walk",
+    "rows": 19576,
+    "source": "Aruba-JL261A-2930F-24G-PoE-4SFP-Switch.txt"
+  },
+  "aruba-6200f": {
+    "class": "switch",
+    "file": "aruba-6200f.walk",
+    "rows": 17011,
+    "source": "Aruba-JL725B-6200F-24G-CL4-4SFP-370W-Switch.txt"
+  },
+  "avtech-ra3s": {
+    "class": "sensor",
+    "file": "avtech-ra3s.walk",
+    "rows": 12,
+    "source": "avtech-roomalert-3s"
+  },
+  "brocade-fc": {
+    "class": "fcswitch",
+    "file": "brocade-fc.walk",
+    "rows": 2815,
+    "source": "fcswitch-brocade"
+  },
+  "cisco-asa": {
+    "class": "firewall",
+    "file": "cisco-asa.walk",
+    "rows": 4894,
+    "source": "cisco-asa-9.16-no-name"
+  },
+  "extreme-wlc": {
+    "class": "wlc",
+    "file": "extreme-wlc.walk",
+    "rows": 12651,
+    "source": "network-extreme-wlc"
+  },
+  "fortigate": {
+    "class": "firewall",
+    "file": "fortigate.walk",
+    "rows": 6536,
+    "source": "Fortigate.txt"
+  },
+  "gude-pdu": {
+    "class": "pdu",
+    "file": "gude-pdu.walk",
+    "rows": 71,
+    "source": "gude-power-switch-1"
+  },
+  "hp-2530": {
+    "class": "switch",
+    "file": "hp-2530.walk",
+    "rows": 40829,
+    "source": "HP-J9772A-2530-48G-PoEP-Switch.txt"
+  },
+  "hp-5406r": {
+    "class": "switch",
+    "file": "hp-5406r.walk",
+    "rows": 55432,
+    "source": "HP-J9850A-Switch-5406Rzl2.txt"
+  },
+  "huawei-s6730": {
+    "class": "switch",
+    "file": "huawei-s6730.walk",
+    "rows": 51586,
+    "source": "HUAWEI-CloudEngine-S6730-H-V2.txt"
+  },
+  "idrac": {
+    "class": "mgmt",
+    "file": "idrac.walk",
+    "rows": 10673,
+    "source": "idrac-dell-1"
+  },
+  "kemp-lb": {
+    "class": "loadbalancer",
+    "file": "kemp-lb.walk",
+    "rows": 1079,
+    "source": "loadbalancer-kemp-1"
+  },
+  "lancom-router": {
+    "class": "router",
+    "file": "lancom-router.walk",
+    "rows": 3366,
+    "source": "network-lancom-voip-router-lldp"
+  },
+  "meinberg-ntp": {
+    "class": "appliance",
+    "file": "meinberg-ntp.walk",
+    "rows": 2673,
+    "source": "meinberg-lantime-1"
+  },
+  "printer-canon": {
+    "class": "printer",
+    "file": "printer-canon.walk",
+    "rows": 1221,
+    "source": "printer-canon-c5240-1"
+  },
+  "printer-ricoh": {
+    "class": "printer",
+    "file": "printer-ricoh.walk",
+    "rows": 2987,
+    "source": "printer-ricoh-c4000"
+  },
+  "printer-zebra": {
+    "class": "printer",
+    "file": "printer-zebra.walk",
+    "rows": 515,
+    "source": "printer-zebra"
+  },
+  "procurve-2510": {
+    "class": "switch",
+    "file": "procurve-2510.walk",
+    "rows": 8612,
+    "source": "ProCurve-J9279A-Switch-2510G-24.txt"
+  },
+  "raritan-pdu": {
+    "class": "pdu",
+    "file": "raritan-pdu.walk",
+    "rows": 42058,
+    "source": "pdu-raritan-1"
+  },
+  "synology-nas": {
+    "class": "nas",
+    "file": "synology-nas.walk",
+    "rows": 3048,
+    "source": "storage-synology-1"
+  }
+}

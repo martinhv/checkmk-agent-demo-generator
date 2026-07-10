@@ -22,6 +22,8 @@ services:
       # estate.py sets these; empty = all hosts, no replication
       ESTATE_HOSTS: "${ESTATE_HOSTS:-}"
       ESTATE_REPLICAS: "${ESTATE_REPLICAS:-1}"
+      # company scale: also run fleet/serve.py (the ~140-host steady-green bulk)
+      ESTATE_FLEET: "${ESTATE_FLEET:-0}"
       # delivery mode: piggyback (default) or datasource (self-hosted). In
       # datasource mode the per-host agent files are written to /agent-output,
       # bind-mounted to the host so the site's "cat" datasource program can
