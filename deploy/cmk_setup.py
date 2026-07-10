@@ -102,7 +102,9 @@ import urllib.request
 #       Hypervisors), bulk discovery.
 #   v5: replay-walk green pass — fortigate signatures/apc output-phase/printer
 #       alert sections dropped, residual-current rule for the Raritan PDUs.
-SCHEMA_VERSION = 5
+#   v6: the delivery shell now hangs off the campus core (sw-core-01) like every
+#       server, so sw-core-01 is the estate's single parentless root.
+SCHEMA_VERSION = 6
 
 # Host label on the delivery shell holding the last-activated estate
 # fingerprint. Lives on the site (survives across `estate.py up` runs) and is
@@ -659,8 +661,9 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace,
     core_fqdn = next((d["fqdn"] for s, d in devices.items()
                       if s.startswith("sw-core")), None)
     fqdn_of = {s: d["fqdn"] for s, d in devices.items()}
-    # devices referenced as someone's parent (campus core, WAN routers) must
-    # exist before their children name them in the parents attribute
+    # The REST API rejects a host whose parent does not yet exist, so create in
+    # dependency order: the campus core first, then any device named as a parent
+    # (the WAN routers), then the rest that hang off them.
     referenced = {d.get("parent") for d in devices.values() if d.get("parent")}
     order = sorted(devices.items(),
                    key=lambda kv: (not kv[0].startswith("sw-core"),
@@ -712,8 +715,8 @@ def snmp_teardown_names(args: argparse.Namespace) -> list[str]:
     info = panel_get(args.snmp_panel, optional=True)
     if not info or "devices" not in info:
         return []
-    # children first: any device referenced as a parent (campus core, the WAN
-    # routers) must be deleted after its children, the core last of all
+    # Delete children before parents (the mirror of the create constraint):
+    # devices naming a parent go first, then the WAN routers, then the core.
     devices = info["devices"]
     referenced = {d.get("parent") for d in devices.values() if d.get("parent")}
     devs = sorted(devices.items(),
@@ -1101,36 +1104,47 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
                                               FOLDER_TAXONOMY[role])
         return _leaf[role]
 
-    # the delivery shell sits at the estate root; the datasource rule lives
-    # there too and is inherited by every subfolder below
-    if datasource:
-        # all-agents on the shell too: its Checkmk-agent source is the "cat"
-        # datasource program (its own minimal file) AND the BI special agent.
-        # No IP / no agent-port rule — nothing is polled over TCP.
-        ensure_host(api, delivery, root_ident, {
-            "tag_agent": "all-agents",
-            "tag_address_family": "no-ip",
-            "tag_piggyback": "no-piggyback",
-        })
-    else:
-        ensure_host(api, delivery, root_ident, {
-            "ipaddress": args.agent_ip,
-            # all-agents: TCP agent AND the BI special agent below — plain
-            # cmk-agent would let a configured special agent REPLACE the TCP
-            # fetch and cut off the piggyback delivery
-            "tag_agent": "all-agents",
-        })
-        ensure_port_rule(api, delivery, args.agent_port)
-    carried_fqdns = {h["fqdn"] for h in hosts}
-
-    # the SNMP devices are the network path — create them FIRST so the
-    # servers can reference the campus core as their parent
+    # The network layer comes FIRST: the REST API rejects a host whose parent
+    # does not already exist ("Host not found"), and the shell + every server
+    # hang off the campus core, so the SNMP devices must be created before them.
     snmp_fqdns: list[str] = []
     if args.snmp != "off":
         print("* creating the SNMP network devices (stored walks)")
         snmp_fqdns = setup_snmp(api, args, leaf_for)
         ensure_residual_current_rule(api, root_ident)
+    # sw-core-01 tops the path; the shell and every server hang off it, making
+    # it the estate's single parentless root (None with --snmp off: no network
+    # layer, so the servers/shell are simply parentless)
+    core_fqdn = next((f for f in snmp_fqdns
+                      if f.split(".")[0].startswith("sw-core")), None)
 
+    # the delivery shell sits at the estate root (the datasource rule lives
+    # there too, inherited by every subfolder below) and hangs off the core
+    # like every server — created after the SNMP layer so the parent exists
+    if datasource:
+        # all-agents on the shell too: its Checkmk-agent source is the "cat"
+        # datasource program (its own minimal file) AND the BI special agent.
+        # No IP / no agent-port rule — nothing is polled over TCP.
+        shell_attrs = {
+            "tag_agent": "all-agents",
+            "tag_address_family": "no-ip",
+            "tag_piggyback": "no-piggyback",
+        }
+    else:
+        shell_attrs = {
+            "ipaddress": args.agent_ip,
+            # all-agents: TCP agent AND the BI special agent below — plain
+            # cmk-agent would let a configured special agent REPLACE the TCP
+            # fetch and cut off the piggyback delivery
+            "tag_agent": "all-agents",
+        }
+    if core_fqdn and core_fqdn != delivery:
+        shell_attrs["parents"] = [core_fqdn]
+    ensure_host(api, delivery, root_ident, shell_attrs)
+    if not datasource:
+        ensure_port_rule(api, delivery, args.agent_port)
+
+    carried_fqdns = {h["fqdn"] for h in hosts}
     parent_ok = carried_fqdns | set(snmp_fqdns)
     for h in hosts:
         if datasource:
