@@ -277,9 +277,31 @@ NETSIM_COPY = "/var/tmp/cmk-demo-netsim.py"
 
 
 def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
-    if get_json(SNMP_PANEL + "/") is not None:
-        print("  netsim already running")
-        return
+    fleet = SCALES[args.scale]["fleet"] if hasattr(args, "scale") else False
+    running = get_json(SNMP_PANEL + "/")
+    if running is not None:
+        # Reuse a running netsim ONLY if it already renders the device set this
+        # scale needs. The replay fleet is what differs between full and company
+        # scale, and "sw-dc-tor-*" is produced ONLY by the fleet — so its
+        # presence tells us the running netsim's fleet state. On a mismatch
+        # (e.g. switching full -> company) the stale netsim must be stopped and
+        # restarted; otherwise `up` silently keeps the wrong device set and the
+        # fleet devices (ToR switches, ...) never appear. --force does not reach
+        # here, so this is the only thing that makes a scale switch take effect.
+        running_fleet = any(s.startswith("sw-dc-tor")
+                            for s in running.get("devices", {}))
+        if running_fleet == fleet:
+            print("  netsim already running")
+            return
+        print(f"  netsim is running the wrong device set (fleet={running_fleet}, "
+              f"need {fleet}) — restarting it")
+        netsim_down()
+        deadline = time.time() + 15
+        while time.time() < deadline and get_json(SNMP_PANEL + "/") is not None:
+            time.sleep(0.5)
+        if get_json(SNMP_PANEL + "/") is not None:
+            sys.exit(f"ERROR: could not stop the stale netsim — stop it by hand "
+                     f"and re-run:\n       curl {SNMP_PANEL}/admin/shutdown")
     netsim = os.path.join(REPO, "snmp", "netsim.py")
     if args.walks_dir:
         target = ["--walks-dir", args.walks_dir]
@@ -290,7 +312,6 @@ def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
     else:
         sys.exit("ERROR: SNMP needs a local site (--site) or --walks-dir")
     target += ["--http-port", "8101", "--access-switches", str(args.replicas)]
-    fleet = SCALES[args.scale]["fleet"] if hasattr(args, "scale") else False
     walklib_src = os.path.join(REPO, "snmp", "walklib")
     if fleet:
         target += ["--fleet"]
