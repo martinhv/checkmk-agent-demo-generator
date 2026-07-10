@@ -110,7 +110,10 @@ import urllib.request
 #   v8: warehouse WAN path — each warehouse gets a local CPE router
 #       (rt-wh1-01/rt-wh2-01) behind the DC head-end rt-wan-01; warehouse gear
 #       hangs off its CPE (fixes rt-wan-02 which never existed / collided).
-SCHEMA_VERSION = 8
+#   v9: distribution tier — DC ToR + leaves hang off the sw-dc-dist pair, HQ
+#       gear off a new sw-hq-dist-01; only distribution switches, firewalls and
+#       edge routers uplink to the core (fan-out 88 -> ~10).
+SCHEMA_VERSION = 9
 
 # Host label on the delivery shell holding the last-activated estate
 # fingerprint. Lives on the site (survives across `estate.py up` runs) and is

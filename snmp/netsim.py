@@ -443,25 +443,27 @@ class SwCore(Device):
 
     def __init__(self) -> None:
         super().__init__()
-        # Aliases name the peer device, so the rates must roughly mirror the
-        # peer's own port (in <-> out swapped) — a specialist diffs exactly
-        # that: Te1/0/1 <-> rt-wan-01 Gi0/0 (24/21 MB/s), Te1/0/2+3 <->
-        # sw-access-01's uplinks (~half the access sums, see SwAccess).
-        rnd = random.Random(41)
+        # The 12 x 10G ports are ALL uplink trunks to the layer below — the two
+        # DC distribution switches, the HQ distribution switch, the edge
+        # firewalls and the WAN/internet routers (endpoints live on the access
+        # /ToR switches, never here). Aliases name the peer so a specialist can
+        # match the interface table against the parent/child topology; the
+        # distribution trunks carry the most (aggregate DC/HQ traffic).
         self.ifaces = []
         peers: list[tuple[str, float, float]] = [
-            ("uplink edge firewall (internet)", 30e6, 26e6),
-            ("link sw-access-01 Te1/1/1", 17e6, 11e6),
-            ("link sw-access-01 Te1/1/2", 16e6, 11e6),
-            ("link rt-wan-01 Gi0/0", 21e6, 24e6),
-            ("server rack A trunk", 45e6, 52e6),
+            ("link sw-dc-dist-01 (DC distribution)", 210e6, 240e6),
+            ("link sw-dc-dist-02 (DC distribution)", 205e6, 232e6),
+            ("link sw-hq-dist-01 (HQ distribution)", 120e6, 90e6),
+            ("link rt-wan-01 Gi0/0 (WAN head-end)", 21e6, 24e6),
+            ("link rt-inet-01 (internet edge)", 34e6, 28e6),
+            ("link fw-01 (edge firewall HA)", 30e6, 26e6),
+            ("link fw-02 (edge firewall HA)", 12e6, 10e6),
+            ("link fw-dmz-01 (DMZ)", 6e6, 5e6),
+            ("link sw-access-01 (server access)", 33e6, 22e6),
+            ("link ups-01 (facility mgmt)", 0.4e6, 0.3e6),
+            ("(spare)", 0.5e6, 0.4e6),
+            ("(spare)", 0.4e6, 0.3e6),
         ]
-        for n in range(6, 13):                # campus service links
-            base_in = rnd.uniform(15e6, 90e6) / 8
-            names = {6: "wifi controller", 7: "cctv nvr",
-                     8: "printer vlan trunk"}
-            peers.append((names.get(n, ""), base_in,
-                          base_in * rnd.uniform(0.6, 1.2)))
         for n, (alias, base_in, base_out) in enumerate(peers, start=1):
             self.ifaces.append(Iface("sw-core-01", n, f"Te1/0/{n}",
                                      f"TenGigabitEthernet1/0/{n}", alias,
@@ -926,56 +928,61 @@ class ReplayDevice(Device):
 #  Roles are folder-taxonomy keys consumed by deploy/cmk_setup.py.
 # --------------------------------------------------------------------------- #
 REPLAY_ROSTER: list[tuple[int, str, str, str, str, str | None]] = [
-    # --- data center fabric ---------------------------------------------------
-    (6, "sw-dc-tor-{n:02d}", "aruba-6200f", "net_switches",
-     "DC rack A{n}, top of rack", "sw-core-01"),
-    (2, "sw-dc-tor-{nn:02d}", "huawei-s6730", "net_switches",
-     "DC rack B{n}, top of rack", "sw-core-01"),
+    # --- data center fabric: core -> distribution pair -> ToR + leaves --------
+    # Only the distribution switches uplink to the core; everything else hangs
+    # off a distribution switch (ToR carry the servers; storage/mgmt/power/env
+    # aggregate on the pair). Keeps the 12-port core's fan-out realistic.
     (2, "sw-dc-dist-{n:02d}", "hp-5406r", "net_switches",
-     "DC row {n}, end of row", "sw-core-01"),
+     "DC row {n}, end of row (distribution)", "sw-core-01"),
+    (6, "sw-dc-tor-{n:02d}", "aruba-6200f", "net_switches",
+     "DC rack A{n}, top of rack", "sw-dc-dist-01"),
+    (2, "sw-dc-tor-{nn:02d}", "huawei-s6730", "net_switches",
+     "DC rack B{n}, top of rack", "sw-dc-dist-02"),
     (2, "fw-{n:02d}", "fortigate", "net_firewalls",
      "DC rack A1 (HA pair, unit {n})", "sw-core-01"),
     (1, "fw-dmz-{n:02d}", "cisco-asa", "net_firewalls",
      "DC rack A1, DMZ tier", "sw-core-01"),
     (2, "lb-{n:02d}", "kemp-lb", "net_loadbalancers",
-     "DC rack A2 (HA pair, unit {n})", "sw-core-01"),
+     "DC rack A2 (HA pair, unit {n})", "sw-dc-dist-01"),
     (2, "nas-{n:02d}", "synology-nas", "storage",
-     "DC rack B1", "sw-core-01"),
+     "DC rack B1", "sw-dc-dist-02"),
     (2, "san-fc-{n:02d}", "brocade-fc", "storage",
-     "DC rack B2, SAN fabric {n}", "sw-core-01"),
+     "DC rack B2, SAN fabric {n}", "sw-dc-dist-02"),
     (16, "oob-idrac-{n:02d}", "idrac", "mgmt",
-     "DC rack A{n} (iDRAC)", "sw-core-01"),
+     "DC rack A{n} (iDRAC)", "sw-dc-dist-01"),
     (1, "ntp-gps-{n:02d}", "meinberg-ntp", "infrastructure",
-     "DC comms room, GPS antenna on roof", "sw-core-01"),
+     "DC comms room, GPS antenna on roof", "sw-dc-dist-02"),
     (3, "ups-dc-{n:02d}", "apc-symmetra", "net_ups",
-     "DC power room, feed {n}", "sw-core-01"),
+     "DC power room, feed {n}", "sw-dc-dist-02"),
     (4, "pdu-dc-{n:02d}", "apc-pdu", "net_ups",
-     "DC rack A{n}, rack PDU", "sw-core-01"),
+     "DC rack A{n}, rack PDU", "sw-dc-dist-02"),
     (2, "pdu-dc-{nn:02d}", "raritan-pdu", "net_ups",
-     "DC rack B{n}, rack PDU", "sw-core-01"),
+     "DC rack B{n}, rack PDU", "sw-dc-dist-02"),
     (2, "pdu-dc-{nnn:02d}", "gude-pdu", "net_ups",
-     "DC rack C{n}, rack PDU", "sw-core-01"),
+     "DC rack C{n}, rack PDU", "sw-dc-dist-02"),
     (6, "env-dc-{n:02d}", "akcp-sensor", "net_ups",
-     "DC row {n}, hot aisle", "sw-core-01"),
+     "DC row {n}, hot aisle", "sw-dc-dist-02"),
     (2, "env-dc-{nn:02d}", "avtech-ra3s", "net_ups",
-     "DC comms room {n}", "sw-core-01"),
-    # --- HQ office ------------------------------------------------------------
+     "DC comms room {n}", "sw-dc-dist-02"),
+    # --- HQ office: core -> HQ distribution -> floor switches + leaves --------
+    (1, "sw-hq-dist-{n:02d}", "hp-5406r", "net_switches",
+     "HQ comms room, distribution", "sw-core-01"),
     (7, "sw-hq-f{n:02d}", "aruba-2930f", "net_switches",
-     "HQ floor {n}, IDF {n}A", "sw-core-01"),
+     "HQ floor {n}, IDF {n}A", "sw-hq-dist-01"),
     (7, "sw-hq-f{nn:02d}", "hp-2530", "net_switches",
-     "HQ floor {n}, IDF {n}B", "sw-core-01"),
+     "HQ floor {n}, IDF {n}B", "sw-hq-dist-01"),
     (2, "wlc-{n:02d}", "extreme-wlc", "net_wifi",
-     "HQ comms room (controller {n})", "sw-core-01"),
+     "HQ comms room (controller {n})", "sw-hq-dist-01"),
     (6, "prt-hq-{n:02d}", "printer-ricoh", "printers",
-     "HQ floor {n}, print room", "sw-core-01"),
+     "HQ floor {n}, print room", "sw-hq-dist-01"),
     (6, "prt-hq-{nn:02d}", "printer-canon", "printers",
-     "HQ floor {n}, print room", "sw-core-01"),
+     "HQ floor {n}, print room", "sw-hq-dist-01"),
     (1, "ups-hq-{n:02d}", "apc-symmetra", "net_ups",
-     "HQ comms room", "sw-core-01"),
+     "HQ comms room", "sw-hq-dist-01"),
     (2, "pdu-hq-{n:02d}", "gude-pdu", "net_ups",
-     "HQ comms room, rack {n}", "sw-core-01"),
+     "HQ comms room, rack {n}", "sw-hq-dist-01"),
     (1, "env-hq-{n:02d}", "avtech-ra3s", "net_ups",
-     "HQ comms room", "sw-core-01"),
+     "HQ comms room", "sw-hq-dist-01"),
     # --- warehouse 1 (CPE router rt-wh1-01, behind the DC head-end rt-wan-01) ---
     # Path: warehouse switch -> rt-wh1-01 (local CPE) -> rt-wan-01 (DC) -> core.
     (1, "rt-wh1-{n:02d}", "lancom-router", "net_routers",

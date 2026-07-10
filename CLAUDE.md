@@ -129,19 +129,29 @@ sum, not a static fraction.
 
 Checkmk validates a host's `parents` at **creation** time (`POST` 400s if the
 parent host doesn't exist yet) — so the SNMP network layer is created before
-the servers/shell (`setup()`), `setup_snmp` creates core→WAN→rest in order,
+the servers/shell (`setup()`), `setup_snmp` creates core→dist→leaves in order
+(the sort is `(not sw-core, not referenced, name)`; a device's parent must
+sort before it — holds because `rt-wan`<`rt-wh`, `sw-…-dist` are referenced),
 and the host loop creates hypervisors before the VMs that name them (sort by
-`parent in carried_fqdns`). Model the path from the monitoring server outward:
-`sw-core-01` is the single parentless root (its 12 ports are all uplink
-trunks — endpoints never hang off it). Endpoints hang off an **access
-switch** (`sw-access-01`; the fleet iron round-robins across the 8 DC ToR
-`sw-dc-tor-*`), which uplinks to the core. **A VM is a child of its
-hypervisor**, exposed via `net_parent` in the fleet roster JSON (not the
-profile's vestigial `parent=`). Each warehouse has its own hypervisor
-(`wh{1,2}-kvm-01`) so no VM parents across the WAN. Bump `SCHEMA_VERSION` when
-the topology changes. **Known gap:** at company scale the ~22 access/floor
-switches still uplink straight to the 12-port core — a distribution tier
-(HQ floor → dist → core) is the next realism step.
+`parent in carried_fqdns`). Model the path from the monitoring server outward,
+**properly tiered — never flat-fan the 12-port core** (its ports are all
+uplink trunks; only distribution switches + edge firewalls + WAN/internet
+routers hang off it, ~10 children):
+- **DC**: `core → sw-dc-dist-0{1,2} → sw-dc-tor-0N → servers`; storage, iDRACs,
+  power/env, LBs aggregate on the distribution pair.
+- **HQ**: `core → sw-hq-dist-01 → sw-hq-fNN → endpoints`.
+- **Warehouses**: `wh switch → local CPE rt-wh{1,2}-01 → DC head-end rt-wan-01 → core`.
+- **A VM is a child of its hypervisor** (`net_parent` in the fleet roster JSON,
+  not the profile's vestigial `parent=`); each warehouse has its own hypervisor
+  (`wh{1,2}-kvm-01`) so no VM parents across the WAN.
+
+The SNMP tiering lives in `snmp/netsim.py` `REPLAY_ROSTER` (parent column) +
+`SwCore`'s interface aliases (which name the real uplink peers). Bump
+`SCHEMA_VERSION` when the topology changes. **Applying changes:** agent-host
+parents update every `up` (the shell is rebuilt); SNMP parents need netsim to
+restart — `up` does so on `--force`, a scale change, or when `netsim.py`
+differs from the running copy (else a stale netsim serves old parents and the
+fingerprint fast-path skips the update).
 
 ### SNMP walk replay (`snmp/curate_walks.py` -> `walklib/` -> netsim)
 

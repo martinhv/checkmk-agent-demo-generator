@@ -87,11 +87,12 @@ per instance: own identity, advancing uptime, and interface counters whose
 rate derives from the RECORDED counter over the RECORDED uptime (busy ports
 stay busy, dead ports stay dead), wobbled and restart-persisted.
 
-- **DC fabric**: 6 Aruba 6200F + 2 Huawei CloudEngine ToR, 2 HP 5406R
-  distribution, Fortigate HA pair + ASA DMZ firewall, 2 Kemp load balancers,
-  internet-edge router.
-- **HQ**: 14 access switches (Aruba 2930F / HP 2530), 2 Extreme WLCs, 12
-  office printers (Ricoh/Canon), UPS + PDUs + room sensor.
+- **DC fabric**: 2 HP 5406R distribution (the only DC uplinks to the core),
+  6 Aruba 6200F + 2 Huawei CloudEngine ToR behind them, Fortigate HA pair +
+  ASA DMZ firewall, 2 Kemp load balancers, internet-edge router.
+- **HQ**: an HP 5406R distribution switch (`sw-hq-dist-01`) to the core, 14
+  access switches (Aruba 2930F / HP 2530) + 2 Extreme WLCs + 12 office
+  printers (Ricoh/Canon) + UPS/PDUs/room sensor behind it.
 - **Warehouses ×2**: a local CPE router each (`rt-wh1-01` / `rt-wh2-01`,
   Lancom), 5 access switches each (ProCurve/HP), 4 Zebra label printers each,
   UPS/PDU/AKCP sensor each.
@@ -102,9 +103,17 @@ stay busy, dead ports stay dead), wobbled and restart-persisted.
 
 ### Topology
 
-`sw-core-01` remains the root. DC/HQ endpoints hang off access switches;
-each warehouse follows `warehouse switch -> local CPE router (rt-wh{1,2}-01)
--> DC WAN head-end rt-wan-01 (which keeps its saturation incident) -> core`.
+`sw-core-01` is the root, and its 12x10G ports are all uplink trunks — only
+the distribution switches (`sw-dc-dist-01/02`, `sw-hq-dist-01`), the edge
+firewalls and the WAN/internet routers hang off it (fan-out ~10, not ~90).
+Below that:
+- **DC**: `core -> sw-dc-dist-0{1,2} -> sw-dc-tor-0N -> servers`; storage,
+  iDRACs, power/env and load balancers aggregate on the distribution pair.
+- **HQ**: `core -> sw-hq-dist-01 -> sw-hq-fNN -> endpoints` (+ WLCs, printers,
+  power on the HQ distribution).
+- **Warehouses**: `warehouse switch -> local CPE (rt-wh{1,2}-01) -> DC WAN
+  head-end rt-wan-01 (keeps its saturation incident) -> core`.
+
 Every parent is applied as the Checkmk `parents` attribute, so RCA has a real
 path to reason over.
 
