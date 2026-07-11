@@ -55,19 +55,19 @@ Moving parts (all stdlib, see the directories):
   deploy/piggyback/   ONE container (docker or podman; or --runtime native:
                       one process) runs every agent host's serve.py and
                       delivers them as piggyback — agent :6559, panel :8099
-  snmp/netsim.py      renders SNMP walk files into the site's snmpwalks dir
-                      every 30 s — panel :8101 (runs as the site user;
-                      estate.py uses sudo when needed)
+  snmp/netsim.py      answers SNMP live on a UDP port per device (127.0.0.0/8
+                      :1161) — panel :8101. Runs as the caller: no site
+                      filesystem, no sudo
   deploy/cmk_setup.py the REST-API engine (folder, hosts, rules, BI,
                       discovery, activation, teardown) — also usable alone
 
-Requirements: docker or podman compose (unless --runtime native), a running
-Checkmk site, and for SNMP a LOCAL site (walk files are written into it).
+Requirements: docker or podman compose (unless --runtime native) and a running
+Checkmk site. The SNMP layer needs the site to reach the responder on
+127.0.0.0/8, so it applies to a LOCAL site (self-hosted), not remote/SaaS.
 """
 from __future__ import annotations
 
 import argparse
-import filecmp
 import json
 import os
 import shutil
@@ -107,9 +107,10 @@ SCALES = {
     "company": {"hosts": "", "snmp": True, "fleet": True},
 }
 
-# site-user-readable copies for netsim (the repo usually lives under a 0750
-# home the site user cannot read — see netsim_up)
-WALKLIB_COPY = "/var/tmp/cmk-demo-walklib"
+# UDP port the netsim SNMP responder listens on (per device IP on 127.0.0.0/8);
+# non-privileged so it needs no root. cmk_setup reads the actual value from the
+# netsim panel and writes the matching per-folder SNMP-port rule.
+NETSIM_SNMP_PORT = 1161
 
 
 def sh(cmd: list[str], **kw) -> subprocess.CompletedProcess:
@@ -271,34 +272,52 @@ def _pid_kill(pidfile: str, what: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-#  SNMP walk renderer (must write into the LOCAL site as the site user)
+#  SNMP responder (netsim answers SNMP live; runs as the caller, no sudo)
 # --------------------------------------------------------------------------- #
 NETSIM_LOG = "/var/tmp/cmk-demo-estate-netsim.log"
-NETSIM_COPY = "/var/tmp/cmk-demo-netsim.py"
+# hash of the netsim code as launched, so `up` restarts it when the topology
+# or responder changes (see _netsim_sig / netsim_up)
+NETSIM_SIGFILE = "/var/tmp/cmk-demo-netsim.sig"
 
 
-def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
+def _netsim_sig() -> str:
+    """A hash of the netsim code, so a change to the SNMP topology/values
+    (REPLAY_ROSTER, device classes, the responder) triggers a restart."""
+    import hashlib
+    h = hashlib.sha256()
+    for name in ("netsim.py", "snmpserver.py"):
+        try:
+            with open(os.path.join(REPO, "snmp", name), "rb") as f:
+                h.update(f.read())
+        except OSError:
+            pass
+    return h.hexdigest()
+
+
+def netsim_up(args: argparse.Namespace, site_name: str | None = None) -> None:
+    """Run netsim as the LIVE SNMP responder — as the caller, no sudo, no site
+    filesystem: it answers SNMP on a UDP port per device on 127.0.0.0/8 and
+    Checkmk polls it directly (cmk_setup wires the ipaddress + community/port
+    rule from the panel). netsim reads snmp/walklib straight from the repo."""
     fleet = SCALES[args.scale]["fleet"] if hasattr(args, "scale") else False
     netsim = os.path.join(REPO, "snmp", "netsim.py")
+    sig = _netsim_sig()
     running = get_json(SNMP_PANEL + "/")
     if running is not None:
-        # A running netsim can be reused ONLY if it still reflects the current
-        # config. It must be stopped and restarted when:
-        #  - the scale changed (fleet on/off) — "sw-dc-tor-*" is fleet-only, so
-        #    its presence reveals the running fleet state;
-        #  - --force was passed;
-        #  - netsim.py changed since launch — the SNMP topology + values (incl.
-        #    REPLAY_ROSTER parents) live in it, and the sudo path runs a copy at
-        #    NETSIM_COPY, so a diff means the running netsim is stale.
-        # Reusing a stale netsim is why SNMP parent edits didn't apply: it kept
-        # serving the OLD parents, so the fingerprint matched and cmk_setup
-        # short-circuited. (Agent-host parents already update: the shell is
-        # rebuilt every up.)
+        # Reuse the running netsim only if it still reflects the current config;
+        # restart on --force, a fleet/scale change ("sw-dc-tor-*" is fleet-only,
+        # revealing the running fleet state), or a netsim code change (else a
+        # stale netsim keeps serving old data and cmk_setup's fingerprint
+        # fast-path skips the update). Agent-host parents already refresh every
+        # up (the shell is rebuilt); this closes the same gap for SNMP.
         running_fleet = any(s.startswith("sw-dc-tor")
                             for s in running.get("devices", {}))
         force = bool(getattr(args, "force", False))
-        stale = (os.path.exists(NETSIM_COPY)
-                 and not filecmp.cmp(netsim, NETSIM_COPY, shallow=False))
+        try:
+            with open(NETSIM_SIGFILE) as f:
+                stale = f.read().strip() != sig
+        except OSError:
+            stale = True
         if running_fleet == fleet and not force and not stale:
             print("  netsim already running")
             return
@@ -312,109 +331,25 @@ def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
         if get_json(SNMP_PANEL + "/") is not None:
             sys.exit(f"ERROR: could not stop the stale netsim — stop it by hand "
                      f"and re-run:\n       curl {SNMP_PANEL}/admin/shutdown")
-    if args.walks_dir:
-        target = ["--walks-dir", args.walks_dir]
-        run_as = None
-    elif site_name:
-        target = ["--site", site_name]
-        run_as = site_name
-    else:
-        sys.exit("ERROR: SNMP needs a local site (--site) or --walks-dir")
-    target += ["--http-port", "8101", "--access-switches", str(args.replicas)]
-    walklib_src = os.path.join(REPO, "snmp", "walklib")
+
+    target = ["--transport", "snmp", "--http-port", "8101",
+              "--snmp-port", str(NETSIM_SNMP_PORT),
+              "--access-switches", str(args.replicas)]
     if fleet:
-        target += ["--fleet"]
-
-    if run_as:
-        import pwd
-        try:
-            pwd.getpwnam(run_as)
-        except KeyError:
-            sys.exit(f"ERROR: no user {run_as!r} on this machine — is that "
-                     "an OMD site here? (SNMP needs a LOCAL site)")
-        if os.access(f"/omd/sites/{run_as}/var/check_mk", os.W_OK):
-            run_as = None  # already permitted (running as the site user)
-
+        target += ["--fleet", "--walklib", os.path.join(REPO, "snmp", "walklib")]
     log = open(NETSIM_LOG, "wb")  # noqa: SIM115  (fresh log per attempt)
-    if run_as and shutil.which("docker") and \
-            subprocess.run(["sudo", "-n", "true"],  # noqa: S603
-                           capture_output=True).returncode != 0:
-        # No cached sudo credential but docker is available: run netsim in a
-        # container AS THE SITE'S UID with the site's snmpwalks dir mounted —
-        # same effect as sudo (docker group membership already grants it),
-        # but non-interactive. estate.py down stops it via /admin/shutdown
-        # (--rm makes the container vanish when netsim exits).
-        # This trick is docker-specific: it needs the rootful daemon to write
-        # the walk files as an *arbitrary* uid (the site user's). Rootless
-        # podman maps --user through a subuid namespace and can't become the
-        # site user, so with --runtime podman (and no docker) netsim falls
-        # through to the sudo path below.
-        import pwd
-        pw = pwd.getpwnam(run_as)
-        walks = f"/omd/sites/{run_as}/var/check_mk/snmpwalks"
-        state_dir = "/var/tmp/cmk-demo-netsim-docker"
-        os.makedirs(state_dir, exist_ok=True)
-        os.chmod(state_dir, 0o777)  # noqa: S103  (container writes as site uid)
-        cmd = ["docker", "run", "-d", "--rm", "--name", "cmk-demo-netsim",
-               "--user", f"{pw.pw_uid}:{pw.pw_gid}",
-               "-p", "127.0.0.1:8101:8101",
-               "-v", f"{os.path.join(REPO, 'snmp')}:/netsim:ro",
-               "-v", f"{walks}:/walks",
-               "-v", f"{state_dir}:/state",
-               "-e", "STATE_FILE=/state/netsim-state.json",
-               "python:3.12-slim", "python3", "-u", "/netsim/netsim.py",
-               "--walks-dir", "/walks",
-               *[a for a in target if a != "--fleet"],
-               *(["--fleet", "--walklib", "/netsim/walklib"] if fleet else [])]
-        # strip the host-side --site pair; the container writes to /walks
-        cmd = [a for i, a in enumerate(cmd)
-               if not (a == "--site" or (i > 0 and cmd[i - 1] == "--site"))]
-        print("  starting netsim in docker (site uid, no sudo needed)")
-        subprocess.run(["docker", "rm", "-f", "cmk-demo-netsim"],  # noqa: S603
-                       capture_output=True)
-        r = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)  # noqa: S603
-        if r.returncode != 0:
-            sys.exit(f"ERROR: docker netsim failed — see {NETSIM_LOG}")
-    elif run_as:
-        # Three traps: (1) the repo usually lives under a 0750 home dir the
-        # site user cannot read -> run a world-readable copy; (2) so may the
-        # caller's interpreter (pyenv!) -> use the site's own python;
-        # (3) sudo's cached credential is bound to this terminal
-        # (tty_tickets), so a detached `sudo -n` can't use it -> let sudo
-        # authenticate on the tty itself and background the daemon with -b.
-        shutil.copyfile(netsim, NETSIM_COPY)
-        os.chmod(NETSIM_COPY, 0o644)
-        if fleet:
-            # the walk-replay models must be readable by the site user too
-            shutil.copytree(walklib_src, WALKLIB_COPY, dirs_exist_ok=True)
-            os.chmod(WALKLIB_COPY, 0o755)
-            for name in os.listdir(WALKLIB_COPY):
-                os.chmod(os.path.join(WALKLIB_COPY, name), 0o644)
-            target += ["--walklib", WALKLIB_COPY]
-        site_python = f"/omd/sites/{run_as}/bin/python3"
-        python = site_python if os.path.exists(site_python) else "/usr/bin/python3"
-        print("  starting netsim as the site user (sudo may prompt)")
-        r = subprocess.run(  # noqa: S603
-            ["sudo", "-u", run_as, "-b", "--",
-             python, "-u", NETSIM_COPY, *target],
-            stdout=log, stderr=subprocess.STDOUT)
-        if r.returncode != 0:
-            sys.exit("ERROR: sudo failed — run netsim yourself:\n"
-                     f"       sudo -u {run_as} python3 {NETSIM_COPY} "
-                     f"{' '.join(target)}")
-    else:
-        if fleet:
-            target += ["--walklib", walklib_src]
-        proc = subprocess.Popen(  # noqa: S603
-            [sys.executable, "-u", netsim, *target],
-            stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-        with open(PIDFILE_NETSIM, "w") as f:
-            f.write(str(proc.pid))
+    proc = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-u", netsim, *target],
+        stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    with open(PIDFILE_NETSIM, "w") as f:
+        f.write(str(proc.pid))
+    with open(NETSIM_SIGFILE, "w") as f:
+        f.write(sig)
 
     deadline = time.time() + 90
     while time.time() < deadline:
         if get_json(SNMP_PANEL + "/") is not None:
-            print(f"  netsim started (panel {SNMP_PANEL}/admin)")
+            print(f"  netsim started (SNMP responder, panel {SNMP_PANEL}/admin)")
             return
         time.sleep(1)
     try:
@@ -427,8 +362,8 @@ def netsim_up(args: argparse.Namespace, site_name: str | None) -> None:
 
 
 def netsim_down() -> None:
-    # netsim runs as the site user, so we can't signal it — but its control
-    # panel has a shutdown endpoint (localhost demo tool, by design)
+    # SIGTERM the tracked pid; also hit the control panel's shutdown endpoint
+    # (belt-and-braces, and it still works if the pidfile was lost)
     if get_json(SNMP_PANEL + "/") is not None:
         try:
             urllib.request.urlopen(  # noqa: S310
@@ -462,15 +397,6 @@ def cmk_args(args: argparse.Namespace, extra: list[str]) -> list[str]:
     return out
 
 
-def resolve_site_name(args: argparse.Namespace) -> str | None:
-    """Local site name for netsim's walk target (None = remote/unknown)."""
-    if args.site and args.site != "auto":
-        return args.site
-    if args.site == "auto":
-        return cmk_setup.detect_dev_site()
-    return None  # --site-url: possibly a remote site
-
-
 # --------------------------------------------------------------------------- #
 #  Commands
 # --------------------------------------------------------------------------- #
@@ -497,11 +423,9 @@ def cmd_up(args: argparse.Namespace) -> None:
         print(f"  agent files under {AGENT_OUTPUT_DIR} "
               "(read per host via a 'cat $HOSTNAME$' datasource rule)")
 
-    site_name = resolve_site_name(args) if (snmp or args.site or args.site_url) else None
-
     if snmp:
-        print("* starting the SNMP walk renderer")
-        netsim_up(args, site_name)
+        print("* starting the SNMP responder (netsim)")
+        netsim_up(args)
 
     if args.no_checkmk:
         print("* --no-checkmk: skipping site setup")
@@ -635,9 +559,6 @@ def main() -> None:
                             help="reconfigure Checkmk even if nothing changed "
                                  "(re-run discovery + activation); by default an "
                                  "unchanged re-run short-circuits in ~1s")
-        parser.add_argument("--walks-dir",
-                            help="write SNMP walks here instead of into the site "
-                                 "(no sudo needed; for inspection only)")
         add_site_args(parser)
 
     up = sub.add_parser("up", help="start simulators + configure Checkmk")

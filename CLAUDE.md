@@ -159,9 +159,33 @@ interface aliases (they name the real uplink peers; sw-access has TWO uplinks,
 so the core must show two matching ports). Bump `SCHEMA_VERSION` when the
 topology changes. **Applying changes:** agent-host parents update every `up`
 (the shell is rebuilt); SNMP parents need netsim to restart — `up` does so on
-`--force`, a scale change, or when `netsim.py` differs from the running copy
-(else a stale netsim serves old parents and the fingerprint fast-path skips
-the update).
+`--force`, a scale change, or when the netsim code hash changed since launch
+(`_netsim_sig` vs `NETSIM_SIGFILE`; else a stale netsim serves old parents and
+the fingerprint fast-path skips the update).
+
+### SNMP transport: answer live, don't write walks into the site (no sudo)
+
+netsim's default `--transport snmp` (`snmp/snmpserver.py`) answers SNMP v2c
+LIVE: each device binds `127.0.0.<n>:1161` (the whole 127.0.0.0/8 routes to
+loopback, so any address binds with no root and no `ip addr add`), and Checkmk
+polls it like a real device. This needs NO site filesystem and NO sudo — the
+whole reason it exists (the legacy `--transport walk` wrote stored-walk files
+into the site-owned `var/check_mk/snmpwalks`, which meant being the site user).
+Key points:
+- **stdlib-only SNMP** — a compact BER codec + GET/GETNEXT/GETBULK. NO type
+  table: every value is served as OCTET STRING, because Checkmk's SNMP layer
+  hands check plugins the STRINGIFIED value and an OCTET STRING "12345"
+  stringifies identically to a Counter32 12345. Binary walk values (`"AA BB "`
+  uppercase-hex) are emitted as raw bytes so Checkmk renders them back to hex.
+  Self-test: `python3 snmp/snmpserver.py --selftest` (validated end to end —
+  Checkmk discovers if64/CPU/mem/power/UPS services, all green).
+- **cmk_setup wiring**: live-SNMP hosts get `ipaddress` (the loopback IP from
+  the panel) + `ip-v4-only`, plus ONE folder-wide community rule + port rule
+  (`snmp_communities` / `snmp_ports`) instead of a `usewalk_hosts` rule.
+- **estate.py** runs netsim as the caller (background process, `PIDFILE_NETSIM`,
+  `/admin/shutdown`) — no sudo, no docker-as-site-uid, no /var/tmp copy.
+- Cloud/SaaS still can't use SNMP: the responder is on loopback, unreachable
+  from a remote Checkmk server (a reachability limit now, not a filesystem one).
 
 ### SNMP walk replay (`snmp/curate_walks.py` -> `walklib/` -> netsim)
 
@@ -179,9 +203,9 @@ strings) — replay them instead of synthesizing more vendors. Mechanics:
   the SAME accumulator, 32-bit emitted mod 2^32); errors/discards stay frozen
   (rate 0 = green). hrProcessorLoad gets a gentle wobble; everything else is
   served as recorded.
-- netsim runs as the site user from a /var/tmp copy → estate.py must also
-  copy `walklib/` somewhere world-readable and pass `--walklib` (the repo
-  home is 0750).
+- netsim reads `walklib/` straight from the repo (it runs as the caller now,
+  not the site user) and passes `--walklib snmp/walklib`; no world-readable
+  copy is needed since the live transport never touches the site.
 
 ### Anonymizing real walks (MANDATORY for zeug_cmk data)
 
@@ -248,7 +272,7 @@ netsim restart for pure value changes.
 
 ## Deploying the estate to a site (`estate.py` + `deploy/cmk_setup.py`)
 
-`estate.py` is the one-command entry (`up`/`down`/`replace`/`status`/`break|degrade|heal`). It runs the delivery shell (`deploy/piggyback/serve.py`, which spawns every `hosts/*/serve.py` as an internal TCP child + a combined `/admin` panel on :8099), optionally the SNMP renderer (`snmp/netsim.py`, :8101), then delegates all Checkmk REST wiring to `deploy/cmk_setup.py` (folder tree → hosts → rules → BI pack → discovery → activation; `--remove` tears down). Everything is stdlib + REST (urllib, no redirect-following so async runs can be polled).
+`estate.py` is the one-command entry (`up`/`down`/`replace`/`status`/`break|degrade|heal`). It runs the delivery shell (`deploy/piggyback/serve.py`, which spawns every `hosts/*/serve.py` as an internal TCP child + a combined `/admin` panel on :8099), optionally the SNMP responder (`snmp/netsim.py`, :8101 panel; answers live SNMP on 127.0.0.0/8:1161, no sudo), then delegates all Checkmk REST wiring to `deploy/cmk_setup.py` (folder tree → hosts → rules → BI pack → discovery → activation; `--remove` tears down). Everything is stdlib + REST (urllib, no redirect-following so async runs can be polled).
 
 ### Deployment modes (`--mode`, default self-hosted)
 
@@ -264,7 +288,7 @@ Scales better than piggyback (no single-shell fetch bottleneck, no piggyback dep
 - `is_tcp` is purely the agent tag's `tcp` aux-tag (`cmk-agent`/`all-agents`), **independent of address family**. So datasource hosts are **`cmk-agent` + `no-ip` + `no-piggyback`**: the program runs, no IP/ping is needed, and `no-piggyback` skips the always-added empty PiggybackSource (`_builder` adds one to every host unless tagged `no-piggyback`).
 - The **shell stays `all-agents`** so it gets BOTH its own data (datasource program on its own file) AND the BI special agent; no agent-port rule / no TCP in this mode.
 - **One rule per site**: created on the estate ROOT folder with empty conditions — Checkmk rules apply to a folder *and its subfolders*, so a single `cat $HOSTNAME$` rule covers the whole tree. The rule `folder` field takes the `~`-ident (`~meridian_demo`), same notation as `folder_config`.
-- **The files**: the shell (`DELIVERY_MODE=datasource`) writes each host's full agent output + its own minimal section, atomically (tmp+rename), **world-readable (0644)**, to `/var/tmp/cmk-demo-agent-output` — deliberately NOT under the site: `cat` runs as the site user and reads any world-readable path, so no sudo/site-user write is needed (contrast SNMP walks, which Checkmk demands under the site's snmpwalks dir → why netsim needs sudo). File name = the FQDN (= `$HOSTNAME$`). Docker runtime bind-mounts that host dir into the container. The shell writes once BEFORE opening its panel, so files exist before discovery runs; a writer thread refreshes every ~20 s. In datasource mode `build_delivery_output()` emits ONLY the shell's minimal section (no piggyback wrapping).
+- **The files**: the shell (`DELIVERY_MODE=datasource`) writes each host's full agent output + its own minimal section, atomically (tmp+rename), **world-readable (0644)**, to `/var/tmp/cmk-demo-agent-output` — deliberately NOT under the site: `cat` runs as the site user and reads any world-readable path, so no sudo/site-user write is needed (SNMP is decoupled the same way now — netsim answers live over loopback instead of writing walks into the site). File name = the FQDN (= `$HOSTNAME$`). Docker runtime bind-mounts that host dir into the container. The shell writes once BEFORE opening its panel, so files exist before discovery runs; a writer thread refreshes every ~20 s. In datasource mode `build_delivery_output()` emits ONLY the shell's minimal section (no piggyback wrapping).
 
 ### Folder taxonomy (both modes)
 

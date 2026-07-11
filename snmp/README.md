@@ -2,26 +2,30 @@
 
 Fake **network equipment** for the Meridian Retail demo estate. Where the
 server hosts fake a Checkmk *agent* over TCP, network gear is monitored via
-SNMP — and Checkmk ships a first-class simulation hook for that: the rule
-**"Simulating SNMP by using a stored SNMP walk"** (`usewalk_hosts`) makes the
-fetcher read `~/var/check_mk/snmpwalks/<hostname>` instead of talking to the
-network. The StoredWalk backend re-reads the file on **every poll** (no
-caching — verified in `check_mk:packages/cmk-check-engine/cmk/checkengine/
-snmp_backends/stored_walk.py`), so a daemon that keeps rewriting the walk
-with advancing counters produces **live traffic graphs**, real rate checks,
-and stageable incidents — no SNMP stack involved anywhere.
+SNMP — and `netsim.py` **answers SNMP v2c live**: each device binds
+`127.0.0.<n>:1161` (the whole 127.0.0.0/8 routes to loopback, so any address
+binds with no root and no `ip addr add`), and Checkmk polls it like a real
+device. No site filesystem, **no sudo**. The SNMP server itself is
+`snmpserver.py` — a stdlib-only BER codec + GET/GETNEXT/GETBULK responder
+(`--selftest` validates it); it serves every value as an OCTET STRING, which
+Checkmk stringifies exactly like the "real" type, so no per-OID type table is
+needed. A daemon that re-renders each device on demand with advancing
+counters produces **live traffic graphs**, real rate checks, and stageable
+incidents.
 
-The simulator is **`netsim.py`** — a stdlib-only daemon that renders one
-walk file per device every 30 s with monotonic counters (`Counter`) and
+`netsim.py` is a stdlib-only daemon with monotonic counters (`Counter`) and
 autocorrelated gauges (`gauge`), exactly the physics of the agent hosts (see
-the repo `CLAUDE.md`). Break/heal control panel on **:8101/admin**,
-persisted state so restarts are invisible. `--access-switches N` stamps out
-N access switches (replicas are steady green; the incident stays on the
-first).
+the repo `CLAUDE.md`). Break/heal control panel on **:8101/admin**, persisted
+state so restarts are invisible. `--access-switches N` stamps out N access
+switches (replicas are steady green; the incident stays on the first).
 
-The Checkmk side (hosts as SNMP v2 / no-agent / **no-IP** — the StoredWalk
-backend bypasses NO_IP and substitutes 127.0.0.1, so nothing is ever
-contacted — plus the `usewalk_hosts` rule, discovery, activation) is done by
+A **legacy `--transport walk`** still writes stored-walk files into the site's
+`~/var/check_mk/snmpwalks/` (the `usewalk_hosts` rule) for anyone who wants
+it — but that path needs the site user (sudo), which is exactly what the live
+default avoids.
+
+The Checkmk side (hosts as SNMP v2 / no-agent with a loopback `ipaddress` +
+a folder-wide community/port rule, plus discovery + activation) is done by
 **`../deploy/cmk_setup.py`**, which `../estate.py` drives for you.
 
 ## The replay fleet (`--fleet`, company scale)
@@ -66,12 +70,11 @@ Services per device (all from real Checkmk SNMP plugins, no rules needed):
 # the one-stop shop does all of this: ../estate.py up --site
 # by hand instead:
 
-# 1. start the walk renderer AS THE SITE USER (it writes into the site)
-sudo -u heute python3 snmp/netsim.py               # foreground; or use &
-#    (inside a site: plain `python3 netsim.py` uses $OMD_ROOT;
-#     elsewhere: --site heute or --walks-dir /path)
+# 1. start the SNMP responder — runs as you, no sudo, no site access
+python3 snmp/netsim.py                             # foreground; or use &
+#    (answers SNMP live on 127.0.0.0/8:1161; --selftest checks snmpserver.py)
 
-# 2. bootstrap Checkmk (hosts + usewalk rule + discovery + activate)
+# 2. bootstrap Checkmk (hosts + community/port rule + discovery + activate)
 deploy/cmk_setup.py --site heute
 
 # 3. drive the incidents

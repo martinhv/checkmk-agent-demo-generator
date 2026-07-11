@@ -117,7 +117,10 @@ import urllib.request
 #        iDRACs/PDUs/env sensors; HQ printers on their floor switches;
 #        warehouse printers/power on the hall switches (mezzanine daisy-chain);
 #        ups-01 behind sw-access-01; base devices recast as DC gear.
-SCHEMA_VERSION = 10
+#   v11: live SNMP transport — netsim answers SNMP on a UDP port per device
+#        (no stored walks, no sudo); SNMP devices get a loopback ipaddress +
+#        ip-v4-only and a folder community/port rule instead of usewalk.
+SCHEMA_VERSION = 11
 
 # Host label on the delivery shell holding the last-activated estate
 # fingerprint. Lives on the site (survives across `estate.py up` runs) and is
@@ -127,6 +130,8 @@ FINGERPRINT_LABEL = "meridian_demo/fingerprint"
 RULE_DESCRIPTION = "Meridian Retail demo: agent port of the piggyback delivery shell"
 BI_RULE_DESCRIPTION = "Meridian Retail demo: payments platform business service"
 SNMP_RULE_DESCRIPTION = "Meridian Retail demo: stored SNMP walks (snmp/netsim.py)"
+SNMP_COMMUNITY_RULE_DESCRIPTION = "Meridian Retail demo: SNMP community (netsim responder)"
+SNMP_PORT_RULE_DESCRIPTION = "Meridian Retail demo: SNMP port (netsim responder)"
 DATASOURCE_RULE_DESCRIPTION = (
     "Meridian Retail demo: agent output via datasource program (cat $HOSTNAME$)")
 RESIDUAL_RULE_DESCRIPTION = (
@@ -441,7 +446,8 @@ def ensure_host(api: CmkApi, name: str, folder: str, attributes: dict) -> None:
     # existing estate takes effect; everything else is left as the user set it
     current = (existing.get("extensions") or {}).get("attributes") or {}
     fix = {k: attributes[k]
-           for k in ("parents", "tag_agent", "tag_piggyback", "tag_address_family")
+           for k in ("parents", "tag_agent", "tag_piggyback",
+                     "tag_address_family", "ipaddress")
            if k in attributes and current.get(k) != attributes[k]}
     if fix:
         status, payload, _ = api.request(
@@ -562,6 +568,42 @@ def ensure_usewalk_rule(api: CmkApi, fqdns: list[str]) -> None:
     print(f"  created usewalk rule ({len(wanted)} devices)")
 
 
+def ensure_snmp_access_rules(api: CmkApi, root_ident: str,
+                             community: str, port: int) -> None:
+    """Live-SNMP transport: one community rule + one port rule on the estate
+    ROOT folder (inherited by the Network subfolders). Folder-scoped like the
+    datasource rule — only the SNMP devices consult them; agent hosts ignore
+    SNMP settings. Idempotent by folder+marker; replaced if the value drifts."""
+    root_segs = _folder_segs(root_ident)
+    for ruleset, desc, value in (
+            ("snmp_communities", SNMP_COMMUNITY_RULE_DESCRIPTION, community),
+            ("snmp_ports", SNMP_PORT_RULE_DESCRIPTION, port)):
+        want = repr(value)
+        found = None
+        for rule, _hosts in _marked_rules(api, ruleset, desc):
+            if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
+                found = rule
+                break
+        if found is not None:
+            if found["extensions"].get("value_raw") == want:
+                print(f"  SNMP {ruleset} rule exists")
+                continue
+            api.request("DELETE", f"/objects/rule/{found['id']}", etag="*")
+            print(f"  removed stale SNMP {ruleset} rule")
+        status, payload, _ = api.request(
+            "POST", "/domain-types/rule/collections/all",
+            body={
+                "ruleset": ruleset,
+                "folder": root_ident,
+                "properties": {"description": desc, "disabled": False},
+                "value_raw": want,
+                "conditions": {},
+            })
+        if status != 200:
+            api_error(f"creating the {ruleset} rule", status, payload)
+        print(f"  created SNMP {ruleset} rule ({value!r})")
+
+
 def _datasource_command(agent_output_dir: str) -> str:
     """The 'Individual program call' command line: cat the per-host agent file
     the delivery shell writes, keyed by the host name Checkmk substitutes."""
@@ -637,6 +679,16 @@ def delete_residual_current_rule(api: CmkApi, root_ident: str) -> None:
             print("  deleted residual-current rule")
 
 
+def delete_snmp_access_rules(api: CmkApi, root_ident: str) -> None:
+    root_segs = _folder_segs(root_ident)
+    for ruleset, desc in (("snmp_communities", SNMP_COMMUNITY_RULE_DESCRIPTION),
+                          ("snmp_ports", SNMP_PORT_RULE_DESCRIPTION)):
+        for rule, _hosts in _marked_rules(api, ruleset, desc):
+            if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
+                api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
+                print(f"  deleted SNMP {ruleset} rule")
+
+
 def delete_datasource_rule(api: CmkApi, root_ident: str) -> None:
     root_segs = _folder_segs(root_ident)
     for rule, _hosts in _marked_rules(api, "datasource_programs",
@@ -667,13 +719,16 @@ def _topo_order(devices: dict) -> list[tuple[str, dict]]:
 
 
 def setup_snmp(api: CmkApi, args: argparse.Namespace,
-               leaf_for: "Callable[[str], str]") -> list[str]:
-    """SNMP devices as no-agent/no-IP hosts reading stored walks — this IS
-    the estate's network layer: the campus core switch sw-core-01 tops the
-    parent topology, every other device (and, in setup(), every server)
-    hangs off it. Sorted into the Network/{Switches,Routers,UPS} subfolders
-    via leaf_for(). Returns the device FQDNs. The StoredWalk backend bypasses
-    NO_IP and substitutes 127.0.0.1, so the hosts need no address at all."""
+               leaf_for: "Callable[[str], str]", root_ident: str) -> list[str]:
+    """SNMP devices as no-agent hosts — this IS the estate's network layer:
+    sw-core-01 tops the parent topology, everything else (and, in setup(),
+    every server) hangs off it. Sorted into the Network/* subfolders via
+    leaf_for(). Two transports (from the netsim panel):
+      snmp  — netsim answers SNMP live on a UDP port per device IP; hosts get
+              that ipaddress + a folder-wide community/port rule (no sudo).
+      walk  — legacy stored walks; hosts are no-IP and a usewalk rule points
+              the StoredWalk backend at the site's snmpwalks dir.
+    Returns the device FQDNs."""
     info = panel_get(args.snmp_panel, optional=True)
     if info is None or "devices" not in info:
         if args.snmp == "on":
@@ -684,6 +739,7 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace,
               "SNMP devices")
         return []
     devices = info["devices"]
+    live = info.get("transport", "walk") == "snmp"
 
     # heal first: interface target states are recorded at discovery
     for short, dev in devices.items():
@@ -702,8 +758,14 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace,
         attrs = {
             "tag_snmp_ds": "snmp-v2",
             "tag_agent": "no-agent",
-            "tag_address_family": "no-ip",
         }
+        if live:
+            # live SNMP: the host is polled at its loopback IP on the shared
+            # port (folder rule below); it needs a real address family.
+            attrs["ipaddress"] = dev.get("ip") or "127.0.0.1"
+            attrs["tag_address_family"] = "ip-v4-only"
+        else:
+            attrs["tag_address_family"] = "no-ip"   # StoredWalk substitutes .1
         parent_fqdn = fqdn_of.get(dev.get("parent") or "") or core_fqdn
         if parent_fqdn and dev["fqdn"] != parent_fqdn:
             attrs["parents"] = [parent_fqdn]
@@ -711,7 +773,12 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace,
             else _snmp_role(short)
         ensure_host(api, dev["fqdn"], leaf_for(role), attrs)
         fqdns.append(dev["fqdn"])
-    ensure_usewalk_rule(api, fqdns)
+    if live:
+        ensure_snmp_access_rules(api, root_ident,
+                                 info.get("snmp_community") or "public",
+                                 int(info.get("snmp_port") or 161))
+    else:
+        ensure_usewalk_rule(api, fqdns)
     return fqdns
 
 
@@ -1134,7 +1201,7 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
     snmp_fqdns: list[str] = []
     if args.snmp != "off":
         print("* creating the SNMP network devices (stored walks)")
-        snmp_fqdns = setup_snmp(api, args, leaf_for)
+        snmp_fqdns = setup_snmp(api, args, leaf_for, root_ident)
         ensure_residual_current_rule(api, root_ident)
     # sw-core-01 tops the path (its 12 ports are all switch/router uplink
     # trunks); endpoints hang off the access switch sw-access-01, which uplinks
@@ -1289,6 +1356,7 @@ def teardown(api: CmkApi, args: argparse.Namespace) -> None:
     _delete_marked_rules(api, "special_agents:bi", BI_RULE_DESCRIPTION, set(names))
     delete_datasource_rule(api, folder_ident(args.folder))
     delete_residual_current_rule(api, folder_ident(args.folder))
+    delete_snmp_access_rules(api, folder_ident(args.folder))
     for name in names:
         status, _, _ = api.request("DELETE", f"/objects/host_config/{name}", etag="*")
         if status == 204:

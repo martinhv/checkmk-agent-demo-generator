@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""Meridian Retail network estate — fake SNMP devices via stored walks.
+"""Meridian Retail network estate — fake SNMP devices, answered live.
 
 Where the server hosts fake a Checkmk *agent* over TCP, network gear is
-monitored via SNMP — and Checkmk ships a first-class simulation hook for
-that: the `usewalk_hosts` ruleset ("Simulating SNMP by using a stored SNMP
-walk") makes the fetcher read `~/var/check_mk/snmpwalks/<hostname>` instead
-of talking to the network (StoredWalk backend re-reads the file on EVERY
-poll — no caching, verified in
-check_mk:packages/cmk-check-engine/cmk/checkengine/snmp_backends/stored_walk.py).
+monitored via SNMP. Two transports (--transport, default snmp):
 
-So this daemon is the SNMP twin of the estate's serve.py servers: it renders
-a walk file per device every RENDER_INTERVAL seconds with monotonically
-advancing counters (live traffic graphs, not flat lines), autocorrelated
-gauges (CPU, temperature) and a break/heal control plane — and Checkmk picks
-up each rewrite on its next check cycle.
+  snmp  — answer SNMP v2c LIVE on a UDP port per device (snmp/snmpserver.py):
+          each device binds 127.0.0.<n>:<port> (the whole 127.0.0.0/8 routes
+          to loopback, so no root and no added addresses), Checkmk polls it
+          like a real device. NO site filesystem, NO sudo. The default, and
+          what estate.py uses.
+  walk  — legacy: write a stored-walk file per device into the site's
+          `var/check_mk/snmpwalks/<host>` (the `usewalk_hosts` ruleset /
+          StoredWalk backend). Needs to run AS THE SITE USER (-> sudo), which
+          is exactly what the live transport avoids.
+
+Either way this daemon is the SNMP twin of the estate's serve.py servers: it
+renders each device's OID space on demand with monotonically advancing
+counters (live traffic graphs, not flat lines), autocorrelated gauges (CPU,
+temperature) and a break/heal control plane.
 
 Devices (see FLEET.md):
 
@@ -30,16 +34,15 @@ This IS the estate's network layer: the DC core switch sw-core-01 tops the
 parent topology; servers and the UPS hang off sw-access-01, which uplinks to
 the core (applied by deploy/cmk_setup.py when the SNMP layer is deployed).
 
-Run it AS THE SITE USER (it writes into the site's var directory):
+Usual invocation (no privileges needed):
 
-    sudo -u heute python3 netsim.py            # inside: uses $OMD_ROOT
-    python3 netsim.py --site heute             # resolves /omd/sites/heute/...
-    python3 netsim.py --walks-dir /tmp/walks   # anywhere (for eyeballing)
+    python3 netsim.py                          # live SNMP on 127.0.0.0/8:1161
+    python3 netsim.py --transport walk --site heute   # legacy stored walks
 
 Then bootstrap Checkmk once with the estate tool (`../estate.py up`) or
-`deploy/cmk_setup.py` directly (folder + usewalk rule + hosts + discovery +
-activation, stdlib-only). Normally you don't run this file by hand at all —
-estate.py starts and stops it.
+`deploy/cmk_setup.py` directly (folder + hosts + community/port rule +
+discovery + activation, stdlib-only). Normally you don't run this file by
+hand at all — estate.py starts and stops it.
 
 Control plane: http://localhost:8101/admin (combined panel for all devices),
 curl API: /admin/<device>/degrade|break|heal, JSON status on /.
@@ -333,6 +336,7 @@ class Device:
     incident = False
     role: str = "network"            # folder-taxonomy key (deploy/cmk_setup.py)
     parent: str | None = "sw-core-01"  # short name of the upstream device
+    ip: str | None = None            # loopback IP the SNMP responder binds (snmp transport)
     tagline_effects: dict[str, list[str]] = {}
 
     def __init__(self) -> None:
@@ -1120,6 +1124,9 @@ def load_state() -> None:
 #  Walk writer loop
 # --------------------------------------------------------------------------- #
 WALKS_DIR = ""
+TRANSPORT = "walk"           # set to "snmp" by _main_snmp
+SNMP_PORT: int | None = None
+SNMP_COMMUNITY: str | None = None
 
 
 def write_walks() -> None:
@@ -1353,7 +1360,11 @@ class HttpHandler(BaseHTTPRequestHandler):
                 "role": d.role,
                 "parent": d.parent,
                 "location": d.location,
+                "ip": d.ip,
             } for d in DEVICES},
+            "transport": TRANSPORT,
+            "snmp_port": SNMP_PORT,
+            "snmp_community": SNMP_COMMUNITY,
             "walks_dir": WALKS_DIR,
             "render_interval_s": RENDER_INTERVAL,
             "toggles": [f"/admin/{d.short}/{a}" for d in DEVICES if d.incident
@@ -1373,6 +1384,96 @@ def resolve_walks_dir(args: argparse.Namespace) -> str:
     if os.environ.get("OMD_ROOT"):
         return os.path.join(os.environ["OMD_ROOT"], "var/check_mk/snmpwalks")
     sys.exit("need --walks-dir, --site, or a site context ($OMD_ROOT)")
+
+
+def assemble_devices(args: argparse.Namespace) -> list:
+    """Build the device list from the flags (shared by both transports)."""
+    devs = [SwCore()]
+    devs += [SwAccess(n) for n in range(1, max(1, args.access_switches) + 1)]
+    devs += [RtWan(), Ups()]
+    if args.fleet:
+        replay = build_replay_devices(args.walklib)
+        devs += replay
+        print(f"[boot] replay fleet: {len(replay)} devices from "
+              f"{len(ReplayModel._cache)} walk models ({args.walklib})")
+    if args.devices.strip():
+        wanted = {d.strip() for d in args.devices.split(",") if d.strip()}
+        devs = [d for d in devs if d.short in wanted]
+        if not devs:
+            sys.exit(f"--devices matched nothing (wanted: {sorted(wanted)})")
+    return devs
+
+
+def loopback_ip(index: int) -> str:
+    """A distinct, deterministic 127.0.0.0/8 address per device. The whole /8
+    routes to loopback on Linux, so any 127.x.y.z binds with no root and no
+    added addresses. Start at 127.0.0.2 (leave .1 for everything else)."""
+    n = 2 + index                       # 2..~65k, plenty for the estate
+    return f"127.0.{(n >> 8) & 0xFF}.{n & 0xFF}"
+
+
+# per-device rendered-table cache: a Checkmk walk fires many GETBULKs in a
+# burst; caching briefly keeps that burst internally consistent AND cheap
+_TABLE_CACHE: dict[str, tuple[float, object]] = {}
+_TABLE_TTL = 2.0
+
+
+def _main_snmp(args: argparse.Namespace) -> None:
+    """Serve SNMP live on a UDP port per device — no site filesystem, no sudo."""
+    global DEVICES, SNMP_PORT, SNMP_COMMUNITY, TRANSPORT
+    from snmpserver import SnmpServer, Table   # local: walk mode needn't import
+
+    TRANSPORT = "snmp"
+    SNMP_PORT, SNMP_COMMUNITY = args.snmp_port, args.snmp_community
+    DEVICES = assemble_devices(args)
+    by_short = {d.short: d for d in DEVICES}
+    for i, dev in enumerate(sorted(DEVICES, key=lambda d: d.short)):
+        dev.ip = loopback_ip(i)
+    load_state()
+
+    def table_for(short: str):
+        now = time.time()
+        hit = _TABLE_CACHE.get(short)
+        if hit and now - hit[0] < _TABLE_TTL:
+            return hit[1]
+        rows = by_short[short].rows(now)
+        _TABLE_CACHE[short] = (now, rows)
+        return rows
+
+    server = SnmpServer(SNMP_PORT, SNMP_COMMUNITY, table_for)
+    try:
+        for dev in DEVICES:
+            server.bind(dev.short, dev.ip)
+    except OSError as exc:
+        sys.exit(f"cannot bind SNMP responder on :{SNMP_PORT} ({exc})")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=_state_persist_loop, daemon=True).start()
+    if AUTO_BREAK_AFTER_MIN > 0:
+        threading.Thread(target=auto_break_watchdog, daemon=True).start()
+
+    http = ThreadingHTTPServer(("0.0.0.0", args.http_port), HttpHandler)  # nosec B104
+    print(f"[boot] transport: SNMP v2c on 127.0.0.0/8 :{SNMP_PORT} "
+          f"(community {SNMP_COMMUNITY!r})")
+    if len(DEVICES) <= 8:
+        print(f"[boot] devices: " + ", ".join(f"{d.short}@{d.ip}" for d in DEVICES))
+    else:
+        print(f"[boot] devices: {len(DEVICES)} on 127.0.0.2..{DEVICES and loopback_ip(len(DEVICES) - 1)}")
+    print(f"[boot] control: http://localhost:{args.http_port}/admin")
+    print("[boot] IMPORTANT: run service discovery in Checkmk while HEALTHY.")
+    try:
+        http.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[boot] shutting down")
+        save_state()
+
+
+def _state_persist_loop() -> None:
+    while True:
+        time.sleep(RENDER_INTERVAL)
+        try:
+            save_state()
+        except OSError as exc:
+            print(f"[state] save failed: {exc}")
 
 
 def main() -> None:
@@ -1403,7 +1504,23 @@ def main() -> None:
                              "site-readable location)")
     parser.add_argument("--once", action="store_true",
                         help="render one set of walks and exit (no daemon)")
+    parser.add_argument("--transport", choices=("snmp", "walk"),
+                        default=os.environ.get("NETSIM_TRANSPORT", "snmp"),
+                        help="snmp = answer SNMP live on a UDP port per device "
+                             "(no site filesystem, no sudo); walk = write "
+                             "stored-walk files into the site (legacy, needs "
+                             "the site user)")
+    parser.add_argument("--snmp-port", type=int,
+                        default=int(os.environ.get("NETSIM_SNMP_PORT", "1161")),
+                        help="UDP port the SNMP responder listens on (per "
+                             "device IP); a non-privileged port needs no root")
+    parser.add_argument("--snmp-community",
+                        default=os.environ.get("NETSIM_SNMP_COMMUNITY", "public"),
+                        help="accepted SNMP v2c community")
     args = parser.parse_args()
+
+    if args.transport == "snmp" and not args.once:
+        return _main_snmp(args)
 
     WALKS_DIR = resolve_walks_dir(args)
     os.makedirs(WALKS_DIR, exist_ok=True)
@@ -1416,19 +1533,7 @@ def main() -> None:
         sys.exit(f"cannot write to {WALKS_DIR} ({exc}) — run as the site user, "
                  f"e.g.: sudo -u <site> python3 netsim.py")
 
-    DEVICES = [SwCore()]
-    DEVICES += [SwAccess(n) for n in range(1, max(1, args.access_switches) + 1)]
-    DEVICES += [RtWan(), Ups()]
-    if args.fleet:
-        replay = build_replay_devices(args.walklib)
-        DEVICES += replay
-        print(f"[boot] replay fleet: {len(replay)} devices from "
-              f"{len(ReplayModel._cache)} walk models ({args.walklib})")
-    if args.devices.strip():
-        wanted = {d.strip() for d in args.devices.split(",") if d.strip()}
-        DEVICES = [d for d in DEVICES if d.short in wanted]
-        if not DEVICES:
-            sys.exit(f"--devices matched nothing (wanted: {sorted(wanted)})")
+    DEVICES = assemble_devices(args)
     load_state()
     write_walks()
 

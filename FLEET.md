@@ -160,10 +160,10 @@ Each host listens on a distinct pair so the whole estate can run at once.
 ¹ the two original demos both publish 6557 — run one at a time, or re-map. The
 new hosts use 6560–6567 so they never collide with each other or the originals.
 ³ the SNMP devices (`sw-core-01`, `sw-access-01`, `rt-wan-01`, `ups-01`) have
-no agent port at all: one daemon (`snmp/netsim.py`) renders stored SNMP walks straight into the
-site (`~/var/check_mk/snmpwalks/`) and Checkmk reads them via the
-`usewalk_hosts` rule — see `snmp/README.md`. All four share the one control
-panel on 8101.
+no agent port at all: one daemon (`snmp/netsim.py`) answers SNMP v2c live on a
+UDP port per device (127.0.0.0/8:1161 — no site filesystem, no sudo) and
+Checkmk polls it directly — see `snmp/README.md`. All four share the one
+control panel on 8101.
 
 ## Topology (parents + BI)
 
