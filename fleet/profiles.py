@@ -59,7 +59,7 @@ WH2 = "wh2"
 # --------------------------------------------------------------------------- #
 #  Linux VMs — platform + shared infrastructure                                #
 # --------------------------------------------------------------------------- #
-LINUX_CLASSES = [
+LINUX_CLASSES: list[dict[str, Any]] = [
     # --- shop platform microservices (the online retailer's own stack) ------
     {
         "prefix": "svc-catalog",
@@ -823,7 +823,7 @@ LINUX_CLASSES = [
 #  DC iron is 12 big boxes; each warehouse has one local hypervisor for its    #
 #  handful of edge/control VMs (no DC hypervisor reaches across the WAN).      #
 # --------------------------------------------------------------------------- #
-KVM_CLASSES = [
+KVM_CLASSES: list[dict[str, Any]] = [
     {
         "prefix": "kvm",
         "count": 12,
@@ -899,7 +899,7 @@ KVM_CLASSES = [
 # --------------------------------------------------------------------------- #
 #  Windows servers                                                             #
 # --------------------------------------------------------------------------- #
-WINDOWS_CLASSES = [
+WINDOWS_CLASSES: list[dict[str, Any]] = [
     {
         "prefix": "win-dc",
         "count": 2,
@@ -1137,7 +1137,7 @@ WINDOWS_CLASSES = [
 
 def all_classes() -> list[dict[str, Any]]:
     """Every fleet class with os + vm defaults applied."""
-    out = []
+    out: list[dict[str, Any]] = []
     for cls in LINUX_CLASSES:
         c = dict(cls)
         c.setdefault("os", "linux")

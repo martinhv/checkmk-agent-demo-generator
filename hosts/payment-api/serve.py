@@ -1142,7 +1142,7 @@ def _fmt_duration(seconds: float) -> str:
 def _admin_page() -> str:
     state = "broken" if is_broken() else "healthy"
     meta = STATE_META[state]
-    extras = []
+    extras: list[str] = []
     if broken_seconds() > 0:
         leak_mb = worker_leak_kb() // 1024
         extras.append(
@@ -1156,7 +1156,7 @@ def _admin_page() -> str:
         )
     extra_html = "".join(f"<div class='extra'>{e}</div>" for e in extras)
 
-    cards = []
+    cards: list[str] = []
     for action, target in ACTION_TO_STATE.items():
         tmeta = STATE_META[target]
         current = target == state

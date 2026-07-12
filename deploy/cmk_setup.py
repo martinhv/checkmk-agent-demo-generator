@@ -83,7 +83,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, overload
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast, overload
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -332,17 +332,25 @@ def _maybe_json(raw: bytes):
         return None
 
 
+# Typed empty-collection sentinels for navigating dynamic JSON (REST payloads):
+# a bare {} / [] literal infers dict[Unknown]/list[Unknown] and poisons every
+# .get() chain with Unknown. These are read-only fallbacks (never mutated).
+_ED: dict[str, Any] = {}
+_EL: list[Any] = []
+
+
 def die(msg: str) -> NoReturn:
     print(f"ERROR: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
-def api_error(what: str, status: int, payload: object) -> None:
+def api_error(what: str, status: int, payload: Any) -> None:
     detail = ""
     if isinstance(payload, dict):
-        detail = ": " + "; ".join(str(payload[k]) for k in ("title", "detail") if payload.get(k))
-        if payload.get("fields"):
-            detail += f" {payload['fields']}"
+        p = cast("dict[str, Any]", payload)
+        detail = ": " + "; ".join(str(p[k]) for k in ("title", "detail") if p.get(k))
+        if p.get("fields"):
+            detail += f" {p['fields']}"
     die(f"{what} failed (HTTP {status}){detail}")
 
 
@@ -366,7 +374,9 @@ def detect_dev_site() -> str:
     """Newest running local OMD site named like cmk-dev-site makes them (v300,
     v260p1, ...). Newest = creation order via the version symlink's ctime."""
     try:
-        candidates = [s for s in os.listdir("/omd/sites") if s.startswith("v") and s[1:2].isdigit()]
+        candidates: list[str] = [
+            s for s in os.listdir("/omd/sites") if s.startswith("v") and s[1:2].isdigit()
+        ]
     except OSError:
         candidates = []
     if not candidates:
@@ -407,7 +417,9 @@ def panel_get(panel: str, path: str = "/", *, optional: bool = False) -> dict[st
 
 def heal_estate(panel: str, hosts: list[dict[str, Any]]) -> None:
     """Toggle every non-healthy host back to healthy before discovery."""
-    unhealthy = [h for h in hosts if h.get("state") != "healthy" and "heal" in h.get("actions", [])]
+    unhealthy = [
+        h for h in hosts if h.get("state") != "healthy" and "heal" in h.get("actions", _EL)
+    ]
     for h in unhealthy:
         print(f"  healing {h['name']} (was: {h.get('state')})")
         try:
@@ -497,7 +509,7 @@ def ensure_host(api: CmkApi, name: str, folder: str, attributes: dict[str, Any])
     # (parents, and the agent/piggyback/address-family tags that differ between
     # the piggyback and datasource delivery modes) so a mode switch on an
     # existing estate takes effect; everything else is left as the user set it
-    current = (existing.get("extensions") or {}).get("attributes") or {}
+    current = (existing.get("extensions") or _ED).get("attributes") or _ED
     fix = {
         k: attributes[k]
         for k in (
@@ -538,11 +550,11 @@ def prune_subtree(api: CmkApi, root_ident: str, keep: set[str]) -> None:
     status, payload, _ = api.request("GET", "/domain-types/host_config/collections/all")
     if status != 200:
         return
-    for h in (payload or {}).get("value", []):
+    for h in (payload or _ED).get("value", _EL):
         name = h["id"]
         if name in keep:
             continue
-        if not _in_subtree(h.get("extensions", {}).get("folder", ""), root_segs):
+        if not _in_subtree(h.get("extensions", _ED).get("folder", ""), root_segs):
             continue
         st, _, _ = api.request("DELETE", f"/objects/host_config/{name}", etag="*")
         if st == 204:
@@ -560,13 +572,13 @@ def _marked_rules(
     )
     if status != 200:
         api_error(f"listing {ruleset} rules", status, payload)
-    marked = []
-    for rule in (payload or {}).get("value", []):
-        ext = rule.get("extensions", {})
-        if ext.get("properties", {}).get("description") != description:
+    marked: list[tuple[dict[str, Any], list[str]]] = []
+    for rule in (payload or _ED).get("value", _EL):
+        ext = rule.get("extensions", _ED)
+        if ext.get("properties", _ED).get("description") != description:
             continue
-        cond = (ext.get("conditions") or {}).get("host_name") or {}
-        marked.append((rule, cond.get("match_on") or []))
+        cond = (ext.get("conditions") or _ED).get("host_name") or _ED
+        marked.append((rule, cond.get("match_on") or _EL))
     return marked
 
 
@@ -642,7 +654,7 @@ def ensure_snmp_port_rule(api: CmkApi, root_ident: str, port: int) -> None:
     want = repr(port)
     found = None
     for rule, _hosts in _marked_rules(api, "snmp_ports", SNMP_PORT_RULE_DESCRIPTION):
-        if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
+        if _folder_segs(rule.get("extensions", _ED).get("folder", "")) == root_segs:
             found = rule
             break
     if found is not None:
@@ -682,7 +694,7 @@ def ensure_datasource_rule(api: CmkApi, root_ident: str, agent_output_dir: str) 
     command = _datasource_command(agent_output_dir)
     root_segs = _folder_segs(root_ident)
     for rule, _hosts in _marked_rules(api, "datasource_programs", DATASOURCE_RULE_DESCRIPTION):
-        if _folder_segs(rule.get("extensions", {}).get("folder", "")) != root_segs:
+        if _folder_segs(rule.get("extensions", _ED).get("folder", "")) != root_segs:
             continue  # another estate's rule (different root folder)
         if rule["extensions"].get("value_raw") == repr(command):
             print("  datasource program rule exists")
@@ -715,7 +727,7 @@ def ensure_residual_current_rule(api: CmkApi, root_ident: str) -> None:
     for rule, _hosts in _marked_rules(
         api, "checkgroup_parameters:residual_current", RESIDUAL_RULE_DESCRIPTION
     ):
-        if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
+        if _folder_segs(rule.get("extensions", _ED).get("folder", "")) == root_segs:
             print("  residual-current rule exists")
             return
     status, payload, _ = api.request(
@@ -739,7 +751,7 @@ def delete_residual_current_rule(api: CmkApi, root_ident: str) -> None:
     for rule, _hosts in _marked_rules(
         api, "checkgroup_parameters:residual_current", RESIDUAL_RULE_DESCRIPTION
     ):
-        if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
+        if _folder_segs(rule.get("extensions", _ED).get("folder", "")) == root_segs:
             api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
             print("  deleted residual-current rule")
 
@@ -753,7 +765,7 @@ def delete_snmp_access_rules(api: CmkApi, root_ident: str) -> None:
         ("snmp_ports", SNMP_PORT_RULE_DESCRIPTION),
     ):
         for rule, _hosts in _marked_rules(api, ruleset, desc):
-            if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
+            if _folder_segs(rule.get("extensions", _ED).get("folder", "")) == root_segs:
                 api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
                 print(f"  deleted SNMP {ruleset} rule")
 
@@ -761,7 +773,7 @@ def delete_snmp_access_rules(api: CmkApi, root_ident: str) -> None:
 def delete_datasource_rule(api: CmkApi, root_ident: str) -> None:
     root_segs = _folder_segs(root_ident)
     for rule, _hosts in _marked_rules(api, "datasource_programs", DATASOURCE_RULE_DESCRIPTION):
-        if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
+        if _folder_segs(rule.get("extensions", _ED).get("folder", "")) == root_segs:
             api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
             print("  deleted datasource program rule")
 
@@ -827,7 +839,7 @@ def setup_snmp(
     # The REST API rejects a host whose parent does not yet exist, so create in
     # topological order (parents first) — the chains are several levels deep
     # (printer -> floor switch -> distribution -> core).
-    fqdns = []
+    fqdns: list[str] = []
     for short, dev in _topo_order(devices):
         attrs: dict[str, object] = {
             "tag_snmp_ds": "snmp-v2",
@@ -882,7 +894,7 @@ def _planned_snmp(args: argparse.Namespace) -> list[tuple[str, str | None, str |
     devices = info["devices"]
     core = next((d["fqdn"] for s, d in devices.items() if s.startswith("sw-core")), None)
     fqdn_of = {s: d["fqdn"] for s, d in devices.items()}
-    out = []
+    out: list[tuple[str, str | None, str | None]] = []
     for d in devices.values():
         parent = fqdn_of.get(d.get("parent") or "") or core
         out.append((d["fqdn"], parent if parent != d["fqdn"] else None, d.get("role")))
@@ -953,7 +965,7 @@ def ensure_bi_pack(api: CmkApi, fqdn_by_short: dict[str, str]) -> None:
         {"title": BI_PACK_TITLE, "contact_groups": [], "public": True},
         f"BI pack {BI_PACK_ID}",
     )
-    top_nodes = []
+    top_nodes: list[dict[str, Any]] = []
     for rule_id, title, leaves in BI_TIERS:
         nodes = [
             _bi_leaf(fqdn_by_short[short], svc) for short, svc in leaves if short in fqdn_by_short
@@ -1079,9 +1091,11 @@ def _monitored_service_count(api: CmkApi, host: str) -> int | None:
     status, payload, _ = api.request("GET", f"/objects/service_discovery/{host}")
     if status != 200:
         return None
-    table = ((payload or {}).get("extensions") or {}).get("check_table") or {}
+    table = ((payload or _ED).get("extensions") or _ED).get("check_table") or _ED
     return sum(
-        1 for v in table.values() if (v.get("extensions") or {}).get("service_phase") == "monitored"
+        1
+        for v in table.values()
+        if (v.get("extensions") or _ED).get("service_phase") == "monitored"
     )
 
 
@@ -1150,9 +1164,9 @@ def bulk_discover(api: CmkApi, hostnames: list[str], timeout: float = 3600.0) ->
     last_print = 0.0
     while time.time() < deadline:
         status, payload, _ = api.request("GET", f"/objects/background_job/{job_id}")
-        ext = (payload or {}).get("extensions") or {}
+        ext = (payload or _ED).get("extensions") or _ED
         if status == 200 and not ext.get("active", True):
-            state = (ext.get("status") or {}).get("state")
+            state = (ext.get("status") or _ED).get("state")
             print(f"  bulk discovery finished ({len(hostnames)} hosts, state {state})")
             return
         if time.time() - last_print > 30:
@@ -1175,7 +1189,7 @@ def activate(api: CmkApi, force_foreign: bool, timeout: float = 120.0) -> None:
     if status != 200:
         hint = " (foreign changes pending? re-run with --force-foreign)" if status == 401 else ""
         api_error("activating changes" + hint, status, payload)
-    run_id = (payload or {}).get("id")
+    run_id = (payload or _ED).get("id")
     deadline = time.time() + timeout
     while run_id and time.time() < deadline:
         status, _, _ = api.request(
@@ -1244,16 +1258,16 @@ def _read_fingerprint(api: CmkApi, delivery: str) -> str | None:
     host = get_host(api, delivery)
     if host is None:
         return None
-    attrs = (host.get("extensions") or {}).get("attributes") or {}
-    return (attrs.get("labels") or {}).get(FINGERPRINT_LABEL)
+    attrs = (host.get("extensions") or _ED).get("attributes") or _ED
+    return (attrs.get("labels") or _ED).get(FINGERPRINT_LABEL)
 
 
 def _write_fingerprint(api: CmkApi, delivery: str, fp: str) -> None:
     """Persist the fingerprint as a shell-host label (merged with any existing
     labels). Creates a pending change picked up by the following activate()."""
     host = get_host(api, delivery)
-    attrs = (host.get("extensions") or {}).get("attributes") or {} if host else {}
-    labels = dict(attrs.get("labels") or {})
+    attrs = (host.get("extensions") or _ED).get("attributes") or _ED if host else {}
+    labels = dict(attrs.get("labels") or _ED)
     if labels.get(FINGERPRINT_LABEL) == fp:
         return
     labels[FINGERPRINT_LABEL] = fp
@@ -1469,8 +1483,8 @@ def teardown(api: CmkApi, args: argparse.Namespace) -> None:
         if status == 200:
             names = [
                 h["id"]
-                for h in (payload or {}).get("value", [])
-                if _in_subtree(h.get("extensions", {}).get("folder", ""), root_segs)
+                for h in (payload or _ED).get("value", _EL)
+                if _in_subtree(h.get("extensions", _ED).get("folder", ""), root_segs)
             ]
     delete_bi_objects(api)
     _delete_marked_rules(api, "usewalk_hosts", SNMP_RULE_DESCRIPTION, set(names))
@@ -1609,7 +1623,7 @@ def main(argv: list[str] | None = None) -> None:
     status, payload, _ = api.request("GET", "/version")
     if status != 200:
         api_error("authenticating against the site (check --user/--secret)", status, payload)
-    print(f"* site {args.site_url} ({(payload or {}).get('versions', {}).get('checkmk', '?')})")
+    print(f"* site {args.site_url} ({(payload or _ED).get('versions', _ED).get('checkmk', '?')})")
 
     if args.remove:
         teardown(api, args)

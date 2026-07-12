@@ -58,7 +58,7 @@ class BERError(ValueError):
 def _enc_len(n: int) -> bytes:
     if n < 0x80:
         return bytes([n])
-    body = []
+    body: list[int] = []
     while n:
         body.append(n & 0xFF)
         n >>= 8
@@ -209,7 +209,8 @@ class VarBind:
 
 def _parse_varbinds(body: bytes) -> list[tuple[int, ...]]:
     """Return the list of requested OIDs (values are NULL in a request)."""
-    oids, pos = [], 0
+    oids: list[tuple[int, ...]] = []
+    pos = 0
     while pos < len(body):
         tag, vb, pos = _read_tlv(body, pos)
         if tag != T_SEQ:
@@ -231,7 +232,7 @@ class Table:
     every poll is wasted work. patch() re-encodes just the dynamic rows."""
 
     def __init__(self, rows: list[tuple[str, str]]) -> None:
-        pairs = {}
+        pairs: dict[tuple[int, ...], bytes] = {}
         for oid_s, val_s in rows:
             pairs[parse_oid(oid_s)] = enc_octetstr(encode_value(val_s))
         self.oids = sorted(pairs)
@@ -302,7 +303,7 @@ def handle_message(data: bytes, table: Table, community: str | None = None) -> b
     else:  # GETBULK
         non_rep = max(0, dec_int(n1body))
         max_rep = max(0, dec_int(n2body))
-        out = []
+        out: list[VarBind] = []
         for o in oids[:non_rep]:
             out.append(_next_vb(table, o))
         for o in oids[non_rep:]:
@@ -444,7 +445,8 @@ def _selftest() -> None:
         for _ in range(3):
             _, _, pp = _read_tlv(pdu, pp)
         _, vbl, _ = _read_tlv(pdu, pp)
-        out, q = [], 0
+        out: list[tuple[tuple[int, ...], int, bytes]] = []
+        q = 0
         while q < len(vbl):
             _, vb, q = _read_tlv(vbl, q)
             _, ob, r = _read_tlv(vb, 0)

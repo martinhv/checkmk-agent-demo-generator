@@ -559,7 +559,7 @@ def _admin_page() -> str:
         extras.append(f"C:/ crosses CRIT (auto) in {_fmt_duration(left)}")
     extra_html = "".join(f"<div class='extra'>{e}</div>" for e in extras)
 
-    cards = []
+    cards: list[str] = []
     for action, target in ACTION_TO_STATE.items():
         tmeta = STATE_META[target]
         current = target == state

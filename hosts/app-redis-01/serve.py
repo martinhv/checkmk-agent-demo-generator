@@ -1121,7 +1121,7 @@ def _admin_page() -> str:
     state = get_state()
     meta = STATE_META[state]
     r = _redis_derived()
-    extras = []
+    extras: list[str] = []
     if degraded_seconds() > 0:
         extras.append(
             f"bad deploy live for {_fmt_duration(degraded_seconds())} — "
@@ -1146,7 +1146,7 @@ def _admin_page() -> str:
         extras.append(f"eviction storm auto-fires in {_fmt_duration(left)}")
     extra_html = "".join(f"<div class='extra'>{e}</div>" for e in extras)
 
-    cards = []
+    cards: list[str] = []
     for action, target in ACTION_TO_STATE.items():
         tmeta = STATE_META[target]
         current = target == state

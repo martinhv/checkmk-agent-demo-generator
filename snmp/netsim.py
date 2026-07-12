@@ -245,7 +245,7 @@ def mac(dev_seed: int, index: int) -> str:
 def render_walk(rows: list[tuple[str, str]]) -> str:
     """Numerically sorted `.oid value` lines — the binary search in the
     StoredWalk backend requires full numeric sort order."""
-    out = []
+    out: list[str] = []
     for oid, value in sorted(rows, key=lambda r: _oid_key(r[0])):
         out.append(f"{oid} {value}\n")
     return "".join(out)
@@ -366,6 +366,7 @@ class Device:
     role: str = "network"  # folder-taxonomy key (deploy/cmk_setup.py)
     parent: str | None = "sw-core-01"  # short name of the upstream device
     tagline_effects: dict[str, list[str]] = {}
+    ifaces: list["Iface"]
 
     def __init__(self) -> None:
         self.state = DeviceState(self.short)
@@ -1365,7 +1366,7 @@ def auto_break_watchdog() -> None:
 # --------------------------------------------------------------------------- #
 STATE_COLORS = {"healthy": "#2e7d32", "degraded": "#f9a825", "broken": "#c62828"}
 
-DEVICE_EFFECTS = {
+DEVICE_EFFECTS: dict[str, dict[str, list[str]]] = {
     "sw-access-01": {
         "healthy": [
             "all 50 interfaces green, uplinks Te1/1/1 + Te1/1/2 balanced",
@@ -1407,7 +1408,7 @@ def _fmt_duration(seconds: float) -> str:
 
 
 def _admin_page() -> str:
-    cards = []
+    cards: list[str] = []
     steady = [d for d in DEVICES if not d.incident]
     for dev in DEVICES:
         if not dev.incident:
@@ -1416,7 +1417,7 @@ def _admin_page() -> str:
         color = STATE_COLORS[state]
         extras = "".join(f"<div class='extra'>{e}</div>" for e in dev.status_extras())
         effects = DEVICE_EFFECTS.get(dev.short, {})
-        state_cards = []
+        state_cards: list[str] = []
         for action, target in ACTION_TO_STATE.items():
             tcolor = STATE_COLORS[target]
             lis = "".join(f"<li>{e}</li>" for e in effects.get(target, []))
@@ -1489,7 +1490,7 @@ def _steady_section(steady: list[Device]) -> str:
     by_role: dict[str, list[Device]] = {}
     for d in steady:
         by_role.setdefault(d.role, []).append(d)
-    blocks = []
+    blocks: list[str] = []
     for role in sorted(by_role):
         chips = " ".join(
             f"<span class='chip' title='{d.location}'>{d.short}</span>"

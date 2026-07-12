@@ -1091,7 +1091,7 @@ def _srv_pct() -> float:
 def _admin_page() -> str:
     state = get_state()
     meta = STATE_META[state]
-    extras = []
+    extras: list[str] = []
     extras.append(f"/srv/shares now <b>{_srv_pct():.1f} %</b> used")
     if degraded_seconds() > 0:
         rate = fill_rate_gb_per_h()
@@ -1107,7 +1107,7 @@ def _admin_page() -> str:
         extras.append(f"crosses 90 % (CRIT) auto-fires in {_fmt_duration(left)}")
     extra_html = "".join(f"<div class='extra'>{e}</div>" for e in extras)
 
-    cards = []
+    cards: list[str] = []
     for action, target in ACTION_TO_STATE.items():
         tmeta = STATE_META[target]
         current = target == state

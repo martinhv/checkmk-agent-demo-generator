@@ -51,12 +51,14 @@ clean at full strength:
   included (the long embedded agent/SNMP/HTML literals were wrapped). Only a
   `tests/*` `E402` exception remains (they import repo modules after a
   `sys.path` insert).
-- **basedpyright** runs `standard` and is **clean at error level** — no rule
-  downgrades — plus the dead-code rules from `strict` pulled forward and kept
-  hard (`reportUnusedExpression`, `reportUnusedVariable`, `reportUnusedFunction`).
-  The remaining gap to full `strict` is the annotation-coverage family
-  (`reportUnknown*` / `reportMissing*` ≈ 1100 findings): annotating every
-  param/return and the untyped JSON dicts — a larger effort left for later.
+- **basedpyright** now runs full **`strict`** (hop's tier) and is **clean —
+  0 errors, 0 warnings**. The annotation-coverage backlog is paid down: every
+  param/return is annotated and the untyped JSON navigation is typed via small
+  read-only `_ED`/`_EL` sentinels (for `dict.get(...)` defaults) and a couple
+  of `cast`s. Exactly **one** strict rule is turned off — `reportConstantRedefinition`
+  — because the runtime deliberately keeps process-global state in `UPPER_CASE`
+  module names that reassign (netsim `START`/`DEVICES`, each fake agent's toggle
+  state); the "constants aren't reassigned" heuristic is wrong for them.
 - **pytest** still has no coverage floor (`tests/test_smoke.py` is a scaffold).
   Add `--cov-fail-under=NN` to `pyproject.toml` once real tests exist.
 

@@ -1266,7 +1266,7 @@ def _admin_page() -> str:
     idle_sess, run_sess = connection_counts()
     total_conns = idle_sess + run_sess
     pct = total_conns / MAX_CONNECTIONS * 100
-    extras = []
+    extras: list[str] = []
     if degraded_seconds() > 0:
         extras.append(
             f"connection leak running for {_fmt_duration(degraded_seconds())} — "
@@ -1287,7 +1287,7 @@ def _admin_page() -> str:
         extras.append(f"leak runs away (auto -> BROKEN) in {_fmt_duration(left)}")
     extra_html = "".join(f"<div class='extra'>{e}</div>" for e in extras)
 
-    cards = []
+    cards: list[str] = []
     for action, target in ACTION_TO_STATE.items():
         tmeta = STATE_META[target]
         current = target == state

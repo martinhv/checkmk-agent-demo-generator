@@ -57,22 +57,17 @@ exclude_lines = [
 ]
 
 [tool.basedpyright]
-# "standard" and CLEAN at error level (no rule downgrades) — the whole codebase
-# type-checks. hop runs "strict"; the remaining gap to strict is annotating
-# every param/return + the untyped JSON dicts, a larger effort left for later.
-typeCheckingMode = "standard"
+# Full "strict" and CLEAN at error level — same tier as hop. The annotation-
+# coverage backlog (reportUnknown*/reportMissing*) has been paid down: every
+# param/return is annotated and the untyped JSON navigation is typed via
+# sentinels/casts. Only ONE strict rule is turned off:
+typeCheckingMode = "strict"
 pythonVersion = "3.12"
-# dead-code rules pulled forward from "strict" (fixed + kept hard); the rest of
-# strict is the annotation-coverage backlog (reportUnknown*/reportMissing*).
-reportUnusedExpression = "error"
-reportUnusedVariable = "error"
-reportUnusedFunction = "error"
-reportMissingTypeArgument = "error"  # bare generics (dict/list/Popen/...) fully typed
-reportMissingParameterType = "error"  # every function parameter annotated
-reportUnknownParameterType = "error"
-reportUnknownLambdaType = "error"
-reportReturnType = "error"
-reportPrivateUsage = "error"
+# Off by design, not a backlog: the runtime keeps process-global state in
+# UPPER_CASE module names that legitimately reassign (netsim START/DEVICES,
+# each fake agent's toggle state) — the "constants don't get reassigned"
+# heuristic is wrong for them and renaming to lower_case would be noise.
+reportConstantRedefinition = "none"
 # The code runs with these dirs on sys.path (estate.py inserts deploy/, netsim
 # imports snmpserver, fleet/serve imports profiles) — mirror that so imports
 # resolve statically instead of tripping reportMissingImports.

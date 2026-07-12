@@ -224,7 +224,7 @@ class Child:
         try:
             with socket.create_connection(("127.0.0.1", self.agent_port), timeout=timeout) as s:
                 s.settimeout(timeout)
-                chunks = []
+                chunks: list[bytes] = []
                 while True:
                     chunk = s.recv(65536)
                     if not chunk:
@@ -573,7 +573,7 @@ def _host_info_page(child: Child | FleetHost) -> str:
     # one card per reachable state (action -> target); steady-green hosts have
     # no actions, so just show their single state with no button.
     pairs = list(a2s.items()) if a2s else [(None, name) for name in states]
-    cards = []
+    cards: list[str] = []
     for action, target in pairs:
         tmeta = states.get(target, {})
         color = tmeta.get("color", "#666")
@@ -637,7 +637,7 @@ def _host_info_page(child: Child | FleetHost) -> str:
 
 
 def _overview_page() -> str:
-    rows = []
+    rows: list[str] = []
     colors = {"healthy": "#2e7d32", "degraded": "#f9a825", "broken": "#c62828", None: "#666"}
     fleet = [c for c in CHILDREN if isinstance(c, FleetHost)]
     for c in CHILDREN:
@@ -695,7 +695,7 @@ def _fleet_section(fleet: list[FleetHost]) -> str:
     by_role: dict[str, list[FleetHost]] = {}
     for h in fleet:
         by_role.setdefault(h.role or "other", []).append(h)
-    blocks = []
+    blocks: list[str] = []
     for role in sorted(by_role):
         names = " ".join(
             f"<span class='fh' title='{h.descr}'>{h.name}</span>"

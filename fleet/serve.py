@@ -45,6 +45,9 @@ from typing import Any
 
 import profiles
 
+# Shared read-only empty-collection default for dict.get navigation (never mutated).
+_EL: list[Any] = []
+
 DOMAIN = os.environ.get("ESTATE_DOMAIN", "corp.meridian-retail.com")
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8102"))
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "2.5.0-2026.04.03")
@@ -458,8 +461,8 @@ class LinuxHost:
         self.disk_serial = _serial(rnd)
         self.disk_hours = int(rnd.uniform(4_000, 32_000))
         # filesystems: "/" always; extra mounts ride a second disk (sdb)
-        self.extra_fs = []
-        for mount, gib, used in spec.get("fs", []):
+        self.extra_fs: list[tuple[Any, Any, float]] = []
+        for mount, gib, used in spec.get("fs", _EL):
             self.extra_fs.append(
                 (mount, gib * 1_048_576, min(0.72, used + rnd.uniform(-0.04, 0.04)))
             )
@@ -526,7 +529,7 @@ class LinuxHost:
         (+ one qemu process per guest on a hypervisor)."""
         rows = list(_LNX_BASE_PROCS)
         pid = 1200
-        for user, vsz, rss, cmd in self.spec.get("procs", []):
+        for user, vsz, rss, cmd in self.spec.get("procs", _EL):
             unit = (self.spec.get("units") or [("app.service", "")])[0][0]
             rows.append((f"system.slice/{unit}", user, vsz, rss, pid, cmd))
             pid += 3
@@ -595,7 +598,7 @@ class LinuxHost:
         a_anon = int(anon_lru * 0.62)
         a_file = int(file_lru * 0.38)
         sunreclaim = int(mt * 0.008)
-        threads = 220 + 30 * len(self.spec.get("procs", [])) + 40 * len(self.guests)
+        threads = 220 + 30 * len(self.spec.get("procs", _EL)) + 40 * len(self.guests)
         dirty = max(
             4_096,
             int(
@@ -779,7 +782,7 @@ class LinuxHost:
 
         # ---- cpu / uptime ----------------------------------------------------
         a("<<<cpu>>>")
-        nproc = 180 + 12 * len(self.spec.get("procs", [])) + 3 * len(self.guests)
+        nproc = 180 + 12 * len(self.spec.get("procs", _EL)) + 3 * len(self.guests)
         a(f"{l1} {l5} {l15} 2/{nproc} {28000 + self.c_proc.sample(4) % 9999} {self.ncpu}")
         a("<<<uptime>>>")
         a(f"{uptime}.00 {int(uptime * (self.ncpu * 0.85))}.00")
@@ -925,7 +928,7 @@ class LinuxHost:
 
         # ---- systemd units ----------------------------------------------------
         a("<<<systemd_units>>>")
-        units = [(n, "active", "running", d) for n, d in self.spec.get("units", [])]
+        units = [(n, "active", "running", d) for n, d in self.spec.get("units", _EL)]
         units += _LNX_BASE_UNITS
         a("[list-unit-files]")
         for name, _act, _sub, _descr in units:
@@ -1092,7 +1095,7 @@ class WindowsHost:
 
         # ---- services ---------------------------------------------------------
         a("<<<services>>>")
-        for name, status, descr in list(self.spec.get("services", [])) + _WIN_BASE_SERVICES:
+        for name, status, descr in list(self.spec.get("services", _EL)) + _WIN_BASE_SERVICES:
             a(f"{name} {status} {descr}")
 
         a("<<<checkmk_agent_plugins_win:sep(0)>>>")
@@ -1110,7 +1113,7 @@ class WindowsHost:
         a("<<<ps:sep(9)>>>")
         procs = list(_WIN_BASE_PROCS)
         pid = 2200
-        for usr, vsz, ws, exe in self.spec.get("win_procs", []):
+        for usr, vsz, ws, exe in self.spec.get("win_procs", _EL):
             procs.append((usr, vsz, ws, pid, 16, exe))
             pid += 4
         for usr, vsz, ws, ppid, threads, name in procs:

@@ -79,7 +79,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(REPO, "deploy"))
@@ -126,15 +126,25 @@ NETSIM_SNMP_PORT = 1161
 
 def sh(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[bytes]:
     print(f"  $ {' '.join(cmd)}")
-    return subprocess.run(cmd, check=False, **kw)  # noqa: S603
+    # **kw: Any defeats subprocess.run's overloads (-> CompletedProcess[Any]); we only
+    # ever call it in bytes mode, so pin the documented return type.
+    return cast(
+        "subprocess.CompletedProcess[bytes]",
+        subprocess.run(cmd, check=False, **kw),  # noqa: S603
+    )
 
 
-def get_json(url: str, timeout: float = 5.0):
+def get_json(url: str, timeout: float = 5.0) -> Any | None:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:  # noqa: S310
             return json.loads(r.read())
     except (urllib.error.URLError, OSError, ValueError):
         return None
+
+
+# Shared read-only empty-collection defaults for get_json() fallbacks (never mutated).
+_ED: dict[str, Any] = {}
+_EL: list[Any] = []
 
 
 def wait_for(url: str, what: str, timeout: float = 90.0):
@@ -157,8 +167,8 @@ def wait_for_children(timeout: float = 60.0) -> dict[str, Any]:
     deadline = time.time() + timeout
     info: dict[str, Any] = {}
     while time.time() < deadline:
-        info = get_json(PANEL + "/") or {}
-        hosts = info.get("carried_hosts") or []
+        info = get_json(PANEL + "/") or _ED
+        hosts: list[Any] = info.get("carried_hosts") or _EL
         if hosts and all(h.get("state") is not None for h in hosts):
             return info
         time.sleep(1)
@@ -612,8 +622,8 @@ def cmd_status(_args: argparse.Namespace) -> None:
 
 def cmd_toggle(args: argparse.Namespace) -> None:
     action, host = args.action, args.host
-    shell = get_json(PANEL + "/") or {"carried_hosts": []}
-    net = get_json(SNMP_PANEL + "/") or {"devices": {}}
+    shell: dict[str, Any] = get_json(PANEL + "/") or {"carried_hosts": []}
+    net: dict[str, Any] = get_json(SNMP_PANEL + "/") or {"devices": {}}
     if any(h["name"] == host for h in shell["carried_hosts"]):
         url = f"{PANEL}/admin/{host}/{action}"
     elif host in net["devices"]:

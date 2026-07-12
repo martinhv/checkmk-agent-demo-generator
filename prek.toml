@@ -21,7 +21,7 @@ types_or = ["python", "pyi"]
 
 [[repos.hooks]]
 id = "basedpyright"
-name = "basedpyright (standard)"
+name = "basedpyright (strict)"
 entry = "uv run python -m basedpyright"
 language = "system"
 types_or = ["python", "toml"]

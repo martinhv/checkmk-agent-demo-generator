@@ -62,7 +62,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
-from typing import Any
+from typing import Any, cast
 
 HOSTNAME = os.environ.get("CMK_HOSTNAME", "db-postgres-01.corp.meridian-retail.com")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "6556"))
@@ -1352,9 +1352,10 @@ def load_state() -> None:
         saved = data.get("counters", {})
         if isinstance(saved, list):
             # v1 file (order-keyed): restore by position if the layout matches
+            saved_list = cast("list[tuple[float, float]]", saved)
             saved = (
-                dict(zip(_ALL_COUNTERS, saved, strict=False))
-                if len(saved) == len(_ALL_COUNTERS)
+                dict(zip(_ALL_COUNTERS, saved_list, strict=False))
+                if len(saved_list) == len(_ALL_COUNTERS)
                 else {}
             )
         restored = 0
@@ -1470,7 +1471,7 @@ def _fmt_duration(seconds: float) -> str:
 def _admin_page() -> str:
     state = get_state()
     meta = STATE_META[state]
-    extras = []
+    extras: list[str] = []
     if degraded_minutes() > 0:
         pending, realloc, uncorrect, temp = smart_attrs()
         if pending == 0:
@@ -1502,7 +1503,7 @@ def _admin_page() -> str:
         extras.append(f"auto-escalates to BROKEN in {_fmt_duration(left)}")
     extra_html = "".join(f"<div class='extra'>{e}</div>" for e in extras)
 
-    cards = []
+    cards: list[str] = []
     for action, target in ACTION_TO_STATE.items():
         tmeta = STATE_META[target]
         current = target == state
