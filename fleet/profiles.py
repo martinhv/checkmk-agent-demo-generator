@@ -47,6 +47,8 @@ off an access switch, never the 12-port core. `site` (dc/wh1/wh2) drives both.
 expand_roster; only `site` matters now.
 """
 
+from typing import Any
+
 # Vestigial parent hints — kept only so old class dicts stay valid. The real
 # network parent (hypervisor for a VM, access switch for iron) is computed in
 # serve.py:expand_roster from `site`; these values are no longer read.
@@ -1133,7 +1135,7 @@ WINDOWS_CLASSES = [
 ]
 
 
-def all_classes() -> list[dict]:
+def all_classes() -> list[dict[str, Any]]:
     """Every fleet class with os + vm defaults applied."""
     out = []
     for cls in LINUX_CLASSES:

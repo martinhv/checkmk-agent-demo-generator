@@ -117,7 +117,7 @@ SCALES = {
 NETSIM_SNMP_PORT = 1161
 
 
-def sh(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+def sh(cmd: list[str], **kw) -> subprocess.CompletedProcess[bytes]:
     print(f"  $ {' '.join(cmd)}")
     return subprocess.run(cmd, check=False, **kw)  # noqa: S603
 

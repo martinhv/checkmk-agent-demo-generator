@@ -41,6 +41,7 @@ import random
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 
 import profiles
 
@@ -431,7 +432,7 @@ def _serial(rnd: random.Random, prefix: str = "S5") -> str:
 #  Linux fleet host
 # --------------------------------------------------------------------------- #
 class LinuxHost:
-    def __init__(self, short: str, spec: dict, guests: list[Host] | None = None) -> None:
+    def __init__(self, short: str, spec: dict[str, Any], guests: list[Host] | None = None) -> None:
         self.short = short
         self.spec = spec
         self.os = "linux"
@@ -938,7 +939,7 @@ class LinuxHost:
 #  Windows fleet host
 # --------------------------------------------------------------------------- #
 class WindowsHost:
-    def __init__(self, short: str, spec: dict) -> None:
+    def __init__(self, short: str, spec: dict[str, Any]) -> None:
         self.short = short
         self.spec = spec
         self.os = "windows"
@@ -1121,7 +1122,7 @@ class WindowsHost:
         return ("\r\n".join(lines) + "\r\n").encode("utf-8")
 
 
-Host = LinuxHost  # for type hints in guests lists
+Host = LinuxHost | WindowsHost  # for type hints in guests / host lists
 
 
 # --------------------------------------------------------------------------- #
@@ -1142,8 +1143,8 @@ def expand_roster() -> dict[str, LinuxHost | WindowsHost]:
     classes = [c for c in profiles.all_classes() if wanted is None or c["prefix"] in wanted]
 
     hosts: dict[str, LinuxHost | WindowsHost] = {}
-    vms_by_site: dict[str, list] = {}
-    hv_specs: list[tuple[str, dict, str]] = []  # (short, cls, site)
+    vms_by_site: dict[str, list[LinuxHost | WindowsHost]] = {}
+    hv_specs: list[tuple[str, dict[str, Any], str]] = []  # (short, cls, site)
 
     for cls in classes:
         first = cls.get("first", 1)
@@ -1159,14 +1160,14 @@ def expand_roster() -> dict[str, LinuxHost | WindowsHost]:
                 vms_by_site.setdefault(site, []).append(host)
 
     # hypervisors grouped by site
-    hv_by_site: dict[str, list] = {}
+    hv_by_site: dict[str, list[str]] = {}
     for short, _cls, site in hv_specs:
         hv_by_site.setdefault(site, []).append(short)
 
     # Round-robin each site's VMs across that site's hypervisors; a VM becomes
     # a CHILD of its hypervisor (topology) and a qemu process in its ps. A site
     # with no hypervisor of its own falls back to the DC iron.
-    guests_of: dict[str, list] = {short: [] for short, _, _ in hv_specs}
+    guests_of: dict[str, list[LinuxHost | WindowsHost]] = {short: [] for short, _, _ in hv_specs}
     for site, site_vms in vms_by_site.items():
         pool = hv_by_site.get(site) or hv_by_site.get("dc") or []
         for i, vm in enumerate(site_vms):

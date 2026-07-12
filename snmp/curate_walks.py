@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import re
+from typing import Any
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WALKLIB = os.path.join(HERE, "walklib")
@@ -89,7 +90,7 @@ RE_IP = re.compile(r"(?<![\d.])(\d{1,3}\.){3}\d{1,3}(?![\d.])")
 RE_HEX = re.compile(r'^"([0-9A-F]{2} )*"$')
 
 
-def map_ip(match: re.Match) -> str:
+def map_ip(match: re.Match[str]) -> str:
     """Deterministically remap a real IP into 10.77.0.0/16 (distinct inputs
     stay distinct with overwhelming probability)."""
     ip = match.group(0)
@@ -136,7 +137,7 @@ _BM_SW = [(r"(?i)\bbm-[a-z0-9-]+", "mr-sw-{h}")]
 # the base the wobble moves around.
 _HP_CPU = ".1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0"
 
-MODELS: dict[str, dict] = {
+MODELS: dict[str, dict[str, Any]] = {
     # -- switches ------------------------------------------------------------
     "aruba-2930f": {
         "src": "Aruba-JL261A-2930F-24G-PoE-4SFP-Switch.txt",
@@ -340,7 +341,7 @@ def _apply_subs(text: str, subs: list[tuple[str, str]]) -> str:
     for pattern, repl in subs:
         if "{h}" in repl:
 
-            def _r(m: re.Match, repl=repl) -> str:
+            def _r(m: re.Match[str], repl=repl) -> str:
                 h = int(hashlib.sha256(m.group(0).encode()).hexdigest(), 16) % 90 + 10
                 return repl.replace("{h}", str(h))
 
@@ -369,7 +370,7 @@ def scrub_value(value: str, sysname: str, model: str, subs: list[tuple[str, str]
     return scrub_text(value)
 
 
-def curate(model: str, cfg: dict, source_dir: str, audit: bool) -> dict | None:
+def curate(model: str, cfg: dict[str, Any], source_dir: str, audit: bool) -> dict[str, Any] | None:
     src = os.path.join(source_dir, cfg["src"])
     if not os.path.exists(src):
         print(f"  !! {model}: source {cfg['src']} missing — skipped")
@@ -444,7 +445,7 @@ def main() -> None:
 
     models = {args.only: MODELS[args.only]} if args.only else MODELS
     manifest_path = os.path.join(WALKLIB, "models.json")
-    manifest: dict = {}
+    manifest: dict[str, Any] = {}
     if os.path.exists(manifest_path):
         with open(manifest_path) as f:
             manifest = json.load(f)

@@ -52,6 +52,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
+from typing import Any
 
 HOSTNAME = os.environ.get("CMK_HOSTNAME", "app-redis-01.corp.meridian-retail.com")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "6556"))
@@ -362,7 +363,7 @@ REDIS_MAXMEMORY = 6_442_450_944  # 6 GiB enforced cap (the whole story)
 REDIS_INSTANCE = "MERIDIAN_CACHE"
 
 
-def _redis_derived() -> dict:
+def _redis_derived() -> dict[str, Any]:
     """All the redis values, so /admin and the agent agree."""
     p = pressure()
     # used_memory: 40 % of maxmemory healthy -> pinned at maxmemory broken. The
@@ -1206,7 +1207,7 @@ class HttpHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         print(f"[http] {self.address_string()} {format % args}")
 
-    def _send(self, code: int, body: dict) -> None:
+    def _send(self, code: int, body: dict[str, Any]) -> None:
         raw = json.dumps(body, indent=2).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")

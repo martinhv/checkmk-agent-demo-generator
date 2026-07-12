@@ -65,6 +65,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 
 DOMAIN = os.environ.get("ESTATE_DOMAIN", "corp.meridian-retail.com")
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8101"))
@@ -202,7 +203,7 @@ class DeviceState:
         bs = self.broken_seconds()
         return 1.0 if minutes <= 0 else min(1.0, bs / (minutes * 60.0))
 
-    def dump(self) -> dict:
+    def dump(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "state": self._state,
@@ -211,7 +212,7 @@ class DeviceState:
                 "broken_since": self._broken_since,
             }
 
-    def restore(self, data: dict) -> None:
+    def restore(self, data: dict[str, Any]) -> None:
         with self._lock:
             self._state = data.get("state", "healthy")
             self._state_since = data.get("state_since", time.time())
@@ -907,7 +908,7 @@ class ReplayModel:
         self.name = name
         # segments: static text blocks interleaved with dynamic slots
         # slot = (kind, oid, key, recorded_int)
-        self.segments: list[str | tuple] = []
+        self.segments: list[str | tuple[Any, ...]] = []
         self.rates: dict[str, float] = {}  # counter key -> base rate/s
         self.uptime_rec = 90 * 86400  # seconds, fallback
 
@@ -936,7 +937,7 @@ class ReplayModel:
                 self.segments.append(slot)
         flush()
 
-    def _classify(self, oid: str, value: str) -> tuple | None:
+    def _classify(self, oid: str, value: str) -> tuple[Any, ...] | None:
         if oid == ".1.3.6.1.2.1.1.5.0":
             return ("sysname", oid, None, 0)
         if oid == ".1.3.6.1.2.1.1.6.0":
@@ -1025,7 +1026,9 @@ class ReplayDevice(Device):
     # syslocation and all the recorded static lines) is fixed for an instance
     _DYNAMIC_KINDS = frozenset({"uptime", "hrcpu", "apcdate", "ctr32", "ctr64"})
 
-    def _slot_value(self, seg: tuple, elapsed: float, now: float, sampled: dict) -> str:
+    def _slot_value(
+        self, seg: tuple[Any, ...], elapsed: float, now: float, sampled: dict[str, int]
+    ) -> str:
         kind, _oid, key, rec = seg
         if kind == "sysname":
             return self.fqdn
@@ -1505,7 +1508,7 @@ class HttpHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         print(f"[http] {self.address_string()} {format % args}")
 
-    def _send(self, code: int, body: dict) -> None:
+    def _send(self, code: int, body: dict[str, Any]) -> None:
         raw = json.dumps(body, indent=2).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -1601,9 +1604,9 @@ def resolve_walks_dir(args: argparse.Namespace) -> str:
     sys.exit("need --walks-dir, --site, or a site context ($OMD_ROOT)")
 
 
-def assemble_devices(args: argparse.Namespace) -> list:
+def assemble_devices(args: argparse.Namespace) -> list[Device]:
     """Build the device list from the flags (shared by both transports)."""
-    devs = [SwCore()]
+    devs: list[Device] = [SwCore()]
     devs += [SwAccess(n) for n in range(1, max(1, args.access_switches) + 1)]
     devs += [RtWan(), Ups()]
     if args.fleet:
@@ -1627,7 +1630,7 @@ def assemble_devices(args: argparse.Namespace) -> list:
 # yet well under the ~60s check interval so consecutive polls still see advanced
 # counters. Big replay devices (17k OIDs) make the build cost real — this keeps
 # it to once per walk per device.
-_TABLE_CACHE: dict[str, list] = {}  # community -> [built_or_refreshed_ts, Table]
+_TABLE_CACHE: dict[str, list[Any]] = {}  # community -> [built_or_refreshed_ts, Table]
 _TABLE_TTL = 15.0
 
 

@@ -47,6 +47,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
+from typing import Any
 
 HOSTNAME = os.environ.get("CMK_HOSTNAME", "fileserver-01.corp.meridian-retail.com")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "6556"))
@@ -1167,7 +1168,7 @@ class HttpHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         print(f"[http] {self.address_string()} {format % args}")
 
-    def _send(self, code: int, body: dict) -> None:
+    def _send(self, code: int, body: dict[str, Any]) -> None:
         raw = json.dumps(body, indent=2).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")

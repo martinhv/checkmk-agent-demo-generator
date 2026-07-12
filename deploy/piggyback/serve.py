@@ -71,6 +71,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
+from typing import Any
 
 # Estate DNS domain — every host shows up in Checkmk as <short>.<ESTATE_DOMAIN>
 # (FQDN). The short name stays the internal label (panel, ports, selection).
@@ -200,7 +201,7 @@ class Child:
         self.parent = parent
         self.agent_port = CHILD_AGENT_BASE + idx
         self.http_port = CHILD_HTTP_BASE + idx
-        self.proc: subprocess.Popen | None = None
+        self.proc: subprocess.Popen[bytes] | None = None
 
     @property
     def fqdn(self) -> str:
@@ -282,7 +283,7 @@ class Child:
                 continue
         return None
 
-    def fetch_meta(self) -> dict | None:
+    def fetch_meta(self) -> dict[str, Any] | None:
         """Read the child's state-change info (STATE_META) for the info tab."""
         try:
             with urllib.request.urlopen(  # noqa: S310
@@ -322,7 +323,7 @@ class FleetManager:
     """Owns the single fleet child process and its roster."""
 
     def __init__(self) -> None:
-        self.proc: subprocess.Popen | None = None
+        self.proc: subprocess.Popen[bytes] | None = None
         self.base = f"http://127.0.0.1:{FLEET_HTTP_PORT}"
 
     def spawn(self) -> None:
@@ -338,7 +339,7 @@ class FleetManager:
         )
         print(f"[pb] spawned fleet manager http=127.0.0.1:{FLEET_HTTP_PORT}")
 
-    def roster(self, timeout: float = 20.0) -> list[dict]:
+    def roster(self, timeout: float = 20.0) -> list[dict[str, Any]]:
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -371,7 +372,7 @@ class FleetHost:
 
     actions: list[str] = []
 
-    def __init__(self, mgr: FleetManager, info: dict) -> None:
+    def __init__(self, mgr: FleetManager, info: dict[str, Any]) -> None:
         self.mgr = mgr
         self.name = info["name"]
         self.fqdn = info["fqdn"]
@@ -386,7 +387,7 @@ class FleetHost:
     def child_state(self) -> str:
         return "healthy"
 
-    def fetch_meta(self) -> dict | None:
+    def fetch_meta(self) -> dict[str, Any] | None:
         return {
             "state": "healthy",
             "in_state_for_s": time.time() - START,
@@ -421,7 +422,7 @@ _replicas = max(1, int(os.environ.get("ESTATE_REPLICAS", "1") or "1"))
 # roster: selected classes, each replicable class stamped out _replicas times.
 # Replicas force a healthy start and carry no toggle actions — incidents stay
 # unique to the original (low noise, one root cause).
-_roster: list[tuple[str, str, list, dict, str | None]] = []
+_roster: list[tuple[str, str, list[str], dict[str, str], str | None]] = []
 for name, directory, actions, extra, parent, replicable in _REGISTRY:
     if _wanted is not None and name not in _wanted:
         continue
@@ -750,7 +751,7 @@ class HttpHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         print(f"[http] {self.address_string()} {format % args}")
 
-    def _send(self, code: int, body: dict) -> None:
+    def _send(self, code: int, body: dict[str, Any]) -> None:
         raw = json.dumps(body, indent=2).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")

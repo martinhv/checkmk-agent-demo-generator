@@ -189,7 +189,7 @@ def _agent_role(short: str) -> str:
     return "infrastructure"
 
 
-def _host_role(h: dict) -> str:
+def _host_role(h: dict[str, Any]) -> str:
     """Panel-delivered role (fleet hosts / netsim devices carry one) with the
     short-name prefix table as fallback for the classic roster."""
     role = h.get("role")
@@ -299,10 +299,10 @@ class CmkApi:
         self,
         method: str,
         path: str,
-        body: dict | None = None,
-        query: dict | None = None,
+        body: dict[str, Any] | None = None,
+        query: dict[str, str] | None = None,
         etag: str | None = None,
-    ) -> tuple[int, Any, dict]:
+    ) -> tuple[int, Any, dict[str, str]]:
         """Return (status, parsed-json-or-None, headers). HTTP errors are
         returned, not raised — callers decide which codes are fine."""
         url = self.base + path
@@ -386,10 +386,12 @@ def detect_dev_site() -> str:
 #  Delivery control panel (source of truth for the carried roster)
 # --------------------------------------------------------------------------- #
 @overload
-def panel_get(panel: str, path: str = "/", *, optional: Literal[False] = False) -> dict: ...
+def panel_get(
+    panel: str, path: str = "/", *, optional: Literal[False] = False
+) -> dict[str, Any]: ...
 @overload
-def panel_get(panel: str, path: str = "/", *, optional: Literal[True]) -> dict | None: ...
-def panel_get(panel: str, path: str = "/", *, optional: bool = False) -> dict | None:
+def panel_get(panel: str, path: str = "/", *, optional: Literal[True]) -> dict[str, Any] | None: ...
+def panel_get(panel: str, path: str = "/", *, optional: bool = False) -> dict[str, Any] | None:
     try:
         with urllib.request.urlopen(panel.rstrip("/") + path, timeout=10) as r:  # noqa: S310
             return json.loads(r.read())
@@ -403,7 +405,7 @@ def panel_get(panel: str, path: str = "/", *, optional: bool = False) -> dict | 
         )
 
 
-def heal_estate(panel: str, hosts: list[dict]) -> None:
+def heal_estate(panel: str, hosts: list[dict[str, Any]]) -> None:
     """Toggle every non-healthy host back to healthy before discovery."""
     unhealthy = [h for h in hosts if h.get("state") != "healthy" and "heal" in h.get("actions", [])]
     for h in unhealthy:
@@ -473,12 +475,12 @@ def ensure_folder_chain(api: CmkApi, root_ident: str, chain: list[tuple[str, str
     return ident
 
 
-def get_host(api: CmkApi, name: str) -> dict | None:
+def get_host(api: CmkApi, name: str) -> dict[str, Any] | None:
     status, payload, _ = api.request("GET", f"/objects/host_config/{name}")
     return payload if status == 200 else None
 
 
-def ensure_host(api: CmkApi, name: str, folder: str, attributes: dict) -> None:
+def ensure_host(api: CmkApi, name: str, folder: str, attributes: dict[str, Any]) -> None:
     """Create the host if missing; reconcile the parents attribute if not."""
     existing = get_host(api, name)
     if existing is None:
@@ -547,7 +549,9 @@ def prune_subtree(api: CmkApi, root_ident: str, keep: set[str]) -> None:
             print(f"  pruned stale host {name}")
 
 
-def _marked_rules(api: CmkApi, ruleset: str, description: str) -> list[tuple[dict, list[str]]]:
+def _marked_rules(
+    api: CmkApi, ruleset: str, description: str
+) -> list[tuple[dict[str, Any], list[str]]]:
     """All (rule, condition host names) in a ruleset carrying our marker
     description. Rules are owned per shell host — several estates (different
     shells) may share a site, so callers must additionally match the hosts."""
@@ -762,14 +766,14 @@ def delete_datasource_rule(api: CmkApi, root_ident: str) -> None:
             print("  deleted datasource program rule")
 
 
-def _topo_order(devices: dict) -> list[tuple[str, dict]]:
+def _topo_order(devices: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     """Devices in parents-before-children order (the REST API validates that
     a named parent exists at creation time). Round-based: emit every device
     whose parent is already emitted or not part of this device set; sorted
     within a round for determinism. An (impossible) parent cycle falls back
     to name order rather than looping forever."""
     remaining = dict(devices)
-    out: list[tuple[str, dict]] = []
+    out: list[tuple[str, dict[str, Any]]] = []
     while remaining:
         # ready = parent is unset, or is outside this set (base device /
         # already emitted — emitted devices are popped from `remaining`)
@@ -897,21 +901,21 @@ def snmp_teardown_names(args: argparse.Namespace) -> list[str]:
 # --------------------------------------------------------------------------- #
 #  BI pack: tier rules -> top rule -> aggregation -> special-agent service
 # --------------------------------------------------------------------------- #
-def _bi_leaf(fqdn: str, service_regex: str) -> dict:
+def _bi_leaf(fqdn: str, service_regex: str) -> dict[str, Any]:
     return {
         "search": {"type": "empty"},
         "action": {"type": "state_of_service", "host_regex": fqdn, "service_regex": service_regex},
     }
 
 
-def _bi_call(rule_id: str) -> dict:
+def _bi_call(rule_id: str) -> dict[str, Any]:
     return {
         "search": {"type": "empty"},
         "action": {"type": "call_a_rule", "rule_id": rule_id, "params": {"arguments": []}},
     }
 
 
-def _ensure_bi_object(api: CmkApi, kind: str, ident: str, body: dict, label: str) -> None:
+def _ensure_bi_object(api: CmkApi, kind: str, ident: str, body: dict[str, Any], label: str) -> None:
     status, _, _ = api.request("GET", f"/objects/{kind}/{ident}")
     if status == 200:
         print(f"  {label} exists")
@@ -922,7 +926,7 @@ def _ensure_bi_object(api: CmkApi, kind: str, ident: str, body: dict, label: str
     print(f"  created {label}")
 
 
-def _bi_rule_body(rule_id: str, title: str, nodes: list[dict]) -> dict:
+def _bi_rule_body(rule_id: str, title: str, nodes: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "id": rule_id,
         "pack_id": BI_PACK_ID,
@@ -1191,7 +1195,7 @@ def activate(api: CmkApi, force_foreign: bool, timeout: float = 120.0) -> None:
 def _estate_fingerprint(
     args: argparse.Namespace,
     delivery: str,
-    hosts: list[dict],
+    hosts: list[dict[str, Any]],
     snmp_plan: list[tuple[str, str | None, str | None]],
 ) -> str:
     """A stable digest of the Setup objects setup() would create: the mode,
