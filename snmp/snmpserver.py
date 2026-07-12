@@ -28,6 +28,7 @@ import re
 import socket
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 
 # --------------------------------------------------------------------------- #
 #  BER / ASN.1 — just the pieces SNMP uses, definite length only
@@ -197,12 +198,10 @@ def encode_value(walk_value: str) -> bytes:
 # --------------------------------------------------------------------------- #
 #  PDU handling
 # --------------------------------------------------------------------------- #
+@dataclass(slots=True)
 class VarBind:
-    __slots__ = ("oid", "value_tlv")
-
-    def __init__(self, oid: tuple[int, ...], value_tlv: bytes) -> None:
-        self.oid = oid
-        self.value_tlv = value_tlv  # already-encoded value (TLV)
+    oid: tuple[int, ...]
+    value_tlv: bytes  # already-encoded value (TLV)
 
     def encode(self) -> bytes:
         return _tlv(T_SEQ, enc_oid(self.oid) + self.value_tlv)

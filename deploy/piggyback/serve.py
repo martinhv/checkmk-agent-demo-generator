@@ -69,6 +69,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
 from typing import Any
@@ -102,6 +103,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 HOSTS_DIR = os.path.join(REPO_ROOT, "hosts")
 START = time.time()
 
+
 # Estate roster: (hostname, directory under hosts/, toggle actions, extra
 # child env, parent, replicable).
 # `actions` drives the combined control panel; [] = steady-green background.
@@ -115,66 +117,31 @@ START = time.time()
 # `replicable` marks classes that ESTATE_REPLICAS stamps out N times
 # (web-frontend-02, -03, ...) — replicas run steady green; incident stories
 # stay unique to the original (low noise, one root cause).
+@dataclass(slots=True)
+class HostSpec:
+    name: str  # host + directory under hosts/ (identical by convention)
+    directory: str
+    actions: list[str]  # toggles for the /admin panel; [] = steady-green
+    extra_env: dict[str, str]
+    parent: str | None  # upstream SNMP device (Checkmk parents attr; see below)
+    replicable: bool = False  # ESTATE_REPLICAS stamps these out N times
+
+
+_A = ["degrade", "break", "heal"]  # the common incident toggle set
+_HEALTHY = {"START_STATE": "healthy"}
 _REGISTRY = [
-    ("web-frontend-01", "web-frontend-01", [], {"START_STATE": "healthy"}, "sw-access-01", True),
-    ("payment-api", "payment-api", ["break", "heal"], {"START_BROKEN": "0"}, "sw-access-01", False),
-    (
-        "app-worker-01",
-        "app-worker-01",
-        ["degrade", "break", "heal"],
-        {"START_STATE": "healthy"},
-        "sw-access-01",
-        True,
+    HostSpec("web-frontend-01", "web-frontend-01", [], _HEALTHY, "sw-access-01", replicable=True),
+    HostSpec(
+        "payment-api", "payment-api", ["break", "heal"], {"START_BROKEN": "0"}, "sw-access-01"
     ),
-    (
-        "app-redis-01",
-        "app-redis-01",
-        ["degrade", "break", "heal"],
-        {"START_STATE": "healthy"},
-        "sw-access-01",
-        True,
-    ),
-    (
-        "db-postgres-01",
-        "db-postgres-01",
-        ["degrade", "break", "heal"],
-        {"START_STATE": "healthy"},
-        "sw-access-01",
-        False,
-    ),
-    (
-        "db-postgres-02",
-        "db-postgres-02",
-        ["degrade", "break", "heal"],
-        {"START_STATE": "healthy"},
-        "sw-access-01",
-        True,
-    ),
-    (
-        "mail-relay-01",
-        "mail-relay-01",
-        ["degrade", "break", "heal"],
-        {"START_STATE": "healthy"},
-        "sw-access-01",
-        True,
-    ),
-    (
-        "fileserver-01",
-        "fileserver-01",
-        ["degrade", "break", "heal"],
-        {"START_STATE": "healthy"},
-        "sw-access-01",
-        True,
-    ),
-    ("backup-01", "backup-01", [], {"START_STATE": "healthy"}, "sw-access-01", False),
-    (
-        "win-dc-01",
-        "win-dc-01",
-        ["degrade", "break", "heal"],
-        {"START_STATE": "healthy"},
-        "sw-access-01",
-        True,
-    ),
+    HostSpec("app-worker-01", "app-worker-01", _A, _HEALTHY, "sw-access-01", replicable=True),
+    HostSpec("app-redis-01", "app-redis-01", _A, _HEALTHY, "sw-access-01", replicable=True),
+    HostSpec("db-postgres-01", "db-postgres-01", _A, _HEALTHY, "sw-access-01"),
+    HostSpec("db-postgres-02", "db-postgres-02", _A, _HEALTHY, "sw-access-01", replicable=True),
+    HostSpec("mail-relay-01", "mail-relay-01", _A, _HEALTHY, "sw-access-01", replicable=True),
+    HostSpec("fileserver-01", "fileserver-01", _A, _HEALTHY, "sw-access-01", replicable=True),
+    HostSpec("backup-01", "backup-01", [], _HEALTHY, "sw-access-01"),
+    HostSpec("win-dc-01", "win-dc-01", _A, _HEALTHY, "sw-access-01", replicable=True),
 ]
 
 
@@ -422,15 +389,17 @@ _replicas = max(1, int(os.environ.get("ESTATE_REPLICAS", "1") or "1"))
 # roster: selected classes, each replicable class stamped out _replicas times.
 # Replicas force a healthy start and carry no toggle actions — incidents stay
 # unique to the original (low noise, one root cause).
-_roster: list[tuple[str, str, list[str], dict[str, str], str | None]] = []
-for name, directory, actions, extra, parent, replicable in _REGISTRY:
-    if _wanted is not None and name not in _wanted:
+_roster: list[HostSpec] = []
+for spec in _REGISTRY:
+    if _wanted is not None and spec.name not in _wanted:
         continue
-    _roster.append((name, directory, actions, extra, parent))
-    if replicable:
+    _roster.append(spec)
+    if spec.replicable:
         for n in range(2, _replicas + 1):
-            green = {**extra, "START_STATE": "healthy", "START_BROKEN": "0"}
-            _roster.append((_replica_name(name, n), directory, [], green, parent))
+            green = {**spec.extra_env, "START_STATE": "healthy", "START_BROKEN": "0"}
+            _roster.append(
+                HostSpec(_replica_name(spec.name, n), spec.directory, [], green, spec.parent)
+            )
 
 # keep the internal admin ports clear of the agent range however big the
 # estate gets (agent ports occupy CHILD_AGENT_BASE .. +len(_roster))
@@ -439,8 +408,7 @@ CHILD_HTTP_BASE = int(
 )
 
 CHILDREN: list[Child | FleetHost] = [
-    Child(i, name, directory, actions, extra, parent)
-    for i, (name, directory, actions, extra, parent) in enumerate(_roster)
+    Child(i, s.name, s.directory, s.actions, s.extra_env, s.parent) for i, s in enumerate(_roster)
 ]
 _BY_NAME = {c.name: c for c in CHILDREN}
 
