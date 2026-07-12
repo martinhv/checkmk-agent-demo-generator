@@ -83,7 +83,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, overload
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -302,7 +302,7 @@ class CmkApi:
         body: dict | None = None,
         query: dict | None = None,
         etag: str | None = None,
-    ):
+    ) -> tuple[int, Any, dict]:
         """Return (status, parsed-json-or-None, headers). HTTP errors are
         returned, not raised — callers decide which codes are fine."""
         url = self.base + path
@@ -332,7 +332,7 @@ def _maybe_json(raw: bytes):
         return None
 
 
-def die(msg: str) -> None:
+def die(msg: str) -> NoReturn:
     print(f"ERROR: {msg}", file=sys.stderr)
     sys.exit(1)
 
@@ -385,7 +385,11 @@ def detect_dev_site() -> str:
 # --------------------------------------------------------------------------- #
 #  Delivery control panel (source of truth for the carried roster)
 # --------------------------------------------------------------------------- #
-def panel_get(panel: str, path: str = "/", *, optional: bool = False):
+@overload
+def panel_get(panel: str, path: str = "/", *, optional: Literal[False] = False) -> dict: ...
+@overload
+def panel_get(panel: str, path: str = "/", *, optional: Literal[True]) -> dict | None: ...
+def panel_get(panel: str, path: str = "/", *, optional: bool = False) -> dict | None:
     try:
         with urllib.request.urlopen(panel.rstrip("/") + path, timeout=10) as r:  # noqa: S310
             return json.loads(r.read())
@@ -821,7 +825,7 @@ def setup_snmp(
     # (printer -> floor switch -> distribution -> core).
     fqdns = []
     for short, dev in _topo_order(devices):
-        attrs = {
+        attrs: dict[str, object] = {
             "tag_snmp_ds": "snmp-v2",
             "tag_agent": "no-agent",
         }
@@ -841,7 +845,12 @@ def setup_snmp(
         parent_fqdn = fqdn_of.get(dev.get("parent") or "") or core_fqdn
         if parent_fqdn and dev["fqdn"] != parent_fqdn:
             attrs["parents"] = [parent_fqdn]
-        role = dev.get("role") if dev.get("role") in FOLDER_TAXONOMY else _snmp_role(short)
+        dev_role = dev.get("role")
+        role = (
+            dev_role
+            if isinstance(dev_role, str) and dev_role in FOLDER_TAXONOMY
+            else _snmp_role(short)
+        )
         ensure_host(api, dev["fqdn"], leaf_for(role), attrs)
         fqdns.append(dev["fqdn"])
     if live:
@@ -851,8 +860,8 @@ def setup_snmp(
     return fqdns
 
 
-def _planned_snmp(args: argparse.Namespace) -> list[tuple[str, str | None]]:
-    """The (fqdn, parent) pairs setup_snmp WOULD create — a read-only,
+def _planned_snmp(args: argparse.Namespace) -> list[tuple[str, str | None, str | None]]:
+    """The (fqdn, parent, role) triples setup_snmp WOULD create — a read-only,
     heal-free, create-free preview used only for the fingerprint. Mirrors
     setup_snmp's parenting (panel-declared parent, campus core as fallback)."""
     if args.snmp == "off":
@@ -1183,7 +1192,7 @@ def _estate_fingerprint(
     args: argparse.Namespace,
     delivery: str,
     hosts: list[dict],
-    snmp_plan: list[tuple[str, str | None]],
+    snmp_plan: list[tuple[str, str | None, str | None]],
 ) -> str:
     """A stable digest of the Setup objects setup() would create: the mode,
     the root folder, the shell (host/ip/port), every host with its EFFECTIVE
@@ -1321,6 +1330,7 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
     # the delivery shell sits at the estate root (the datasource rule lives
     # there too, inherited by every subfolder below) and hangs off the access
     # switch like every server — created after the SNMP layer so the parent exists
+    shell_attrs: dict[str, object]
     if datasource:
         # all-agents on the shell too: its Checkmk-agent source is the "cat"
         # datasource program (its own minimal file) AND the BI special agent.
@@ -1350,6 +1360,7 @@ def setup(api: CmkApi, args: argparse.Namespace) -> None:
     # must be created after that parent — the API validates parent existence.
     # Hosts parented to a switch (SNMP, already created) sort first; VMs last.
     # Stable sort keeps the roster order within each group.
+    attrs: dict[str, object]
     for h in sorted(hosts, key=lambda h: h.get("parent") in carried_fqdns):
         if datasource:
             # Checkmk-agent host whose agent source is the "cat $HOSTNAME$"

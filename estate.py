@@ -70,6 +70,7 @@ Checkmk site. The SNMP layer needs the site to reach the responder on
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -81,7 +82,7 @@ import urllib.request
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(REPO, "deploy"))
-import cmk_setup  # noqa: E402  (deploy/cmk_setup.py — the REST engine)
+import cmk_setup  # noqa: E402  (deploy/cmk_setup.py — needs sys.path set first)
 
 PANEL = "http://localhost:8099"  # piggyback shell control panel
 SNMP_PANEL = "http://localhost:8101"  # netsim control panel
@@ -185,10 +186,8 @@ def _ensure_output_dir() -> None:
     """datasource mode: the host dir must exist and be world-readable BEFORE
     docker mounts it (else docker root-creates it) so the site user can cat."""
     os.makedirs(AGENT_OUTPUT_DIR, exist_ok=True)
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(AGENT_OUTPUT_DIR, 0o755)
-    except OSError:
-        pass
 
 
 def shell_up(args: argparse.Namespace) -> None:
@@ -269,10 +268,8 @@ def _pid_kill(pidfile: str, what: str) -> None:
         print(f"  stopped {what} (pid {pid})")
     except (OSError, ValueError):
         pass
-    try:
+    with contextlib.suppress(OSError):
         os.remove(pidfile)
-    except OSError:
-        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -346,10 +343,8 @@ def _netsim_up_container(engine: str, fleet: bool, args: argparse.Namespace) -> 
     # invisible (counters stay monotonic — a reset would trip the rate-check
     # staleness cascade, see CLAUDE.md). /var/tmp, NOT the site: keeps no-sudo.
     os.makedirs(NETSIM_STATE_DIR, exist_ok=True)
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(NETSIM_STATE_DIR, 0o777)  # noqa: S103 (container uid writes here)
-    except OSError:
-        pass
     cmd = [
         engine,
         "run",
@@ -655,10 +650,11 @@ def add_site_args(p: argparse.ArgumentParser) -> None:
 
 
 def main() -> None:
+    doc = __doc__ or ""
     p = argparse.ArgumentParser(
-        description=__doc__.split("\n\n")[0],
+        description=doc.split("\n\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="\n".join(__doc__.split("\n")[3:]),
+        epilog="\n".join(doc.split("\n")[3:]),
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 

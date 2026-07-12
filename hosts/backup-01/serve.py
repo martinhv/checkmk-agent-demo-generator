@@ -235,7 +235,7 @@ def _smart_json(name: str, model: str, serial: str, hours: int, temp: int) -> st
 #  /         root   ~10 GiB of 40 GiB — slow log creep, daily logrotate trim
 #  /srv/backup      ~70 % used (per spec) — slow growth + daily restic GC sawtooth
 # --------------------------------------------------------------------------- #
-def filesystem_usage(now: float) -> tuple[int, int]:
+def filesystem_usage(now: float) -> tuple[int, int, int, int]:
     uptime = now - START + UPTIME_OFFSET
     day = 86_400.0
 
@@ -360,7 +360,6 @@ def build_agent_output() -> bytes:
     bkp_used = max(int(0.67 * bkp_size), min(int(0.72 * bkp_size), bkp_used))
 
     # ---- last backup age (loaded from state; increases monotonically) ------- #
-    last_bkp_age_s = time.time() - START + _LAST_BACKUP_AGE_S
     # Clamp to 6-8 h for a believable "ran last night" story
     last_bkp_age_s_display = max(
         6 * 3600, min(8 * 3600, _LAST_BACKUP_AGE_S + (time.time() - START) % 3600)
@@ -430,8 +429,8 @@ def build_agent_output() -> bytes:
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_job:CMK_VERSION="%s"' % AGENT_VERSION)
+    a(f'/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="{AGENT_VERSION}"')
+    a(f'/opt/checkmk/agent/default/package/plugins/86400/mk_job:CMK_VERSION="{AGENT_VERSION}"')
 
     # ----------------------------------------------------------------------- #
     #  df_v2
@@ -1062,8 +1061,8 @@ def _admin_page() -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "backup-demo-ctl/1.0"
 
-    def log_message(self, fmt: str, *args) -> None:
-        print(f"[http] {self.address_string()} {fmt % args}")
+    def log_message(self, format: str, *args) -> None:
+        print(f"[http] {self.address_string()} {format % args}")
 
     def _send_json(self, body: dict) -> None:
         raw = json.dumps(body, indent=2).encode()

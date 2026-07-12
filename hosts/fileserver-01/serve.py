@@ -422,7 +422,7 @@ def build_agent_output(state: str) -> bytes:
     root_used = root_used_kb(now)
     home_used = home_used_kb(now)
     srv_used = srv_used_kb(now)
-    log_bytes = runaway_log_bytes(now)
+    runaway_log_bytes(now)
 
     # ---- memory: a calm file server. Mostly page cache (it serves files),
     #      plenty free, swap empty. Stays green in all states. --------------- #
@@ -556,7 +556,7 @@ def build_agent_output(state: str) -> bytes:
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
+    a(f'/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="{AGENT_VERSION}"')
 
     a("<<<df_v2>>>")
     a(
@@ -742,10 +742,10 @@ def build_agent_output(state: str) -> bytes:
     a(f"/var/log/samba/log.smbd\t{18 * 1024 * 1024 + random.randint(0, 65536)}\t{now - 12}")
 
     # ---- processes: smbd/nmbd + nfsd + the runaway importer + daemons ----- #
-    importer_cpu = "%02d:%02d:%02d" % (
-        2 + int(degraded_seconds() // 3600),
-        int((degraded_seconds() % 3600) // 60),
-        int(degraded_seconds() % 60),
+    importer_cpu = (
+        f"{2 + int(degraded_seconds() // 3600):02d}:"
+        f"{int((degraded_seconds() % 3600) // 60):02d}:"
+        f"{int(degraded_seconds() % 60):02d}"
     )
     a("<<<ps_lnx>>>")
     a("[time]")
@@ -1163,8 +1163,8 @@ def _admin_page() -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "fileserver-demo-ctl/1.0"
 
-    def log_message(self, fmt: str, *args) -> None:
-        print(f"[http] {self.address_string()} {fmt % args}")
+    def log_message(self, format: str, *args) -> None:
+        print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict) -> None:
         raw = json.dumps(body, indent=2).encode()

@@ -234,7 +234,7 @@ def hex_bytes(raw: bytes) -> str:
     """Binary value in walk encoding: quoted uppercase hex pairs, each
     followed by a space — INCLUDING the last one before the closing quote
     (the parser's _is_hex_string requires the trailing space)."""
-    return '"' + "".join("%02X " % b for b in raw) + '"'
+    return '"' + "".join(f"{b:02X} " for b in raw) + '"'
 
 
 def mac(dev_seed: int, index: int) -> str:
@@ -825,7 +825,7 @@ class Ups(Device):
         cap = min(100, int(round(gauge("ups.cap", 99.4, amp_abs=0.7, period=2400))))
         temp = int(round(gauge("ups.temp", 25, amp_abs=1.5, period=1800)))
         load = int(round(gauge("ups.load", 37, amp_abs=4, period=1300)))
-        volt_out = int(round(gauge("ups.vout", 231, amp_abs=2, period=1600)))
+        int(round(gauge("ups.vout", 231, amp_abs=2, period=1600)))
         volt_in = int(round(gauge("ups.vin", 230, amp_abs=2, period=1900)))
         runtime_ticks = (
             int(gauge("ups.runtime", 7200, amp_abs=350, period=2100)) * 100
@@ -1502,8 +1502,8 @@ def _steady_section(steady: list[Device]) -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "netsim-ctl/1.0"
 
-    def log_message(self, fmt: str, *args) -> None:
-        print(f"[http] {self.address_string()} {fmt % args}")
+    def log_message(self, format: str, *args) -> None:
+        print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict) -> None:
         raw = json.dumps(body, indent=2).encode()
@@ -1670,7 +1670,7 @@ def _main_snmp(args: argparse.Namespace) -> None:
             hit[0] = now
         return hit[1]
 
-    server = SnmpServer(args.bind, SNMP_PORT, table_for)
+    server = SnmpServer(args.bind, args.snmp_port, table_for)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     threading.Thread(target=_state_persist_loop, daemon=True).start()
     if AUTO_BREAK_AFTER_MIN > 0:
@@ -1701,7 +1701,7 @@ def _state_persist_loop() -> None:
 
 def main() -> None:
     global WALKS_DIR, DEVICES
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("--site", help="write into /omd/sites/<site>/var/check_mk/snmpwalks")
     parser.add_argument("--walks-dir", help="explicit target directory for walk files")
     parser.add_argument("--http-port", type=int, default=HTTP_PORT)

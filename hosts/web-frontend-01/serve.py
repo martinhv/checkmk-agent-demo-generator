@@ -410,7 +410,7 @@ def build_agent_output() -> bytes:  # noqa: PLR0912, PLR0915
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
+    a(f'/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="{AGENT_VERSION}"')
 
     # --- filesystems ------------------------------------------------------
     a("<<<df_v2>>>")
@@ -914,8 +914,8 @@ def _admin_page() -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "web-frontend-demo/1.0"
 
-    def log_message(self, fmt: str, *args) -> None:
-        print(f"[http] {self.address_string()} {fmt % args}")
+    def log_message(self, format: str, *args) -> None:
+        print(f"[http] {self.address_string()} {format % args}")
 
     def _send_json(self, body: dict) -> None:
         raw = json.dumps(body, indent=2).encode()

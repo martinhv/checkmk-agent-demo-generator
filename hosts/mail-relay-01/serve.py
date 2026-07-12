@@ -147,10 +147,7 @@ def deferred_count() -> int:
     ds = degraded_seconds()
     deferred = base
     if ds > 0:
-        if DEFER_CLIMB_MIN <= 0:
-            climb = 1.0
-        else:
-            climb = min(1.0, ds / (DEFER_CLIMB_MIN * 60.0))
+        climb = 1.0 if DEFER_CLIMB_MIN <= 0 else min(1.0, ds / (DEFER_CLIMB_MIN * 60.0))
         deferred = _lerp(base, DEFER_DEGRADED_PLATEAU, climb)
 
     bs = broken_seconds()
@@ -502,8 +499,8 @@ def build_agent_output(state: str) -> bytes:
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
-    a('/opt/checkmk/agent/default/package/plugins/mk_postfix:CMK_VERSION="%s"' % AGENT_VERSION)
+    a(f'/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="{AGENT_VERSION}"')
+    a(f'/opt/checkmk/agent/default/package/plugins/mk_postfix:CMK_VERSION="{AGENT_VERSION}"')
 
     a("<<<df_v2>>>")
     root_size = 41_943_040
@@ -1105,8 +1102,8 @@ def _admin_page() -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "mail-relay-demo-ctl/1.0"
 
-    def log_message(self, fmt: str, *args) -> None:
-        print(f"[http] {self.address_string()} {fmt % args}")
+    def log_message(self, format: str, *args) -> None:
+        print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict) -> None:
         raw = json.dumps(body, indent=2).encode()

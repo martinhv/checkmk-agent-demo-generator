@@ -634,10 +634,15 @@ class LinuxHost:
         idle = self.c_idle.sample(self.r_idle)
         iowait = self.c_iowait.sample(self.r_iowait)
 
-        sda = {k: c.sample(r) for (k, c), r in zip(self.sda.items(), (3, 2, 14, 9, 11))}
+        sda = {
+            k: c.sample(r) for (k, c), r in zip(self.sda.items(), (3, 2, 14, 9, 11), strict=False)
+        }
         sdb = None
         if self.sdb:
-            sdb = {k: c.sample(r) for (k, c), r in zip(self.sdb.items(), (22, 14, 35, 22, 48))}
+            sdb = {
+                k: c.sample(r)
+                for (k, c), r in zip(self.sdb.items(), (22, 14, 35, 22, 48), strict=False)
+            }
 
         rx_b = self.c_rx_b.sample(self.rx_bps)
         tx_b = self.c_tx_b.sample(self.tx_bps)
@@ -675,10 +680,7 @@ class LinuxHost:
         a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
         a("pluginsdir /opt/checkmk/agent/default/package/plugins")
         a("localdir /opt/checkmk/agent/default/package/local")
-        a(
-            '/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"'
-            % AGENT_VERSION
-        )
+        a(f'/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="{AGENT_VERSION}"')
 
         # ---- df + mounts -----------------------------------------------------
         a("<<<df_v2>>>")
@@ -1092,12 +1094,10 @@ class WindowsHost:
         a("pluginsdir C:\\ProgramData\\checkmk\\agent\\plugins")
         a("localdir C:\\ProgramData\\checkmk\\agent\\local")
         a(
-            'C:\\ProgramData\\checkmk\\agent\\plugins\\cmk_update_agent.checkmk.py:CMK_VERSION = "%s"'
-            % AGENT_VERSION
+            f'C:\\ProgramData\\checkmk\\agent\\plugins\\cmk_update_agent.checkmk.py:CMK_VERSION = "{AGENT_VERSION}"'
         )
         a(
-            'C:\\ProgramData\\checkmk\\agent\\plugins\\mk_inventory.vbs:CMK_VERSION = "%s"'
-            % AGENT_VERSION
+            f'C:\\ProgramData\\checkmk\\agent\\plugins\\mk_inventory.vbs:CMK_VERSION = "{AGENT_VERSION}"'
         )
 
         a("<<<ps:sep(9)>>>")
@@ -1157,7 +1157,7 @@ def expand_roster() -> dict[str, LinuxHost | WindowsHost]:
 
     # hypervisors grouped by site
     hv_by_site: dict[str, list] = {}
-    for short, cls, site in hv_specs:
+    for short, _cls, site in hv_specs:
         hv_by_site.setdefault(site, []).append(short)
 
     # Round-robin each site's VMs across that site's hypervisors; a VM becomes
@@ -1184,7 +1184,7 @@ def expand_roster() -> dict[str, LinuxHost | WindowsHost]:
             hosts[short].net_parent = WH_SWITCH.get(site, DC_TOR[0])
 
     # Any remaining physical host (e.g. the Veeam server) hangs off a switch too.
-    for short, host in hosts.items():
+    for _short, host in hosts.items():
         if getattr(host, "net_parent", None):
             continue
         site = host.spec.get("site", "dc")
@@ -1252,7 +1252,7 @@ def state_saver() -> None:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "fleet/1.0"
 
-    def log_message(self, fmt: str, *args) -> None:
+    def log_message(self, format: str, *args) -> None:
         pass  # 200 hosts x polls — keep the log quiet
 
     def do_GET(self) -> None:  # noqa: N802

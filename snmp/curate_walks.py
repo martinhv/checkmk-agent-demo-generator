@@ -106,7 +106,7 @@ def fake_serial(model: str, oid: str) -> str:
 
 def fake_mac(model: str, index: str) -> str:
     h = hashlib.sha256(f"{model}:{index}".encode()).digest()
-    return '"00 1B 2C %02X %02X %02X "' % (h[0], h[1], h[2])
+    return f'"00 1B 2C {h[0]:02X} {h[1]:02X} {h[2]:02X} "'
 
 
 def decode_hex(value: str) -> str | None:
@@ -121,7 +121,7 @@ def decode_hex(value: str) -> str | None:
 
 
 def encode_hex(text: str) -> str:
-    return '"' + "".join("%02X " % b for b in text.encode("ascii", "replace")) + '"'
+    return '"' + "".join(f"{b:02X} " for b in text.encode("ascii", "replace")) + '"'
 
 
 # --------------------------------------------------------------------------- #
@@ -138,67 +138,67 @@ _HP_CPU = ".1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0"
 
 MODELS: dict[str, dict] = {
     # -- switches ------------------------------------------------------------
-    "aruba-2930f": dict(
-        src="Aruba-JL261A-2930F-24G-PoE-4SFP-Switch.txt",
-        cls="switch",
-        sub=_BM_SW,
-        set={_HP_CPU: "20"},
-    ),  # recorded 55 % — headroom
-    "aruba-6200f": dict(
-        src="Aruba-JL725B-6200F-24G-CL4-4SFP-370W-Switch.txt",
-        cls="switch",
+    "aruba-2930f": {
+        "src": "Aruba-JL261A-2930F-24G-PoE-4SFP-Switch.txt",
+        "cls": "switch",
+        "sub": _BM_SW,
+        "set": {_HP_CPU: "20"},
+    },  # recorded 55 % — headroom
+    "aruba-6200f": {
+        "src": "Aruba-JL725B-6200F-24G-CL4-4SFP-370W-Switch.txt",
+        "cls": "switch",
         # 802.1X client table: authenticated user/host
         # identities + client MACs in the OID index
-        strip=[".1.3.6.1.4.1.47196.4.1.1.3.17."],
-    ),
-    "hp-2530": dict(
-        src="HP-J9772A-2530-48G-PoEP-Switch.txt",
-        cls="switch",
-        sub=_BM_SW,
+        "strip": [".1.3.6.1.4.1.47196.4.1.1.3.17."],
+    },
+    "hp-2530": {
+        "src": "HP-J9772A-2530-48G-PoEP-Switch.txt",
+        "cls": "switch",
+        "sub": _BM_SW,
         # recorded CPU was 94 % -> CRIT at the 80/90 defaults
-        set={_HP_CPU: "12"},
-    ),
-    "procurve-2510": dict(
-        src="ProCurve-J9279A-Switch-2510G-24.txt",
-        cls="switch",
+        "set": {_HP_CPU: "12"},
+    },
+    "procurve-2510": {
+        "src": "ProCurve-J9279A-Switch-2510G-24.txt",
+        "cls": "switch",
         # trunk/neighbor names reveal the source org
-        sub=[(r"(?i)\bsw-[a-z0-9-]{3,}", "mr-sw-{h}")],
-        set={_HP_CPU: "9"},
-    ),
-    "hp-5406r": dict(
-        src="HP-J9850A-Switch-5406Rzl2.txt",
-        cls="switch",
-        sub=_BM_SW,
+        "sub": [(r"(?i)\bsw-[a-z0-9-]{3,}", "mr-sw-{h}")],
+        "set": {_HP_CPU: "9"},
+    },
+    "hp-5406r": {
+        "src": "HP-J9850A-Switch-5406Rzl2.txt",
+        "cls": "switch",
+        "sub": _BM_SW,
         # aux PSU slots recorded unpowered (9) -> CRIT; and
         # keep the recorded 75 % CPU clear of the levels
-        set={
+        "set": {
             _HP_CPU: "24",
             ".1.3.6.1.4.1.11.2.14.11.5.1.55.1.1.1.2.1": "3",
             ".1.3.6.1.4.1.11.2.14.11.5.1.55.1.1.1.2.2": "3",
         },
-    ),
-    "huawei-s6730": dict(src="HUAWEI-CloudEngine-S6730-H-V2.txt", cls="switch"),
+    },
+    "huawei-s6730": {"src": "HUAWEI-CloudEngine-S6730-H-V2.txt", "cls": "switch"},
     # -- routers / firewalls / wlc / lb ---------------------------------------
-    "lancom-router": dict(src="network-lancom-voip-router-lldp", cls="router"),
-    "fortigate": dict(
-        src="Fortigate.txt",
-        cls="firewall",
-        sub=[
+    "lancom-router": {"src": "network-lancom-voip-router-lldp", "cls": "router"},
+    "fortigate": {
+        "src": "Fortigate.txt",
+        "cls": "firewall",
+        "sub": [
             (r"Serial#: ?\w+", "Serial#: MR0000000000"),
             (r"\bFGT80FTK\w+", "MR0000000000"),
             (r"FBIN", "MRHQ"),
         ],
         # AV/IPS signature ages are recorded timestamps ->
         # permanently CRIT-old; drop the section
-        strip=[".1.3.6.1.4.1.12356.101.4.2."],
-    ),
-    "cisco-asa": dict(
-        src="cisco-asa-9.16-no-name",
-        cls="firewall",
-        sub=[(r"\bACYN[-\w]*", "mr-fw-dmz")],
+        "strip": [".1.3.6.1.4.1.12356.101.4.2."],
+    },
+    "cisco-asa": {
+        "src": "cisco-asa-9.16-no-name",
+        "cls": "firewall",
+        "sub": [(r"\bACYN[-\w]*", "mr-fw-dmz")],
         # recorded mempools sat at 95/99.98 % (normal for a
         # real ASA heapcache, red at the cmk 80/90 defaults)
-        set={
+        "set": {
             ".1.3.6.1.4.1.9.9.221.1.1.1.1.7.2.4": "120000000",
             ".1.3.6.1.4.1.9.9.221.1.1.1.1.18.2.4": "120000000",
             ".1.3.6.1.4.1.9.9.221.1.1.1.1.8.2.4": "192475648",
@@ -208,91 +208,99 @@ MODELS: dict[str, dict] = {
             ".1.3.6.1.4.1.9.9.221.1.1.1.1.8.2.6": "15514560",
             ".1.3.6.1.4.1.9.9.221.1.1.1.1.20.2.6": "15514560",
         },
-    ),
-    "extreme-wlc": dict(
-        src="network-extreme-wlc",
-        cls="wlc",
+    },
+    "extreme-wlc": {
+        "src": "network-extreme-wlc",
+        "cls": "wlc",
         # AP names carry the org's site codes; SSIDs its name
-        sub=[(r"AP-[A-Z]{2,8}(-[A-Z]{2,8})*(?=[-_\d])", "AP-S{h}"), (r"\bMMH-", "MR-")],
-    ),
-    "kemp-lb": dict(src="loadbalancer-kemp-1", cls="loadbalancer", sub=[(r"\bITC(?=[ -])", "MR")]),
+        "sub": [(r"AP-[A-Z]{2,8}(-[A-Z]{2,8})*(?=[-_\d])", "AP-S{h}"), (r"\bMMH-", "MR-")],
+    },
+    "kemp-lb": {
+        "src": "loadbalancer-kemp-1",
+        "cls": "loadbalancer",
+        "sub": [(r"\bITC(?=[ -])", "MR")],
+    },
     # -- printers --------------------------------------------------------------
     # printers: recorded with empty toners + active alert tables — refill the
     # supplies and drop prtAlertTable (a wall of green, not a service call)
-    "printer-ricoh": dict(
-        src="printer-ricoh-c4000",
-        cls="printer",
-        strip=[".1.3.6.1.2.1.43.18."],
+    "printer-ricoh": {
+        "src": "printer-ricoh-c4000",
+        "cls": "printer",
+        "strip": [".1.3.6.1.2.1.43.18."],
         # printer_supply_ricoh reads column 5 (percent)
-        set={
+        "set": {
             ".1.3.6.1.4.1.367.3.2.1.2.24.1.1.5.1": "70",
             ".1.3.6.1.4.1.367.3.2.1.2.24.1.1.5.2": "80",
             ".1.3.6.1.4.1.367.3.2.1.2.24.1.1.5.3": "75",
             # bypass tray recorded 'unavailable on request'
             ".1.3.6.1.2.1.43.8.2.1.11.1.4": "0",
         },
-    ),
-    "printer-canon": dict(
-        src="printer-canon-c5240-1",
-        cls="printer",
-        strip=[".1.3.6.1.2.1.43.18."],
-        set={
+    },
+    "printer-canon": {
+        "src": "printer-canon-c5240-1",
+        "cls": "printer",
+        "strip": [".1.3.6.1.2.1.43.18."],
+        "set": {
             ".1.3.6.1.2.1.43.11.1.1.9.1.1": "62",
             ".1.3.6.1.2.1.43.11.1.1.9.1.2": "85",
             ".1.3.6.1.2.1.43.11.1.1.9.1.3": "71",
             ".1.3.6.1.2.1.43.11.1.1.9.1.4": "78",
         },
-    ),
-    "printer-zebra": dict(src="printer-zebra", cls="printer"),
+    },
+    "printer-zebra": {"src": "printer-zebra", "cls": "printer"},
     # -- power / environment ----------------------------------------------------
     # Output-phase tree stripped: parse_apc_symmetra_output crashes on the
     # 3.0.0 dev branch (ElPhase.from_dict re-parses ReadingWithState ->
     # TypeError; introduced in c1802b42504) — restore once fixed upstream.
     # Self-test date (.7.2.4.0) is rendered dynamically by netsim.
-    "apc-symmetra": dict(
-        src="usv-apc-symmetra-1",
-        cls="ups",
-        strip=[".1.3.6.1.4.1.318.1.1.1.4.2."],
-        set={".1.3.6.1.4.1.318.1.1.1.7.2.4.0": "01/01/2026"},
-    ),
-    "apc-pdu": dict(src="apc-netshelterpdu-advanced", cls="pdu"),
-    "gude-pdu": dict(src="gude-power-switch-1", cls="pdu", sub=[(r"eth_cf52235", "eth_001b2c0")]),
-    "raritan-pdu": dict(src="pdu-raritan-1", cls="pdu"),
-    "akcp-sensor": dict(
-        src="akcp-sensor-probe",
-        cls="sensor",
+    "apc-symmetra": {
+        "src": "usv-apc-symmetra-1",
+        "cls": "ups",
+        "strip": [".1.3.6.1.4.1.318.1.1.1.4.2."],
+        "set": {".1.3.6.1.4.1.318.1.1.1.7.2.4.0": "01/01/2026"},
+    },
+    "apc-pdu": {"src": "apc-netshelterpdu-advanced", "cls": "pdu"},
+    "gude-pdu": {
+        "src": "gude-power-switch-1",
+        "cls": "pdu",
+        "sub": [(r"eth_cf52235", "eth_001b2c0")],
+    },
+    "raritan-pdu": {"src": "pdu-raritan-1", "cls": "pdu"},
+    "akcp-sensor": {
+        "src": "akcp-sensor-probe",
+        "cls": "sensor",
         # dry contact 0 recorded in error state (4) -> normal
-        set={".1.3.6.1.4.1.3854.1.2.2.1.18.1.3.0": "2"},
-    ),
-    "avtech-ra3s": dict(src="avtech-roomalert-3s", cls="sensor"),
+        "set": {".1.3.6.1.4.1.3854.1.2.2.1.18.1.3.0": "2"},
+    },
+    "avtech-ra3s": {"src": "avtech-roomalert-3s", "cls": "sensor"},
     # -- storage / san / oob mgmt / appliances ----------------------------------
-    "synology-nas": dict(
-        src="storage-synology-1",
-        cls="nas",
+    "synology-nas": {
+        "src": "storage-synology-1",
+        "cls": "nas",
         # kernel cmdline embeds the real NIC MACs
-        sub=[(r"\bmac(\d)=[0-9a-fA-F]{12}", r"mac\g<1>=001B2C00000\g<1>")],
+        "sub": [(r"\bmac(\d)=[0-9a-fA-F]{12}", r"mac\g<1>=001B2C00000\g<1>")],
         # update status recorded 3 (Connecting): the check
         # yields NOTHING for it -> service pends forever;
         # 2 = no update available -> OK
-        set={".1.3.6.1.4.1.6574.1.5.4.0": "2"},
-    ),
-    "brocade-fc": dict(
-        src="fcswitch-brocade",
-        cls="fcswitch",
+        "set": {".1.3.6.1.4.1.6574.1.5.4.0": "2"},
+    },
+    "brocade-fc": {
+        "src": "fcswitch-brocade",
+        "cls": "fcswitch",
         # swEvent log: real login source hostnames
-        strip=[".1.3.6.1.4.1.1588.2.1.1.1.8."],
-    ),
-    "idrac": dict(
-        src="idrac-dell-1",
-        cls="mgmt",
+        "strip": [".1.3.6.1.4.1.1588.2.1.1.1.8."],
+    },
+    "idrac": {
+        "src": "idrac-dell-1",
+        "cls": "mgmt",
         # OS volume I: recorded at 85 % -> WARN at 80/90
-        set={".1.3.6.1.2.1.25.2.3.1.6.7": "30150000"},
-    ),
-    "meinberg-ntp": dict(
-        src="meinberg-lantime-1",
-        cls="appliance",
+        "set": {".1.3.6.1.2.1.25.2.3.1.6.7": "30150000"},
+    },
+    "meinberg-ntp": {
+        "src": "meinberg-lantime-1",
+        "cls": "appliance",
         # real admin contact + the site's GPS coordinates
-        sub=[
+        "sub": [
             (r"Daniele Basile - ZID Basel", "NetOps - Meridian Retail"),
             (r"GPS Position: [-0-9. ]+m", "GPS Position: 48.1374 11.5755 519m"),
         ],
@@ -300,13 +308,13 @@ MODELS: dict[str, dict] = {
         # disconnected' (2/3) -> synchronized / GPS sync
         # with 9 of 12 satellites (levels_lower 3/3);
         # /mnt/flash recorded 89.7 % full -> ~49 %
-        set={
+        "set": {
             ".1.3.6.1.4.1.5597.30.0.1.2.1.4.1": "1",
             ".1.3.6.1.4.1.5597.30.0.1.2.1.5.1": "1",
             ".1.3.6.1.4.1.5597.30.0.1.2.1.6.1": "9",
             ".1.3.6.1.2.1.25.2.3.1.6.37": "24000",
         },
-    ),
+    },
 }
 
 
@@ -410,7 +418,7 @@ def curate(model: str, cfg: dict, source_dir: str, audit: bool) -> dict | None:
 
     if audit:
         seen: set[str] = set()
-        for oid, value in out:
+        for _oid, value in out:
             text = decode_hex(value)
             if text is None:
                 text = value
@@ -426,7 +434,7 @@ def curate(model: str, cfg: dict, source_dir: str, audit: bool) -> dict | None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     p.add_argument("--source", default=os.path.expanduser("~/git/zeug_cmk/walks"))
     p.add_argument("--only", help="curate a single model")
     p.add_argument(

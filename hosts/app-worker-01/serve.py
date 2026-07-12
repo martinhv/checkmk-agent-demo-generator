@@ -403,7 +403,7 @@ def build_agent_output(state: str) -> bytes:
 
     # ---- load: elevated by GC + swap-in D-state, but stays GREEN (the root
     #      cause is memory, not CPU — keep the noise down). 15-min < 20 WARN. -- #
-    r1, r5, r15 = break_ramp(0.55), break_ramp(0.75), break_ramp(1.0)
+    _r1, _r5, _r15 = break_ramp(0.55), break_ramp(0.75), break_ramp(1.0)
     base_l = _lerp(0.7, 7.5, p)
     l1 = round(base_l * gauge("load1", 1.0, amp_frac=0.25, phase=0.2, period=300), 2)
     l5 = round(base_l * 0.92 * gauge("load5", 1.0, amp_frac=0.14, phase=1.0, period=900), 2)
@@ -430,7 +430,7 @@ def build_agent_output(state: str) -> bytes:
     tx_bytes = C_TX_B.sample(140_000)
     rx_pkts = C_RX_P.sample(620)
     tx_pkts = C_TX_P.sample(560)
-    jobs = C_JOBS.sample(_lerp(38, 3, p))  # throughput collapses under thrash
+    C_JOBS.sample(_lerp(38, 3, p))  # throughput collapses under thrash
 
     sda_temp = round(gauge("smart.sda.temp", 31, amp_abs=1.2, phase=2.1, period=1100))
     sda_smart = _smart_json(
@@ -490,7 +490,7 @@ def build_agent_output(state: str) -> bytes:
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
+    a(f'/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="{AGENT_VERSION}"')
 
     a("<<<df_v2>>>")
     root_size = 41_943_040
@@ -750,7 +750,7 @@ def build_agent_output(state: str) -> bytes:
     # the leaking worker
     a(
         f"0::/system.slice/order-worker.service worker {java_vsz} {java_rss} "
-        f"02:51:44 {'0-00:00:%02d' % (broken_seconds() % 60) if broken else '09-02:39:50'} "
+        f"02:51:44 {f'0-00:00:{broken_seconds() % 60:02d}' if broken else '09-02:39:50'} "
         "1180 /usr/bin/java -Xmx10g -XX:+UseG1GC -jar /opt/orderworker/order-worker.jar"
     )
 
@@ -1038,8 +1038,8 @@ def _admin_page() -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "worker-demo-ctl/1.0"
 
-    def log_message(self, fmt: str, *args) -> None:
-        print(f"[http] {self.address_string()} {fmt % args}")
+    def log_message(self, format: str, *args) -> None:
+        print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict) -> None:
         raw = json.dumps(body, indent=2).encode()

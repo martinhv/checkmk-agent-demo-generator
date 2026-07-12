@@ -474,7 +474,7 @@ def build_agent_output(broken: bool) -> bytes:
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
+    a(f'/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="{AGENT_VERSION}"')
 
     # --- filesystems: usage grows and gets cleaned over time (see
     #     filesystem_usage) — spool/export sawteeth on a slow growth trend.
@@ -1215,8 +1215,8 @@ def _admin_page() -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "payment-api/1.4"
 
-    def log_message(self, fmt: str, *args) -> None:  # quieter logs
-        print(f"[http] {self.address_string()} {fmt % args}")
+    def log_message(self, format: str, *args) -> None:  # quieter logs
+        print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict) -> None:
         raw = json.dumps(body, indent=2).encode()

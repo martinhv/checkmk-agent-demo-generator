@@ -42,17 +42,19 @@ uv run python -m pytest         # tests + coverage report
 
 CI (`.github/workflows/ci.yml`) runs exactly `uv run prek run --all-files`.
 
-## Two deliberate "green today, tighten later" settings
+## Strictness vs hop
 
-This code predates the toolchain, so two gates are relaxed from hop's and
-carry an explicit backlog — tighten them as the code is cleaned:
+The backlog from the initial setup has been paid down — the gates are now
+clean at full strength:
 
-- **basedpyright** runs in `standard` (not `strict`); the loose-typing rules
-  that currently fire are set to `warning` (still shown, don't fail the gate).
-  Promote them back to `error`, then flip to `strict`, as annotations land.
-- **ruff** selects hop's full ruleset but `ignore`s the rules that fire on the
-  existing code (see the list in `pyproject.toml`). Drop entries as you fix them.
-- **pytest** has no coverage floor yet (`tests/test_smoke.py` is a scaffold).
+- **ruff** runs hop's full ruleset with **no per-rule ignores** except `E501`
+  (line length): this is a data generator with long embedded agent/SNMP/HTML
+  literals where hard-wrapping hurts readability. Everything else is enforced.
+- **basedpyright** runs `standard` and is **clean at error level** — no rule
+  downgrades; the whole codebase type-checks (`reportUnusedExpression` is even
+  promoted to error). The remaining gap to hop's `strict` is annotating every
+  param/return and the untyped JSON dicts — a larger effort left for later.
+- **pytest** still has no coverage floor (`tests/test_smoke.py` is a scaffold).
   Add `--cov-fail-under=NN` to `pyproject.toml` once real tests exist.
 
 ## Coding standards

@@ -208,8 +208,7 @@ def cache_file_bytes() -> int:
 def build_agent_output(state: str) -> bytes:
     now = int(time.time())
     uptime = int(time.time() - START) + UPTIME_OFFSET
-    broken = state == "broken"
-    p = pressure()
+    pressure()
 
     lines: list[str] = []
     a = lines.append
@@ -383,13 +382,9 @@ def build_agent_output(state: str) -> bytes:
     a("pluginsdir C:\\ProgramData\\checkmk\\agent\\plugins")
     a("localdir C:\\ProgramData\\checkmk\\agent\\local")
     a(
-        'C:\\ProgramData\\checkmk\\agent\\plugins\\cmk_update_agent.checkmk.py:CMK_VERSION = "%s"'
-        % AGENT_VERSION
+        f'C:\\ProgramData\\checkmk\\agent\\plugins\\cmk_update_agent.checkmk.py:CMK_VERSION = "{AGENT_VERSION}"'
     )
-    a(
-        'C:\\ProgramData\\checkmk\\agent\\plugins\\mk_inventory.vbs:CMK_VERSION = "%s"'
-        % AGENT_VERSION
-    )
+    a(f'C:\\ProgramData\\checkmk\\agent\\plugins\\mk_inventory.vbs:CMK_VERSION = "{AGENT_VERSION}"')
 
     # ---- processes (Windows ps:sep(9)). lsass holds the AD database on a DC;
     #      format: (user,VSZkb,WSkb,0,pid,handle?,usertime,kerneltime,handles,
@@ -615,8 +610,8 @@ def _admin_page() -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "windc-demo-ctl/1.0"
 
-    def log_message(self, fmt: str, *args) -> None:
-        print(f"[http] {self.address_string()} {fmt % args}")
+    def log_message(self, format: str, *args) -> None:
+        print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict) -> None:
         raw = json.dumps(body, indent=2).encode()

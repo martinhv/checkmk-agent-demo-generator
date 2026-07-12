@@ -23,6 +23,7 @@ Self-test: `python3 snmpserver.py --selftest` (no external tools needed).
 from __future__ import annotations
 
 import bisect
+import contextlib
 import re
 import socket
 import threading
@@ -327,7 +328,9 @@ def _next_vb(table: Table, oid: tuple[int, ...]) -> VarBind:
     nxt = table.next(oid)
     if nxt is None:
         return VarBind(oid, _tlv(T_ENDOFMIBVIEW, b""))
-    return VarBind(nxt, table.get(nxt))
+    val = table.get(nxt)
+    assert val is not None  # nxt came from table.next(): it's a stored key
+    return VarBind(nxt, val)
 
 
 # --------------------------------------------------------------------------- #
@@ -366,6 +369,7 @@ class SnmpServer:
 
     def _serve(self) -> None:
         sock = self.sock
+        assert sock is not None  # set by serve_forever before threads start
         while True:
             try:
                 data, addr = sock.recvfrom(65535)
@@ -380,10 +384,8 @@ class SnmpServer:
             except Exception:
                 continue
             if reply is not None:
-                try:
+                with contextlib.suppress(OSError):
                     sock.sendto(reply, addr)
-                except OSError:
-                    pass
 
 
 # --------------------------------------------------------------------------- #

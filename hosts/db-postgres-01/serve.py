@@ -126,7 +126,7 @@ def broken_seconds() -> float:
         return 0.0 if _broken_since is None else time.time() - _broken_since
 
 
-def smart_attrs() -> tuple[int, int, int, int]:
+def smart_attrs() -> tuple[int, int, int, float]:
     """Fail-slow SMART story — returns (pending, realloc, uncorrect, temp °C).
 
     The point of the demo is that the root cause must NOT be served on a
@@ -713,8 +713,8 @@ def build_agent_output(state: str) -> bytes:
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/mk_postgres.py:CMK_VERSION="%s"' % AGENT_VERSION)
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
+    a(f'/opt/checkmk/agent/default/package/plugins/mk_postgres.py:CMK_VERSION="{AGENT_VERSION}"')
+    a(f'/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="{AGENT_VERSION}"')
 
     # --- filesystems: / on the (healthy) sda, the DB volume on the dying sdb.
     #     Usage grows and gets cleaned over time (see filesystem_usage): WAL
@@ -1350,7 +1350,11 @@ def load_state() -> None:
         saved = data.get("counters", {})
         if isinstance(saved, list):
             # v1 file (order-keyed): restore by position if the layout matches
-            saved = dict(zip(_ALL_COUNTERS, saved)) if len(saved) == len(_ALL_COUNTERS) else {}
+            saved = (
+                dict(zip(_ALL_COUNTERS, saved, strict=False))
+                if len(saved) == len(_ALL_COUNTERS)
+                else {}
+            )
         restored = 0
         for name, c in _ALL_COUNTERS.items():
             if name in saved:
@@ -1549,8 +1553,8 @@ def _admin_page() -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "db-demo-ctl/1.0"
 
-    def log_message(self, fmt: str, *args) -> None:  # quieter logs
-        print(f"[http] {self.address_string()} {fmt % args}")
+    def log_message(self, format: str, *args) -> None:  # quieter logs
+        print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict) -> None:
         raw = json.dumps(body, indent=2).encode()

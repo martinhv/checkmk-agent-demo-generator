@@ -181,10 +181,7 @@ def connection_counts() -> tuple[int, int]:
         return max(1, idle), active
 
     # degraded: leak climbs 90 -> DEGRADED_PEAK over LEAK_FILL_MIN
-    if LEAK_FILL_MIN <= 0:
-        deg_frac = 1.0
-    else:
-        deg_frac = min(1.0, ds / (LEAK_FILL_MIN * 60.0))
+    deg_frac = 1.0 if LEAK_FILL_MIN <= 0 else min(1.0, ds / (LEAK_FILL_MIN * 60.0))
     idle_total = _lerp(90, DEGRADED_PEAK, deg_frac)
 
     # broken: runaway climb DEGRADED_PEAK -> BROKEN_CAP, then plateau just under
@@ -564,8 +561,8 @@ def build_agent_output(state: str) -> bytes:
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/mk_postgres.py:CMK_VERSION="%s"' % AGENT_VERSION)
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
+    a(f'/opt/checkmk/agent/default/package/plugins/mk_postgres.py:CMK_VERSION="{AGENT_VERSION}"')
+    a(f'/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="{AGENT_VERSION}"')
 
     # --- filesystems: / on sda, the DB volume on sdb. Both green, growing +
     #     cleaned over time (WAL recycle teeth + slow growth). ---
@@ -1346,8 +1343,8 @@ def _admin_page() -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "db-replica-demo-ctl/1.0"
 
-    def log_message(self, fmt: str, *args) -> None:
-        print(f"[http] {self.address_string()} {fmt % args}")
+    def log_message(self, format: str, *args) -> None:
+        print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict) -> None:
         raw = json.dumps(body, indent=2).encode()

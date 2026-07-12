@@ -58,6 +58,7 @@ Config via env:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
@@ -436,7 +437,7 @@ CHILD_HTTP_BASE = int(
     os.environ.get("CHILD_HTTP_BASE", str(CHILD_AGENT_BASE + max(100, len(_roster) + 10)))
 )
 
-CHILDREN: list[Child] = [
+CHILDREN: list[Child | FleetHost] = [
     Child(i, name, directory, actions, extra, parent)
     for i, (name, directory, actions, extra, parent) in enumerate(_roster)
 ]
@@ -540,10 +541,8 @@ def write_agent_files() -> int:
     """One pass: the shell's own minimal section plus every child's full agent
     output, each to its own file named by the FQDN Checkmk uses ($HOSTNAME$)."""
     os.makedirs(AGENT_OUTPUT_DIR, exist_ok=True)
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(AGENT_OUTPUT_DIR, 0o755)
-    except OSError:
-        pass
     wrote = _write_file(DELIVERY_HOSTNAME, _delivery_minimal().encode("utf-8"))
     for child in CHILDREN:
         wrote += _write_file(child.fqdn, child.fetch_agent())
@@ -585,7 +584,7 @@ def _fmt_duration(seconds: float | None) -> str:
     return f"{s // 3600}h {s % 3600 // 60:02d}m"
 
 
-def _host_info_page(child: Child) -> str:
+def _host_info_page(child: Child | FleetHost) -> str:
     """Per-host 'what happens on a state change' tab — mirrors the per-demo
     control screens, but rendered by the delivery shell from the child's
     /admin/meta so the estate is driven from one place."""
@@ -747,8 +746,8 @@ def _fleet_section(fleet: list[FleetHost]) -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "pb-delivery-ctl/1.0"
 
-    def log_message(self, fmt: str, *args) -> None:
-        print(f"[http] {self.address_string()} {fmt % args}")
+    def log_message(self, format: str, *args) -> None:
+        print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict) -> None:
         raw = json.dumps(body, indent=2).encode()
@@ -820,13 +819,17 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _sigterm)
 
     try:
+        # only real Child processes are spawned here; fleet hosts (below) are
+        # served by the FLEET_MGR process, not spawned per host
         for child in CHILDREN:
-            child.spawn()
+            if isinstance(child, Child):
+                child.spawn()
         if FLEET_MGR:
             FLEET_MGR.spawn()
         # give children a moment to bind so the first poll already has everyone
         for child in CHILDREN:
-            child.wait_ready()
+            if isinstance(child, Child):
+                child.wait_ready()
         if FLEET_MGR:
             fleet_hosts = [FleetHost(FLEET_MGR, info) for info in FLEET_MGR.roster()]
             CHILDREN.extend(fleet_hosts)
