@@ -55,6 +55,7 @@ Config via env:
   CHILD_HTTP_BASE    internal child admin port base (default: auto after
                      the agent range, so big estates can't collide)
 """
+
 from __future__ import annotations
 
 import json
@@ -73,8 +74,7 @@ from socketserver import StreamRequestHandler, ThreadingTCPServer
 # Estate DNS domain — every host shows up in Checkmk as <short>.<ESTATE_DOMAIN>
 # (FQDN). The short name stays the internal label (panel, ports, selection).
 ESTATE_DOMAIN = os.environ.get("ESTATE_DOMAIN", "corp.meridian-retail.com")
-DELIVERY_HOSTNAME = os.environ.get(
-    "DELIVERY_HOSTNAME", f"cmk-demo-gateway.{ESTATE_DOMAIN}")
+DELIVERY_HOSTNAME = os.environ.get("DELIVERY_HOSTNAME", f"cmk-demo-gateway.{ESTATE_DOMAIN}")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "6556"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "2.5.0-2026.04.03")
@@ -96,8 +96,7 @@ DELIVERY_MODE = os.environ.get("DELIVERY_MODE", "piggyback")
 AGENT_OUTPUT_DIR = os.environ.get("AGENT_OUTPUT_DIR", "/var/tmp/cmk-demo-agent-output")
 AGENT_OUTPUT_INTERVAL = float(os.environ.get("AGENT_OUTPUT_INTERVAL", "20"))
 
-REPO_ROOT = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOSTS_DIR = os.path.join(REPO_ROOT, "hosts")
 START = time.time()
 
@@ -115,26 +114,65 @@ START = time.time()
 # (web-frontend-02, -03, ...) — replicas run steady green; incident stories
 # stay unique to the original (low noise, one root cause).
 _REGISTRY = [
-    ("web-frontend-01", "web-frontend-01", [], {"START_STATE": "healthy"},
-     "sw-access-01", True),
-    ("payment-api", "payment-api", ["break", "heal"],
-     {"START_BROKEN": "0"}, "sw-access-01", False),
-    ("app-worker-01", "app-worker-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-access-01", True),
-    ("app-redis-01", "app-redis-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-access-01", True),
-    ("db-postgres-01", "db-postgres-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-access-01", False),
-    ("db-postgres-02", "db-postgres-02", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-access-01", True),
-    ("mail-relay-01", "mail-relay-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-access-01", True),
-    ("fileserver-01", "fileserver-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-access-01", True),
-    ("backup-01", "backup-01", [], {"START_STATE": "healthy"}, "sw-access-01",
-     False),
-    ("win-dc-01", "win-dc-01", ["degrade", "break", "heal"],
-     {"START_STATE": "healthy"}, "sw-access-01", True),
+    ("web-frontend-01", "web-frontend-01", [], {"START_STATE": "healthy"}, "sw-access-01", True),
+    ("payment-api", "payment-api", ["break", "heal"], {"START_BROKEN": "0"}, "sw-access-01", False),
+    (
+        "app-worker-01",
+        "app-worker-01",
+        ["degrade", "break", "heal"],
+        {"START_STATE": "healthy"},
+        "sw-access-01",
+        True,
+    ),
+    (
+        "app-redis-01",
+        "app-redis-01",
+        ["degrade", "break", "heal"],
+        {"START_STATE": "healthy"},
+        "sw-access-01",
+        True,
+    ),
+    (
+        "db-postgres-01",
+        "db-postgres-01",
+        ["degrade", "break", "heal"],
+        {"START_STATE": "healthy"},
+        "sw-access-01",
+        False,
+    ),
+    (
+        "db-postgres-02",
+        "db-postgres-02",
+        ["degrade", "break", "heal"],
+        {"START_STATE": "healthy"},
+        "sw-access-01",
+        True,
+    ),
+    (
+        "mail-relay-01",
+        "mail-relay-01",
+        ["degrade", "break", "heal"],
+        {"START_STATE": "healthy"},
+        "sw-access-01",
+        True,
+    ),
+    (
+        "fileserver-01",
+        "fileserver-01",
+        ["degrade", "break", "heal"],
+        {"START_STATE": "healthy"},
+        "sw-access-01",
+        True,
+    ),
+    ("backup-01", "backup-01", [], {"START_STATE": "healthy"}, "sw-access-01", False),
+    (
+        "win-dc-01",
+        "win-dc-01",
+        ["degrade", "break", "heal"],
+        {"START_STATE": "healthy"},
+        "sw-access-01",
+        True,
+    ),
 ]
 
 
@@ -145,9 +183,15 @@ def _replica_name(base: str, n: int) -> str:
 
 
 class Child:
-    def __init__(self, idx: int, name: str, directory: str,
-                 actions: list[str], extra_env: dict[str, str],
-                 parent: str | None) -> None:
+    def __init__(
+        self,
+        idx: int,
+        name: str,
+        directory: str,
+        actions: list[str],
+        extra_env: dict[str, str],
+        parent: str | None,
+    ) -> None:
         self.name = name
         self.directory = directory
         self.actions = actions
@@ -168,12 +212,14 @@ class Child:
 
     def spawn(self) -> None:
         env = dict(os.environ)
-        env.update({
-            "CMK_HOSTNAME": self.fqdn,
-            "AGENT_PORT": str(self.agent_port),
-            "HTTP_PORT": str(self.http_port),
-            "STATE_FILE": f"/var/tmp/cmk-demo-pb-{self.name}.json",
-        })
+        env.update(
+            {
+                "CMK_HOSTNAME": self.fqdn,
+                "AGENT_PORT": str(self.agent_port),
+                "HTTP_PORT": str(self.http_port),
+                "STATE_FILE": f"/var/tmp/cmk-demo-pb-{self.name}.json",
+            }
+        )
         # only inject our defaults if the operator hasn't overridden them
         for k, v in self.extra_env.items():
             env.setdefault(k, v)
@@ -181,10 +227,15 @@ class Child:
             print(f"[pb] WARN: {self.script} missing — skipping {self.name}")
             return
         self.proc = subprocess.Popen(  # noqa: S603
-            [sys.executable, "-u", self.script], env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"[pb] spawned {self.name:16} agent=127.0.0.1:{self.agent_port} "
-              f"admin=127.0.0.1:{self.http_port}")
+            [sys.executable, "-u", self.script],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print(
+            f"[pb] spawned {self.name:16} agent=127.0.0.1:{self.agent_port} "
+            f"admin=127.0.0.1:{self.http_port}"
+        )
 
     def wait_ready(self, timeout: float = 15.0) -> bool:
         if self.proc is None:
@@ -202,8 +253,7 @@ class Child:
     def fetch_agent(self, timeout: float = 6.0) -> bytes:
         """Read the child's full agent output over TCP (raw)."""
         try:
-            with socket.create_connection(("127.0.0.1", self.agent_port),
-                                          timeout=timeout) as s:
+            with socket.create_connection(("127.0.0.1", self.agent_port), timeout=timeout) as s:
                 s.settimeout(timeout)
                 chunks = []
                 while True:
@@ -222,7 +272,8 @@ class Child:
         for ep in ("/", "/admin/status"):
             try:
                 with urllib.request.urlopen(  # noqa: S310
-                        f"http://127.0.0.1:{self.http_port}{ep}", timeout=2) as r:
+                    f"http://127.0.0.1:{self.http_port}{ep}", timeout=2
+                ) as r:
                     state = json.loads(r.read()).get("state")
                 if state:
                     return state
@@ -234,7 +285,8 @@ class Child:
         """Read the child's state-change info (STATE_META) for the info tab."""
         try:
             with urllib.request.urlopen(  # noqa: S310
-                    f"http://127.0.0.1:{self.http_port}/admin/meta", timeout=2) as r:
+                f"http://127.0.0.1:{self.http_port}/admin/meta", timeout=2
+            ) as r:
                 return json.loads(r.read())
         except (urllib.error.URLError, OSError, ValueError):
             return None
@@ -242,8 +294,8 @@ class Child:
     def toggle(self, action: str) -> bool:
         try:
             with urllib.request.urlopen(  # noqa: S310
-                    f"http://127.0.0.1:{self.http_port}/admin/{action}",
-                    timeout=3) as r:
+                f"http://127.0.0.1:{self.http_port}/admin/{action}", timeout=3
+            ) as r:
                 r.read()
                 return True
         except (urllib.error.URLError, OSError):
@@ -274,11 +326,15 @@ class FleetManager:
 
     def spawn(self) -> None:
         env = dict(os.environ)
-        env.update({"HTTP_PORT": str(FLEET_HTTP_PORT),
-                    "STATE_FILE": "/var/tmp/cmk-demo-fleet-state.json"})
+        env.update(
+            {"HTTP_PORT": str(FLEET_HTTP_PORT), "STATE_FILE": "/var/tmp/cmk-demo-fleet-state.json"}
+        )
         self.proc = subprocess.Popen(  # noqa: S603
-            [sys.executable, "-u", FLEET_SCRIPT], env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            [sys.executable, "-u", FLEET_SCRIPT],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         print(f"[pb] spawned fleet manager http=127.0.0.1:{FLEET_HTTP_PORT}")
 
     def roster(self, timeout: float = 20.0) -> list[dict]:
@@ -286,7 +342,8 @@ class FleetManager:
         while time.time() < deadline:
             try:
                 with urllib.request.urlopen(  # noqa: S310
-                        self.base + "/", timeout=3) as r:
+                    self.base + "/", timeout=3
+                ) as r:
                     return json.loads(r.read())["fleet"]
             except (urllib.error.URLError, OSError, ValueError):
                 time.sleep(0.5)
@@ -296,7 +353,8 @@ class FleetManager:
     def fetch_agent(self, short: str, timeout: float = 6.0) -> bytes:
         try:
             with urllib.request.urlopen(  # noqa: S310
-                    f"{self.base}/agent/{short}", timeout=timeout) as r:
+                f"{self.base}/agent/{short}", timeout=timeout
+            ) as r:
                 return r.read()
         except (urllib.error.URLError, OSError) as exc:
             print(f"[pb] WARN: fleet fetch {short} failed: {exc}")
@@ -328,15 +386,23 @@ class FleetHost:
         return "healthy"
 
     def fetch_meta(self) -> dict | None:
-        return {"state": "healthy", "in_state_for_s": time.time() - START,
-                "action_to_state": {},
-                "states": {"healthy": {
-                    "label": "HEALTHY", "color": "#2e7d32",
+        return {
+            "state": "healthy",
+            "in_state_for_s": time.time() - START,
+            "action_to_state": {},
+            "states": {
+                "healthy": {
+                    "label": "HEALTHY",
+                    "color": "#2e7d32",
                     "tagline": f"{self.descr} — steady-green fleet host, "
-                               "no incident and no toggle.",
-                    "effects": ["all services green, values wobble naturally",
-                                "part of the 300-host estate bulk "
-                                "(fleet/profiles.py)"]}}}
+                    "no incident and no toggle.",
+                    "effects": [
+                        "all services green, values wobble naturally",
+                        "part of the 300-host estate bulk (fleet/profiles.py)",
+                    ],
+                }
+            },
+        }
 
     def toggle(self, action: str) -> bool:  # noqa: ARG002
         return False
@@ -366,8 +432,9 @@ for name, directory, actions, extra, parent, replicable in _REGISTRY:
 
 # keep the internal admin ports clear of the agent range however big the
 # estate gets (agent ports occupy CHILD_AGENT_BASE .. +len(_roster))
-CHILD_HTTP_BASE = int(os.environ.get(
-    "CHILD_HTTP_BASE", str(CHILD_AGENT_BASE + max(100, len(_roster) + 10))))
+CHILD_HTTP_BASE = int(
+    os.environ.get("CHILD_HTTP_BASE", str(CHILD_AGENT_BASE + max(100, len(_roster) + 10)))
+)
 
 CHILDREN: list[Child] = [
     Child(i, name, directory, actions, extra, parent)
@@ -382,8 +449,7 @@ _BY_NAME = {c.name: c for c in CHILDREN}
 def _delivery_minimal() -> str:
     now = int(time.time())
     uptime = int(time.time() - START) + 3 * 86400
-    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000",
-                            time.gmtime(now + 320 * 86400))
+    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(now + 320 * 86400))
     lines = [
         "<<<check_mk>>>",
         f"Version: {AGENT_VERSION}",
@@ -397,16 +463,31 @@ def _delivery_minimal() -> str:
         "SSHClient: ",
         # minimal but TLS-clean so the delivery host's own Check_MK Agent is OK
         "<<<cmk_agent_ctl_status:sep(0)>>>",
-        json.dumps({
-            "version": AGENT_VERSION, "agent_socket_operational": True,
-            "ip_allowlist": [], "allow_legacy_pull": False,
-            "connections": [{
-                "site_id": "monitoring/prod", "receiver_port": 8000,
-                "uuid": "0e5a2c11-9d44-4a7b-bf01-7c2e9a3d6e10",
-                "local": {"connection_mode": "pull-agent", "cert_info": {
-                    "issuer": "Site 'prod' local CA",
-                    "from": "Tue, 03 Jun 2025 09:12:44 +0000", "to": cert_to}},
-                "remote": "remote_query_disabled"}]}, separators=(",", ":")),
+        json.dumps(
+            {
+                "version": AGENT_VERSION,
+                "agent_socket_operational": True,
+                "ip_allowlist": [],
+                "allow_legacy_pull": False,
+                "connections": [
+                    {
+                        "site_id": "monitoring/prod",
+                        "receiver_port": 8000,
+                        "uuid": "0e5a2c11-9d44-4a7b-bf01-7c2e9a3d6e10",
+                        "local": {
+                            "connection_mode": "pull-agent",
+                            "cert_info": {
+                                "issuer": "Site 'prod' local CA",
+                                "from": "Tue, 03 Jun 2025 09:12:44 +0000",
+                                "to": cert_to,
+                            },
+                        },
+                        "remote": "remote_query_disabled",
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        ),
         # uptime so the shell has a couple of real services of its own
         "<<<uptime>>>",
         f"{uptime}.00 {int(uptime * 3.0)}.00",
@@ -473,8 +554,7 @@ def agent_file_writer() -> None:
     while True:
         time.sleep(AGENT_OUTPUT_INTERVAL)
         n = write_agent_files()
-        print(f"[files] refreshed {n}/{len(CHILDREN) + 1} agent files "
-              f"in {AGENT_OUTPUT_DIR}")
+        print(f"[files] refreshed {n}/{len(CHILDREN) + 1} agent files in {AGENT_OUTPUT_DIR}")
 
 
 # --------------------------------------------------------------------------- #
@@ -505,17 +585,19 @@ def _fmt_duration(seconds: float | None) -> str:
     return f"{s // 3600}h {s % 3600 // 60:02d}m"
 
 
-def _host_info_page(child: "Child") -> str:
+def _host_info_page(child: Child) -> str:
     """Per-host 'what happens on a state change' tab — mirrors the per-demo
     control screens, but rendered by the delivery shell from the child's
     /admin/meta so the estate is driven from one place."""
     meta = child.fetch_meta()
     if not meta:
-        return ("<!doctype html><meta charset='utf-8'>"
-                "<body style='background:#1a1d21;color:#d8dee4;"
-                "font-family:system-ui,sans-serif;margin:2rem auto;max-width:40rem'>"
-                f"<p>{child.name}: state info not available yet (child still starting). "
-                "<a style='color:#6cf' href='/admin'>&larr; back to estate</a></p>")
+        return (
+            "<!doctype html><meta charset='utf-8'>"
+            "<body style='background:#1a1d21;color:#d8dee4;"
+            "font-family:system-ui,sans-serif;margin:2rem auto;max-width:40rem'>"
+            f"<p>{child.name}: state info not available yet (child still starting). "
+            "<a style='color:#6cf' href='/admin'>&larr; back to estate</a></p>"
+        )
     states = meta.get("states", {})
     a2s = meta.get("action_to_state", {})
     cur = meta.get("state")
@@ -532,15 +614,18 @@ def _host_info_page(child: "Child") -> str:
         if current:
             btn = "<span class='btn current'>current state</span>"
         elif action:
-            btn = (f"<a class='btn' href='/admin/{child.name}/{action}?back=info' "
-                   f"style='background:{color}'>&rarr; {action}</a>")
+            btn = (
+                f"<a class='btn' href='/admin/{child.name}/{action}?back=info' "
+                f"style='background:{color}'>&rarr; {action}</a>"
+            )
         else:
             btn = ""
         cards.append(
             f"<div class='card{' active' if current else ''}' "
             f"style='border-color:{color}'>"
             f"<h2 style='color:{color}'>{tmeta.get('label', str(target).upper())}</h2>"
-            f"<p class='tag'>{tmeta.get('tagline', '')}</p><ul>{effects}</ul>{btn}</div>")
+            f"<p class='tag'>{tmeta.get('tagline', '')}</p><ul>{effects}</ul>{btn}</div>"
+        )
 
     badge_color = cur_meta.get("color", "#666")
     since = _fmt_duration(meta.get("in_state_for_s"))
@@ -574,9 +659,9 @@ def _host_info_page(child: "Child") -> str:
  <a class="back" href="/admin">&larr; back to estate overview</a>
  <h1>state info — <b>{child.name}</b>
   <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
- <div class="state">{cur_meta.get('label', str(cur).upper())}</div>
- <div class="since">in this state for <b>{since}</b> — {cur_meta.get('tagline', '')}</div>
- <div class="cards">{''.join(cards)}</div>
+ <div class="state">{cur_meta.get("label", str(cur).upper())}</div>
+ <div class="since">in this state for <b>{since}</b> — {cur_meta.get("tagline", "")}</div>
+ <div class="cards">{"".join(cards)}</div>
  <div class="foot">Each card is a target state and the Checkmk services that change when you
   switch to it. Buttons toggle this host and return here. Piggyback host
   carried by <b>{DELIVERY_HOSTNAME}</b>.</div>
@@ -585,23 +670,24 @@ def _host_info_page(child: "Child") -> str:
 
 def _overview_page() -> str:
     rows = []
-    colors = {"healthy": "#2e7d32", "degraded": "#f9a825", "broken": "#c62828",
-              None: "#666"}
+    colors = {"healthy": "#2e7d32", "degraded": "#f9a825", "broken": "#c62828", None: "#666"}
     fleet = [c for c in CHILDREN if isinstance(c, FleetHost)]
     for c in CHILDREN:
         if isinstance(c, FleetHost):
             continue  # rendered compactly below the classic roster
         state = c.child_state()
-        badge = (f"<span class='b' style='background:{colors.get(state, '#666')}'>"
-                 f"{(state or 'n/a').upper()}</span>")
+        badge = (
+            f"<span class='b' style='background:{colors.get(state, '#666')}'>"
+            f"{(state or 'n/a').upper()}</span>"
+        )
         if c.actions:
-            btns = " ".join(
-                f"<a class='t' href='/admin/{c.name}/{a}'>{a}</a>" for a in c.actions)
+            btns = " ".join(f"<a class='t' href='/admin/{c.name}/{a}'>{a}</a>" for a in c.actions)
         else:
             btns = "<span class='green'>steady-green</span>"
         info = f"<a class='t info' href='/admin/{c.name}/info'>&#9432; info</a>"
-        rows.append(f"<tr><td class='n'>{c.name}</td><td>{badge}</td>"
-                    f"<td>{btns}</td><td>{info}</td></tr>")
+        rows.append(
+            f"<tr><td class='n'>{c.name}</td><td>{badge}</td><td>{btns}</td><td>{info}</td></tr>"
+        )
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
 <title>{DELIVERY_HOSTNAME} — piggyback estate control</title>
@@ -627,14 +713,14 @@ def _overview_page() -> str:
  <p class="sub">{len(CHILDREN)} hosts carried. This shell emits only a
   minimal agent section; everyone below arrives as piggyback blocks or
   per-host datasource files.</p>
- <table>{''.join(rows)}</table>
+ <table>{"".join(rows)}</table>
  {_fleet_section(fleet)}
  <div class="foot">curl: /admin/&lt;host&gt;/&lt;degrade|break|heal&gt; · / (JSON status).
   Click <b>&#9432; info</b> on any host to see exactly which Checkmk services change in each state.</div>
 </body></html>"""
 
 
-def _fleet_section(fleet: list["FleetHost"]) -> str:
+def _fleet_section(fleet: list[FleetHost]) -> str:
     if not fleet:
         return ""
     by_role: dict[str, list[FleetHost]] = {}
@@ -642,18 +728,20 @@ def _fleet_section(fleet: list["FleetHost"]) -> str:
         by_role.setdefault(h.role or "other", []).append(h)
     blocks = []
     for role in sorted(by_role):
-        names = " ".join(f"<span class='fh' title='{h.descr}'>{h.name}</span>"
-                         for h in sorted(by_role[role], key=lambda x: x.name))
-        blocks.append(f"<div class='frole'><b>{role}</b> "
-                      f"({len(by_role[role])})<br>{names}</div>")
-    return (f"<h2 style='color:#9aa4af;font-size:1.05rem;margin-top:1.6rem'>"
-            f"steady-green fleet — {len(fleet)} hosts "
-            f"<span style='color:#2e7d32;font-size:.85rem'>all healthy, "
-            "no toggles</span></h2>"
-            "<style>.fh{display:inline-block;background:#22313f;color:#9fc59f;"
-            "border-radius:.25rem;padding:.06rem .4rem;margin:.12rem;"
-            "font-size:.78rem}.frole{margin:.5rem 0;color:#9aa4af}</style>"
-            + "".join(blocks))
+        names = " ".join(
+            f"<span class='fh' title='{h.descr}'>{h.name}</span>"
+            for h in sorted(by_role[role], key=lambda x: x.name)
+        )
+        blocks.append(f"<div class='frole'><b>{role}</b> ({len(by_role[role])})<br>{names}</div>")
+    return (
+        f"<h2 style='color:#9aa4af;font-size:1.05rem;margin-top:1.6rem'>"
+        f"steady-green fleet — {len(fleet)} hosts "
+        f"<span style='color:#2e7d32;font-size:.85rem'>all healthy, "
+        "no toggles</span></h2>"
+        "<style>.fh{display:inline-block;background:#22313f;color:#9fc59f;"
+        "border-radius:.25rem;padding:.06rem .4rem;margin:.12rem;"
+        "font-size:.78rem}.frole{margin:.5rem 0;color:#9aa4af}</style>" + "".join(blocks)
+    )
 
 
 class HttpHandler(BaseHTTPRequestHandler):
@@ -684,7 +772,7 @@ class HttpHandler(BaseHTTPRequestHandler):
         if path == "/admin":
             return self._send_html(_overview_page())
         if path.startswith("/admin/"):
-            parts = path[len("/admin/"):].split("/")
+            parts = path[len("/admin/") :].split("/")
             if len(parts) == 2 and parts[0] in _BY_NAME:
                 child = _BY_NAME[parts[0]]
                 if parts[1] == "info":
@@ -697,28 +785,38 @@ class HttpHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 print(f"[ctl] {child.name} -> {parts[1]} ({'ok' if ok else 'FAILED'})")
                 return None
-        return self._send(200, {
-            "delivery_host": DELIVERY_HOSTNAME,
-            "domain": ESTATE_DOMAIN,
-            "carried_hosts": [
-                {"name": c.name, "fqdn": c.fqdn, "state": c.child_state(),
-                 "actions": c.actions,
-                 "parent": f"{c.parent}.{ESTATE_DOMAIN}" if c.parent else None,
-                 **({"role": c.role, "os": c.os}
-                    if isinstance(c, FleetHost) else {})}
-                for c in CHILDREN],
-            "ui": "/admin",
-        })
+        return self._send(
+            200,
+            {
+                "delivery_host": DELIVERY_HOSTNAME,
+                "domain": ESTATE_DOMAIN,
+                "carried_hosts": [
+                    {
+                        "name": c.name,
+                        "fqdn": c.fqdn,
+                        "state": c.child_state(),
+                        "actions": c.actions,
+                        "parent": f"{c.parent}.{ESTATE_DOMAIN}" if c.parent else None,
+                        **({"role": c.role, "os": c.os} if isinstance(c, FleetHost) else {}),
+                    }
+                    for c in CHILDREN
+                ],
+                "ui": "/admin",
+            },
+        )
 
 
 def main() -> None:
-    print(f"[boot] delivery shell={DELIVERY_HOSTNAME!r}  mode={DELIVERY_MODE}  "
-          f"agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  hosts={len(CHILDREN)}")
+    print(
+        f"[boot] delivery shell={DELIVERY_HOSTNAME!r}  mode={DELIVERY_MODE}  "
+        f"agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  hosts={len(CHILDREN)}"
+    )
 
     # native (non-docker) runs: SIGTERM must reap the children too, not just ^C
     # — install BEFORE spawning so a kill during startup can't leak them
     def _sigterm(signum, frame):  # noqa: ARG001
         raise KeyboardInterrupt
+
     signal.signal(signal.SIGTERM, _sigterm)
 
     try:
@@ -730,12 +828,13 @@ def main() -> None:
         for child in CHILDREN:
             child.wait_ready()
         if FLEET_MGR:
-            fleet_hosts = [FleetHost(FLEET_MGR, info)
-                           for info in FLEET_MGR.roster()]
+            fleet_hosts = [FleetHost(FLEET_MGR, info) for info in FLEET_MGR.roster()]
             CHILDREN.extend(fleet_hosts)
             _BY_NAME.update({h.name: h for h in fleet_hosts})
-            print(f"[boot] fleet: carrying {len(fleet_hosts)} steady-green "
-                  f"bulk hosts (total {len(CHILDREN)})")
+            print(
+                f"[boot] fleet: carrying {len(fleet_hosts)} steady-green "
+                f"bulk hosts (total {len(CHILDREN)})"
+            )
 
         agent = AgentServer(("0.0.0.0", AGENT_PORT), AgentHandler)  # nosec B104
         http = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), HttpHandler)  # nosec B104
@@ -746,12 +845,13 @@ def main() -> None:
             # estate.py sees the panel and starts discovery the datasource
             # programs (cat) already have something to read
             n = write_agent_files()
-            print(f"[boot] wrote {n}/{len(CHILDREN) + 1} agent files to "
-                  f"{AGENT_OUTPUT_DIR} (refresh every {AGENT_OUTPUT_INTERVAL:g}s)")
+            print(
+                f"[boot] wrote {n}/{len(CHILDREN) + 1} agent files to "
+                f"{AGENT_OUTPUT_DIR} (refresh every {AGENT_OUTPUT_INTERVAL:g}s)"
+            )
             threading.Thread(target=agent_file_writer, daemon=True).start()
             print("[boot] In Checkmk: add each estate host as a Checkmk-agent host and")
-            print("[boot] one 'Individual program call' rule: cat "
-                  f"{AGENT_OUTPUT_DIR}/$HOSTNAME$")
+            print(f"[boot] one 'Individual program call' rule: cat {AGENT_OUTPUT_DIR}/$HOSTNAME$")
         else:
             print("[boot] In Checkmk: add ONE TCP host for the delivery shell, then add")
             print("[boot] the estate hosts as *piggyback* hosts (no agent connection).")

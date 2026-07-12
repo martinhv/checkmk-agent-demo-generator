@@ -34,6 +34,7 @@ Config via env (see also AGENT_PORT/HTTP_PORT/START_STATE/STATE_FILE):
   BREAK_RAMP_MIN minutes over which the broken deferred-growth rate reaches
                  full force (default: 3; 0 = instant)
 """
+
 from __future__ import annotations
 
 import json
@@ -135,8 +136,8 @@ def _lerp(healthy: float, broken: float, r: float) -> float:
 #  The active queue stays small in every state: local injection always works,
 #  Postfix itself is fine — this is what tells the AI the box is healthy.
 # --------------------------------------------------------------------------- #
-DEFER_DEGRADED_PLATEAU = 18.0   # mails (just under the 20 CRIT)
-DEFER_BROKEN_RATE = 0.80        # mails/s accumulating while fully unreachable
+DEFER_DEGRADED_PLATEAU = 18.0  # mails (just under the 20 CRIT)
+DEFER_BROKEN_RATE = 0.80  # mails/s accumulating while fully unreachable
 
 
 def deferred_count() -> int:
@@ -156,28 +157,25 @@ def deferred_count() -> int:
     if bs > 0:
         # live, monotonic growth from the moment of the break. Integrate the
         # ramped rate so flipping degraded->broken never makes it jump back.
-        deferred = max(deferred, DEFER_DEGRADED_PLATEAU
-                       + DEFER_BROKEN_RATE * bs * break_ramp(1.0))
+        deferred = max(deferred, DEFER_DEGRADED_PLATEAU + DEFER_BROKEN_RATE * bs * break_ramp(1.0))
     return int(round(deferred))
 
 
 def active_count() -> int:
     # local injection always works -> active queue is small + healthy always.
-    return max(0, int(round(gauge("mailq.active", 4.0, amp_abs=2.0,
-                                  phase=2.1, period=420))))
+    return max(0, int(round(gauge("mailq.active", 4.0, amp_abs=2.0, phase=2.1, period=420))))
 
 
 def deferred_bytes(count: int) -> int:
     # ~42 KiB per transactional mail (HTML receipt + headers), wobbled a touch.
-    return int(count * gauge("mailq.avg_size", 43_000, amp_frac=0.05,
-                             phase=1.3, period=900))
+    return int(count * gauge("mailq.avg_size", 43_000, amp_frac=0.05, phase=1.3, period=900))
 
 
 # --------------------------------------------------------------------------- #
 #  Autocorrelated gauges + monotonic counters (verbatim machinery from the
 #  dying-disk reference; see CLAUDE.md for why a single sine is wrong).
 # --------------------------------------------------------------------------- #
-_ALL_COUNTERS: dict[str, "Counter"] = {}
+_ALL_COUNTERS: dict[str, Counter] = {}
 
 
 class _Wobble:
@@ -187,9 +185,11 @@ class _Wobble:
         self.noise = 0.0
 
     def step(self, now: float) -> float:
-        harm = (0.60 * math.sin(self.omega * now + self.phase)
-                + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
-                + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5))
+        harm = (
+            0.60 * math.sin(self.omega * now + self.phase)
+            + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
+            + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5)
+        )
         self.noise = max(-1.5, min(1.5, self.noise * 0.9 + random.gauss(0.0, 0.25)))
         return max(-1.0, min(1.0, (harm + 0.45 * self.noise) / 1.8))
 
@@ -198,9 +198,15 @@ _GAUGES: dict[str, _Wobble] = {}
 _GAUGE_LOCK = threading.Lock()
 
 
-def gauge(name: str, base: float, *, amp_abs: float | None = None,
-          amp_frac: float | None = None, phase: float = 0.0,
-          period: float = 1200.0) -> float:
+def gauge(
+    name: str,
+    base: float,
+    *,
+    amp_abs: float | None = None,
+    amp_frac: float | None = None,
+    phase: float = 0.0,
+    period: float = 1200.0,
+) -> float:
     with _GAUGE_LOCK:
         w = _GAUGES.get(name)
         if w is None:
@@ -212,8 +218,14 @@ def gauge(name: str, base: float, *, amp_abs: float | None = None,
 
 
 class Counter:
-    def __init__(self, name: str, phase: float = 0.0, amp: float = 0.30,
-                 period: float = 1200.0, start: float = 0.0) -> None:
+    def __init__(
+        self,
+        name: str,
+        phase: float = 0.0,
+        amp: float = 0.30,
+        period: float = 1200.0,
+        start: float = 0.0,
+    ) -> None:
         self.acc = start
         self.last = time.time()
         self.amp = amp
@@ -273,20 +285,52 @@ def _smart_json(name: str, model: str, serial: str, hours: int, temp: int) -> st
         "smart_status": {"passed": True},
         "power_on_time": {"hours": hours},
         "temperature": {"current": temp},
-        "ata_smart_attributes": {"table": [
-            {"id": 5, "name": "Reallocated_Sector_Ct", "value": 100, "thresh": 10,
-             "raw": {"value": 0}},
-            {"id": 12, "name": "Power_Cycle_Count", "value": 100, "thresh": 0,
-             "raw": {"value": 19}},
-            {"id": 187, "name": "Reported_Uncorrect", "value": 100, "thresh": 0,
-             "raw": {"value": 0}},
-            {"id": 197, "name": "Current_Pending_Sector", "value": 100, "thresh": 0,
-             "raw": {"value": 0}},
-            {"id": 199, "name": "UDMA_CRC_Error_Count", "value": 200, "thresh": 0,
-             "raw": {"value": 0}},
-            {"id": 177, "name": "Wear_Leveling_Count", "value": 97, "thresh": 5,
-             "raw": {"value": 71}},
-        ]},
+        "ata_smart_attributes": {
+            "table": [
+                {
+                    "id": 5,
+                    "name": "Reallocated_Sector_Ct",
+                    "value": 100,
+                    "thresh": 10,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 12,
+                    "name": "Power_Cycle_Count",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 19},
+                },
+                {
+                    "id": 187,
+                    "name": "Reported_Uncorrect",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 197,
+                    "name": "Current_Pending_Sector",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 199,
+                    "name": "UDMA_CRC_Error_Count",
+                    "value": 200,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 177,
+                    "name": "Wear_Leveling_Count",
+                    "value": 97,
+                    "thresh": 5,
+                    "raw": {"value": 71},
+                },
+            ]
+        },
     }
     return json.dumps(doc, separators=(",", ":"))
 
@@ -305,18 +349,20 @@ def filesystem_usage(now: float) -> tuple[int, int]:
     """
     uptime = now - START + UPTIME_OFFSET
     day = 86_400.0
-    root_base = 11_534_336                                  # ~11 GiB of 40
-    root_logs = 1_048_576 * ((now % day) / day)             # 0..1 GiB daily mail.log
+    root_base = 11_534_336  # ~11 GiB of 40
+    root_logs = 1_048_576 * ((now % day) / day)  # 0..1 GiB daily mail.log
     root_growth = min(1_048_576, uptime * 0.03)
-    root_used = int(root_base + root_logs + root_growth
-                    + gauge("fs.root", 0, amp_abs=70_000, period=1500))
+    root_used = int(
+        root_base + root_logs + root_growth + gauge("fs.root", 0, amp_abs=70_000, period=1500)
+    )
     # spool: small base + the deferred backlog as files (~42 KiB each) + slow
     # creep, cleaned as mail eventually drains. Stays tiny vs the 20 GiB volume.
-    spool_base = 1_572_864                                  # ~1.5 GiB of 20
-    spool_queue = deferred_count() * 42                     # KiB of queued mail
+    spool_base = 1_572_864  # ~1.5 GiB of 20
+    spool_queue = deferred_count() * 42  # KiB of queued mail
     spool_growth = min(262_144, uptime * 0.05)
-    spool_used = int(spool_base + spool_queue + spool_growth
-                     + gauge("fs.spool", 0, amp_abs=40_000, period=900))
+    spool_used = int(
+        spool_base + spool_queue + spool_growth + gauge("fs.spool", 0, amp_abs=40_000, period=900)
+    )
     return root_used, spool_used
 
 
@@ -348,8 +394,7 @@ def build_agent_output(state: str) -> bytes:
     caches = cached + buffers + swapcached + sreclaim
     mem_free = max(160_000, mem_total - int(mem_used_t) - caches)
     swap_free = swap_total  # swap empty: a healthy, unloaded relay
-    committed = int(gauge("mem.committed", 2_700_000, amp_frac=0.01,
-                          phase=1.2, period=1700))
+    committed = int(gauge("mem.committed", 2_700_000, amp_frac=0.01, phase=1.2, period=1700))
 
     shmem = 24_576
     anon = max(900_000, mem_total - mem_free - caches - 360_000)
@@ -363,8 +408,7 @@ def build_agent_output(state: str) -> bytes:
     slab = sreclaim + 78_848
     threads = int(gauge("kernel.threads", 210, amp_abs=8, phase=2.0, period=1100))
     kernel_stack = threads * 16
-    dirty = max(2_048, int(gauge("mem.dirty", 6_144, amp_frac=0.15,
-                                 phase=2.0, period=800)))
+    dirty = max(2_048, int(gauge("mem.dirty", 6_144, amp_frac=0.15, phase=2.0, period=800)))
 
     # ---- load: a near-idle relay. Stays GREEN always (deferred mail does not
     #      cost CPU — that's a key tell the box is fine). 15-min well under the
@@ -401,8 +445,13 @@ def build_agent_output(state: str) -> bytes:
     tx_pkts = C_TX_P.sample(_lerp(280, 60, break_ramp(1.0)) if broken_seconds() > 0 else 280)
 
     sda_temp = round(gauge("smart.sda.temp", 29, amp_abs=1.2, phase=2.1, period=1100))
-    sda_smart = _smart_json("/dev/sda", "INTEL SSDSC2KB240G8",
-                            "PHYF019300NT240AGN", int(uptime / 3600) + 21000, sda_temp)
+    sda_smart = _smart_json(
+        "/dev/sda",
+        "INTEL SSDSC2KB240G8",
+        "PHYF019300NT240AGN",
+        int(uptime / 3600) + 21000,
+        sda_temp,
+    )
 
     lines: list[str] = []
     a = lines.append
@@ -422,41 +471,61 @@ def build_agent_output(state: str) -> bytes:
     a("SSHClient: ")
 
     a("<<<cmk_agent_ctl_status:sep(0)>>>")
-    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000",
-                            time.gmtime(now + 321 * 86400))
-    a(json.dumps({
-        "version": AGENT_VERSION, "agent_socket_operational": True,
-        "ip_allowlist": [], "allow_legacy_pull": False,
-        "connections": [{
-            "site_id": "monitoring/prod", "receiver_port": 8000,
-            "uuid": "7c3a91e4-5b2d-4f18-a0c6-9e1d4a8b3f57",
-            "local": {"connection_mode": "pull-agent", "cert_info": {
-                "issuer": "Site 'prod' local CA",
-                "from": "Tue, 03 Jun 2025 09:12:44 +0000", "to": cert_to}},
-            "remote": "remote_query_disabled"}]}, separators=(",", ":")))
+    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(now + 321 * 86400))
+    a(
+        json.dumps(
+            {
+                "version": AGENT_VERSION,
+                "agent_socket_operational": True,
+                "ip_allowlist": [],
+                "allow_legacy_pull": False,
+                "connections": [
+                    {
+                        "site_id": "monitoring/prod",
+                        "receiver_port": 8000,
+                        "uuid": "7c3a91e4-5b2d-4f18-a0c6-9e1d4a8b3f57",
+                        "local": {
+                            "connection_mode": "pull-agent",
+                            "cert_info": {
+                                "issuer": "Site 'prod' local CA",
+                                "from": "Tue, 03 Jun 2025 09:12:44 +0000",
+                                "to": cert_to,
+                            },
+                        },
+                        "remote": "remote_query_disabled",
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        )
+    )
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"'
-      % AGENT_VERSION)
-    a('/opt/checkmk/agent/default/package/plugins/mk_postfix:CMK_VERSION="%s"'
-      % AGENT_VERSION)
+    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
+    a('/opt/checkmk/agent/default/package/plugins/mk_postfix:CMK_VERSION="%s"' % AGENT_VERSION)
 
     a("<<<df_v2>>>")
     root_size = 41_943_040
     spool_size = 20_971_520
     root_used, spool_used = filesystem_usage(time.time())
-    a(f"/dev/sda1 ext4 {root_size} {root_used} {root_size - root_used} "
-      f"{round(root_used / root_size * 100)}% /")
-    a(f"/dev/sda2 ext4 {spool_size} {spool_used} {spool_size - spool_used} "
-      f"{round(spool_used / spool_size * 100)}% /var/spool/postfix")
+    a(
+        f"/dev/sda1 ext4 {root_size} {root_used} {root_size - root_used} "
+        f"{round(root_used / root_size * 100)}% /"
+    )
+    a(
+        f"/dev/sda2 ext4 {spool_size} {spool_used} {spool_size - spool_used} "
+        f"{round(spool_used / spool_size * 100)}% /var/spool/postfix"
+    )
     a("[df_inodes_start]")
     # a mail spool holds MANY small files -> noticeable inode use that tracks
     # the queue depth, but a 20 GiB volume still has plenty of inodes spare.
     spool_inodes_used = 38_000 + deferred + active
     a(f"/dev/sda1 ext4 2621440 248114 {2621440 - 248114} 10% /")
-    a(f"/dev/sda2 ext4 1310720 {spool_inodes_used} {1310720 - spool_inodes_used} "
-      f"{max(1, round(spool_inodes_used / 1310720 * 100))}% /var/spool/postfix")
+    a(
+        f"/dev/sda2 ext4 1310720 {spool_inodes_used} {1310720 - spool_inodes_used} "
+        f"{max(1, round(spool_inodes_used / 1310720 * 100))}% /var/spool/postfix"
+    )
     a("[df_inodes_end]")
 
     a("<<<mounts>>>")
@@ -550,11 +619,13 @@ def build_agent_output(state: str) -> bytes:
     a("    Frequency: +7.842ppm")
     a(f"[[[{last_sync}]]]")
     a("<<<timesyncd_ntpmessage:sep(10)>>>")
-    a("NTPMessage={ Leap=0, Version=4, Mode=4, Stratum=2, Precision=-25, "
-      "RootDelay=9.323ms, RootDispersion=1.221ms, Reference=B97D5A38, "
-      f"OriginateTimestamp={sync_str}, ReceiveTimestamp={sync_str}, "
-      f"TransmitTimestamp={sync_str}, DestinationTimestamp={sync_str}, "
-      "Ignored=no, PacketCount=58, Jitter=1.118ms }")
+    a(
+        "NTPMessage={ Leap=0, Version=4, Mode=4, Stratum=2, Precision=-25, "
+        "RootDelay=9.323ms, RootDispersion=1.221ms, Reference=B97D5A38, "
+        f"OriginateTimestamp={sync_str}, ReceiveTimestamp={sync_str}, "
+        f"TransmitTimestamp={sync_str}, DestinationTimestamp={sync_str}, "
+        "Ignored=no, PacketCount=58, Jitter=1.118ms }"
+    )
     a("Timezone=UTC")
 
     a("<<<apt:sep(0)>>>")
@@ -569,16 +640,19 @@ def build_agent_output(state: str) -> bytes:
 
     a("<<<diskstat>>>")
     a(str(now))
-    a(f"8 0 sda {sda_rd} 0 {sda_rd * 24} {sda_rdt} {sda_wr} 0 "
-      f"{sda_wr * 40} {sda_wrt} 0 {sda_iot} {sda_iot * 2} 0 0 0 0")
+    a(
+        f"8 0 sda {sda_rd} 0 {sda_rd * 24} {sda_rdt} {sda_wr} 0 "
+        f"{sda_wr * 40} {sda_wrt} 0 {sda_iot} {sda_iot * 2} 0 0 0 0"
+    )
 
     a("<<<lnx_if>>>")
     a("[start_iplink]")
-    a("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN "
-      "group default qlen 1000")
+    a("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000")
     a("    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00")
-    a("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel "
-      "state UP group default qlen 1000")
+    a(
+        "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel "
+        "state UP group default qlen 1000"
+    )
     a("    link/ether 02:42:ac:11:00:34 brd ff:ff:ff:ff:ff:ff")
     a("[end_iplink]")
     a("<<<lnx_if:sep(58)>>>")
@@ -594,7 +668,9 @@ def build_agent_output(state: str) -> bytes:
     # ESTABLISHED smtp conns drop when the MX is unreachable; SYN_SENT to the
     # dead MX may rise — corroboration only, no default alert on these.
     a(f"01 {round(gauge('tcp.estab', 14, amp_abs=4, phase=0.9, period=700))}")
-    a(f"02 {round(gauge('tcp.synsent', 0, amp_abs=1, phase=1.5, period=400)) + (3 if broken else 0)}")
+    a(
+        f"02 {round(gauge('tcp.synsent', 0, amp_abs=1, phase=1.5, period=400)) + (3 if broken else 0)}"
+    )
     a(f"06 {round(gauge('tcp.timewait', 7, amp_abs=3, phase=2.4, period=500))}")
     a("0A 3")
 
@@ -625,31 +701,115 @@ def build_agent_output(state: str) -> bytes:
     a("[header] CGROUP USER VSZ RSS TIME ELAPSED PID COMMAND")
     procs = [
         ("init.scope", "root", 167_800, 11_900, "00:00:24", 1, "/sbin/init"),
-        ("system.slice/systemd-journald.service", "root", 56_100, 16_800,
-         "00:00:58", 398, "/usr/lib/systemd/systemd-journald"),
-        ("system.slice/systemd-udevd.service", "root", 25_300, 7_100,
-         "00:00:02", 431, "/usr/lib/systemd/systemd-udevd"),
-        ("system.slice/systemd-resolved.service", "systemd-resolve", 26_400, 12_700,
-         "00:00:31", 472, "/usr/lib/systemd/systemd-resolved"),
-        ("system.slice/systemd-timesyncd.service", "systemd-timesync", 90_900, 7_300,
-         "00:00:08", 486, "/usr/lib/systemd/systemd-timesyncd"),
-        ("system.slice/dbus.service", "messagebus", 9_900, 4_900,
-         "00:00:12", 498, "@dbus-daemon --system --address=systemd:"),
-        ("system.slice/rsyslog.service", "syslog", 221_800, 6_300,
-         "00:00:27", 561, "/usr/sbin/rsyslogd -n -iNONE"),
-        ("system.slice/ssh.service", "root", 15_400, 8_800,
-         "00:00:01", 640, "sshd: /usr/sbin/sshd -D [listener]"),
-        ("system.slice/cron.service", "root", 11_500, 2_400,
-         "00:00:02", 655, "/usr/sbin/cron -f -P"),
+        (
+            "system.slice/systemd-journald.service",
+            "root",
+            56_100,
+            16_800,
+            "00:00:58",
+            398,
+            "/usr/lib/systemd/systemd-journald",
+        ),
+        (
+            "system.slice/systemd-udevd.service",
+            "root",
+            25_300,
+            7_100,
+            "00:00:02",
+            431,
+            "/usr/lib/systemd/systemd-udevd",
+        ),
+        (
+            "system.slice/systemd-resolved.service",
+            "systemd-resolve",
+            26_400,
+            12_700,
+            "00:00:31",
+            472,
+            "/usr/lib/systemd/systemd-resolved",
+        ),
+        (
+            "system.slice/systemd-timesyncd.service",
+            "systemd-timesync",
+            90_900,
+            7_300,
+            "00:00:08",
+            486,
+            "/usr/lib/systemd/systemd-timesyncd",
+        ),
+        (
+            "system.slice/dbus.service",
+            "messagebus",
+            9_900,
+            4_900,
+            "00:00:12",
+            498,
+            "@dbus-daemon --system --address=systemd:",
+        ),
+        (
+            "system.slice/rsyslog.service",
+            "syslog",
+            221_800,
+            6_300,
+            "00:00:27",
+            561,
+            "/usr/sbin/rsyslogd -n -iNONE",
+        ),
+        (
+            "system.slice/ssh.service",
+            "root",
+            15_400,
+            8_800,
+            "00:00:01",
+            640,
+            "sshd: /usr/sbin/sshd -D [listener]",
+        ),
+        (
+            "system.slice/cron.service",
+            "root",
+            11_500,
+            2_400,
+            "00:00:02",
+            655,
+            "/usr/sbin/cron -f -P",
+        ),
         # the postfix family: master + persistent children.
-        ("system.slice/postfix@-.service", "root", 44_800, 6_200,
-         "00:00:46", POSTFIX_MASTER_PID, "/usr/lib/postfix/sbin/master -w"),
-        ("system.slice/postfix@-.service", "postfix", 45_100, 6_600,
-         "00:00:33", POSTFIX_MASTER_PID + 4, "qmgr -l -t unix -u"),
-        ("system.slice/postfix@-.service", "postfix", 44_600, 5_400,
-         "00:00:11", POSTFIX_MASTER_PID + 5, "pickup -l -t unix -u"),
-        ("system.slice/postfix@-.service", "postfix", 45_300, 6_800,
-         "00:00:19", POSTFIX_MASTER_PID + 6, "tlsmgr -l -t unix -u"),
+        (
+            "system.slice/postfix@-.service",
+            "root",
+            44_800,
+            6_200,
+            "00:00:46",
+            POSTFIX_MASTER_PID,
+            "/usr/lib/postfix/sbin/master -w",
+        ),
+        (
+            "system.slice/postfix@-.service",
+            "postfix",
+            45_100,
+            6_600,
+            "00:00:33",
+            POSTFIX_MASTER_PID + 4,
+            "qmgr -l -t unix -u",
+        ),
+        (
+            "system.slice/postfix@-.service",
+            "postfix",
+            44_600,
+            5_400,
+            "00:00:11",
+            POSTFIX_MASTER_PID + 5,
+            "pickup -l -t unix -u",
+        ),
+        (
+            "system.slice/postfix@-.service",
+            "postfix",
+            45_300,
+            6_800,
+            "00:00:19",
+            POSTFIX_MASTER_PID + 6,
+            "tlsmgr -l -t unix -u",
+        ),
     ]
     for cgs, usr, vsz, rss, cputime, pid, cmd in procs:
         a(f"0::/{cgs} {usr} {vsz} {rss} {cputime} 12-00:31:40 {pid} {cmd}")
@@ -657,9 +817,11 @@ def build_agent_output(state: str) -> bytes:
     # qmgr keeps spawning smtp clients that hang on the dead MX -> more of them.
     n_smtp = 1 + (4 if broken else (2 if degraded_seconds() > 0 else 0))
     for i in range(n_smtp):
-        a(f"0::/system.slice/postfix@-.service postfix 45200 6700 "
-          f"00:00:0{i % 9} 0-00:0{i}:1{i} {POSTFIX_MASTER_PID + 20 + i} "
-          "smtp -t unix -u")
+        a(
+            f"0::/system.slice/postfix@-.service postfix 45200 6700 "
+            f"00:00:0{i % 9} 0-00:0{i}:1{i} {POSTFIX_MASTER_PID + 20 + i} "
+            "smtp -t unix -u"
+        )
 
     # ---- systemd units: ~30, ALL green incl. postfix@-.service active/running
     #      (the box is healthy in every state — the queue backs up, the daemon
@@ -669,15 +831,17 @@ def build_agent_output(state: str) -> bytes:
         ("postfix@-.service", "active", "running", "Postfix Mail Transport Agent (instance -)"),
         ("postfix.service", "active", "exited", "Postfix Mail Transport Agent"),
         ("ssh.service", "active", "running", "OpenBSD Secure Shell server"),
-        ("cron.service", "active", "running",
-         "Regular background program processing daemon"),
+        ("cron.service", "active", "running", "Regular background program processing daemon"),
         ("dbus.service", "active", "running", "D-Bus System Message Bus"),
         ("getty@tty1.service", "active", "running", "Getty on tty1"),
         ("irqbalance.service", "active", "running", "irqbalance daemon"),
-        ("multipathd.service", "active", "running",
-         "Device-Mapper Multipath Device Controller"),
-        ("networkd-dispatcher.service", "active", "running",
-         "Dispatcher daemon for systemd-networkd"),
+        ("multipathd.service", "active", "running", "Device-Mapper Multipath Device Controller"),
+        (
+            "networkd-dispatcher.service",
+            "active",
+            "running",
+            "Dispatcher daemon for systemd-networkd",
+        ),
         ("polkit.service", "active", "running", "Authorization Manager"),
         ("rsyslog.service", "active", "running", "System Logging Service"),
         ("snapd.service", "active", "running", "Snap Daemon"),
@@ -685,23 +849,27 @@ def build_agent_output(state: str) -> bytes:
         ("systemd-logind.service", "active", "running", "User Login Management"),
         ("systemd-networkd.service", "active", "running", "Network Configuration"),
         ("systemd-resolved.service", "active", "running", "Network Name Resolution"),
-        ("systemd-timesyncd.service", "active", "running",
-         "Network Time Synchronization"),
-        ("systemd-udevd.service", "active", "running",
-         "Rule-based Manager for Device Events and Files"),
+        ("systemd-timesyncd.service", "active", "running", "Network Time Synchronization"),
+        (
+            "systemd-udevd.service",
+            "active",
+            "running",
+            "Rule-based Manager for Device Events and Files",
+        ),
         ("udisks2.service", "active", "running", "Disk Manager"),
-        ("unattended-upgrades.service", "active", "running",
-         "Unattended Upgrades Shutdown"),
+        ("unattended-upgrades.service", "active", "running", "Unattended Upgrades Shutdown"),
         ("user@1000.service", "active", "running", "User Manager for UID 1000"),
         ("apparmor.service", "active", "exited", "Load AppArmor profiles"),
-        ("blk-availability.service", "active", "exited",
-         "Availability of block devices"),
+        ("blk-availability.service", "active", "exited", "Availability of block devices"),
         ("console-setup.service", "active", "exited", "Set console font and keymap"),
-        ("finalrd.service", "active", "exited",
-         "Create final runtime dir for shutdown pivot root"),
+        ("finalrd.service", "active", "exited", "Create final runtime dir for shutdown pivot root"),
         ("keyboard-setup.service", "active", "exited", "Set the console keyboard layout"),
-        ("lvm2-monitor.service", "active", "exited",
-         "Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling"),
+        (
+            "lvm2-monitor.service",
+            "active",
+            "exited",
+            "Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling",
+        ),
         ("setvtrgb.service", "active", "exited", "Set console scheme"),
         ("snapd.seeded.service", "active", "exited", "Wait until snapd is fully seeded"),
         ("systemd-user-sessions.service", "active", "exited", "Permit User Sessions"),
@@ -739,8 +907,11 @@ def save_state() -> None:
         return
     with _state_lock:
         data = {
-            "version": 1, "start": START, "state": _state,
-            "degraded_since": _degraded_since, "broken_since": _broken_since,
+            "version": 1,
+            "start": START,
+            "state": _state,
+            "degraded_since": _degraded_since,
+            "broken_since": _broken_since,
             "state_since": _state_since,
             "counters": {n: [c.acc, c.last] for n, c in _ALL_COUNTERS.items()},
         }
@@ -775,8 +946,10 @@ def load_state() -> None:
             if name in saved:
                 c.acc, c.last = saved[name]
                 restored += 1
-    print(f"[state] restored: state={_state!r}, "
-          f"{restored}/{len(_ALL_COUNTERS)} counters, uptime continuous")
+    print(
+        f"[state] restored: state={_state!r}, "
+        f"{restored}/{len(_ALL_COUNTERS)} counters, uptime continuous"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -799,7 +972,8 @@ class AgentServer(ThreadingTCPServer):
 
 STATE_META = {
     "healthy": {
-        "color": "#2e7d32", "label": "HEALTHY",
+        "color": "#2e7d32",
+        "label": "HEALTHY",
         "tagline": "Mail flows. Deferred queue ~1-3, active ~2-6, Postfix running. all green.",
         "effects": [
             "every service OK — the starting picture",
@@ -808,11 +982,15 @@ STATE_META = {
         ],
     },
     "degraded": {
-        "color": "#f9a825", "label": "DEGRADED",
+        "color": "#f9a825",
+        "label": "DEGRADED",
         "tagline": "The downstream MX gets slow/flaky — a fraction of deliveries fail, the "
-                   "deferred queue climbs (4 -> ~18) but stays UNDER the CRIT. "
-                   + (f"Auto-escalates after {AUTO_BREAK_AFTER_MIN:g} min."
-                      if AUTO_BREAK_AFTER_MIN > 0 else ""),
+        "deferred queue climbs (4 -> ~18) but stays UNDER the CRIT. "
+        + (
+            f"Auto-escalates after {AUTO_BREAK_AFTER_MIN:g} min."
+            if AUTO_BREAK_AFTER_MIN > 0
+            else ""
+        ),
         "effects": [
             "Postfix Queue default: deferred queue climbs toward ~18 over "
             f"{DEFER_CLIMB_MIN:g} min — visibly rising graph, still OK/green (< 20) — the breadcrumb",
@@ -821,11 +999,11 @@ STATE_META = {
         ],
     },
     "broken": {
-        "color": "#c62828", "label": "BROKEN",
+        "color": "#c62828",
+        "label": "BROKEN",
         "tagline": "The downstream MX is unreachable. Nothing outbound delivers — the deferred "
-                   "queue grows LIVE past 20 and keeps climbing."
-                   + (f" Ramps over ~{BREAK_RAMP_MIN:g} min."
-                      if BREAK_RAMP_MIN > 0 else " Instant."),
+        "queue grows LIVE past 20 and keeps climbing."
+        + (f" Ramps over ~{BREAK_RAMP_MIN:g} min." if BREAK_RAMP_MIN > 0 else " Instant."),
         "effects": [
             "Postfix Queue default: deferred > 20 and GROWING live across re-polls "
             "(default levels 10/20) -> CRIT — the headline that pages",
@@ -854,11 +1032,15 @@ def _admin_page() -> str:
     meta = STATE_META[state]
     extras = []
     if degraded_seconds() > 0:
-        extras.append(f"MX flaky for {_fmt_duration(degraded_seconds())} — "
-                      f"deferred queue ~{deferred_count()} mails")
+        extras.append(
+            f"MX flaky for {_fmt_duration(degraded_seconds())} — "
+            f"deferred queue ~{deferred_count()} mails"
+        )
     if broken_seconds() > 0:
-        extras.append(f"MX unreachable for {_fmt_duration(broken_seconds())} — "
-                      f"deferred queue {deferred_count()} and growing live")
+        extras.append(
+            f"MX unreachable for {_fmt_duration(broken_seconds())} — "
+            f"deferred queue {deferred_count()} and growing live"
+        )
         if break_ramp() < 1.0:
             extras.append(f"deferred-growth ramping: {break_ramp() * 100:.0f} %")
     if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0:
@@ -871,14 +1053,18 @@ def _admin_page() -> str:
         tmeta = STATE_META[target]
         current = target == state
         effects = "".join(f"<li>{e}</li>" for e in tmeta["effects"])
-        btn = ("<span class='btn current'>current state</span>" if current else
-               f"<a class='btn' href='/admin/{action}?ui=1' "
-               f"style='background:{tmeta['color']}'>&rarr; {action}</a>")
+        btn = (
+            "<span class='btn current'>current state</span>"
+            if current
+            else f"<a class='btn' href='/admin/{action}?ui=1' "
+            f"style='background:{tmeta['color']}'>&rarr; {action}</a>"
+        )
         cards.append(
             f"<div class='card{' active' if current else ''}' "
             f"style='border-color:{tmeta['color']}'>"
             f"<h2 style='color:{tmeta['color']}'>{tmeta['label']}</h2>"
-            f"<p class='tag'>{tmeta['tagline']}</p><ul>{effects}</ul>{btn}</div>")
+            f"<p class='tag'>{tmeta['tagline']}</p><ul>{effects}</ul>{btn}</div>"
+        )
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
@@ -890,7 +1076,7 @@ def _admin_page() -> str:
  h1 b {{ color:#d8dee4; }}
  .state {{ display:inline-block; padding:.4rem 1.1rem; border-radius:.4rem;
           color:#fff; font-weight:700; font-size:1.6rem; letter-spacing:.05em;
-          background:{meta['color']}; }}
+          background:{meta["color"]}; }}
  .since {{ color:#9aa4af; margin:.6rem 0 0; }}
  .extra {{ color:#f9a825; margin-top:.3rem; }}
  .cards {{ display:flex; gap:1rem; margin-top:2rem; flex-wrap:wrap; }}
@@ -907,11 +1093,11 @@ def _admin_page() -> str:
  .foot {{ margin-top:2rem; color:#666; font-size:.85rem; }}
 </style></head><body>
  <h1>demo control — <b>{HOSTNAME}</b> <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
- <div class="state">{meta['label']}</div>
+ <div class="state">{meta["label"]}</div>
  <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b>
-  — {meta['tagline']}</div>
+  — {meta["tagline"]}</div>
  {extra_html}
- <div class="cards">{''.join(cards)}</div>
+ <div class="cards">{"".join(cards)}</div>
  <div class="foot">curl API: /admin/heal · /admin/degrade · /admin/break · / (JSON status)</div>
 </body></html>"""
 
@@ -944,11 +1130,16 @@ class HttpHandler(BaseHTTPRequestHandler):
         if path == "/admin":
             return self._send_html(_admin_page())
         if path == "/admin/meta":
-            return self._send(200, {"state": get_state(),
-                                    "in_state_for_s": round(state_since_seconds(), 1),
-                                    "action_to_state": ACTION_TO_STATE,
-                                    "states": STATE_META})
-        if path.startswith("/admin/") and (action := path[len("/admin/"):]) in ACTION_TO_STATE:
+            return self._send(
+                200,
+                {
+                    "state": get_state(),
+                    "in_state_for_s": round(state_since_seconds(), 1),
+                    "action_to_state": ACTION_TO_STATE,
+                    "states": STATE_META,
+                },
+            )
+        if path.startswith("/admin/") and (action := path[len("/admin/") :]) in ACTION_TO_STATE:
             target = ACTION_TO_STATE[action]
             set_state(target)
             print(f"[ctl] -> {target.upper()}")
@@ -961,25 +1152,29 @@ class HttpHandler(BaseHTTPRequestHandler):
         state = get_state()
         auto_break_in = (
             round(max(0.0, AUTO_BREAK_AFTER_MIN * 60 - state_since_seconds()))
-            if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0 else None)
-        return self._send(200, {
-            "state": state,
-            "in_state_for_s": round(state_since_seconds(), 1),
-            "deferred_queue": deferred_count(),
-            "active_queue": active_count(),
-            "mx_flaky_for_s": round(degraded_seconds(), 1),
-            "mx_unreachable_for_s": round(broken_seconds(), 1),
-            "auto_break_in_s": auto_break_in,
-            "toggles": ["/admin/degrade", "/admin/break", "/admin/heal"],
-            "ui": "/admin",
-        })
+            if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0
+            else None
+        )
+        return self._send(
+            200,
+            {
+                "state": state,
+                "in_state_for_s": round(state_since_seconds(), 1),
+                "deferred_queue": deferred_count(),
+                "active_queue": active_count(),
+                "mx_flaky_for_s": round(degraded_seconds(), 1),
+                "mx_unreachable_for_s": round(broken_seconds(), 1),
+                "auto_break_in_s": auto_break_in,
+                "toggles": ["/admin/degrade", "/admin/break", "/admin/heal"],
+                "ui": "/admin",
+            },
+        )
 
 
 def _auto_break_watchdog() -> None:
     while True:
         time.sleep(5)
-        if (get_state() == "degraded"
-                and state_since_seconds() >= AUTO_BREAK_AFTER_MIN * 60):
+        if get_state() == "degraded" and state_since_seconds() >= AUTO_BREAK_AFTER_MIN * 60:
             set_state("broken")
             print(f"[ctl] -> BROKEN (auto: MX unreachable after {AUTO_BREAK_AFTER_MIN:g} min)")
 
@@ -991,10 +1186,14 @@ def main() -> None:
     threading.Thread(target=agent.serve_forever, daemon=True).start()
     if AUTO_BREAK_AFTER_MIN > 0:
         threading.Thread(target=_auto_break_watchdog, daemon=True).start()
-        print(f"[boot] auto-escalation: degraded -> broken (MX unreachable) after "
-              f"{AUTO_BREAK_AFTER_MIN:g} min")
-    print(f"[boot] host={HOSTNAME!r}  agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  "
-          f"start_state={get_state()}")
+        print(
+            f"[boot] auto-escalation: degraded -> broken (MX unreachable) after "
+            f"{AUTO_BREAK_AFTER_MIN:g} min"
+        )
+    print(
+        f"[boot] host={HOSTNAME!r}  agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  "
+        f"start_state={get_state()}"
+    )
     print(f"[boot] control UI:   http://localhost:{HTTP_PORT}/admin")
     try:
         http.serve_forever()

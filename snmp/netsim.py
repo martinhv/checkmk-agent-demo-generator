@@ -73,8 +73,7 @@ AUTO_BREAK_AFTER_MIN = float(os.environ.get("AUTO_BREAK_AFTER_MIN", "20"))
 # per-uid so a run as one user never collides with a state file another user
 # left in sticky /var/tmp (the live SNMP transport runs as the caller, not the
 # site user — a shared path would EPERM on os.replace every save)
-STATE_FILE = os.environ.get(
-    "STATE_FILE", f"/var/tmp/cmk-demo-netsim-state-{os.getuid()}.json")
+STATE_FILE = os.environ.get("STATE_FILE", f"/var/tmp/cmk-demo-netsim-state-{os.getuid()}.json")
 
 START = time.time()
 
@@ -96,9 +95,11 @@ class _Wobble:
         self.noise = 0.0
 
     def step(self, now: float) -> float:
-        harm = (0.60 * math.sin(self.omega * now + self.phase)
-                + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
-                + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5))
+        harm = (
+            0.60 * math.sin(self.omega * now + self.phase)
+            + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
+            + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5)
+        )
         self.noise = max(-1.5, min(1.5, self.noise * 0.9 + random.gauss(0.0, 0.25)))
         return max(-1.0, min(1.0, (harm + 0.45 * self.noise) / 1.8))
 
@@ -106,9 +107,15 @@ class _Wobble:
 _GAUGES: dict[str, _Wobble] = {}
 
 
-def gauge(name: str, base: float, *, amp_abs: float | None = None,
-          amp_frac: float | None = None, phase: float = 0.0,
-          period: float = 1200.0) -> float:
+def gauge(
+    name: str,
+    base: float,
+    *,
+    amp_abs: float | None = None,
+    amp_frac: float | None = None,
+    phase: float = 0.0,
+    period: float = 1200.0,
+) -> float:
     w = _GAUGES.get(name)
     if w is None:
         w = _GAUGES[name] = _Wobble(phase, period)
@@ -122,8 +129,14 @@ _ALL_COUNTERS: dict[str, "Counter"] = {}
 
 
 class Counter:
-    def __init__(self, name: str, phase: float = 0.0, amp: float = 0.30,
-                 period: float = 1200.0, start: float = 0.0) -> None:
+    def __init__(
+        self,
+        name: str,
+        phase: float = 0.0,
+        amp: float = 0.30,
+        period: float = 1200.0,
+        start: float = 0.0,
+    ) -> None:
         self.acc = start
         self.last = time.time()
         self.amp = amp
@@ -176,13 +189,13 @@ class DeviceState:
 
     def degraded_minutes(self) -> float:
         with self._lock:
-            return 0.0 if self._degraded_since is None \
-                else (time.time() - self._degraded_since) / 60.0
+            return (
+                0.0 if self._degraded_since is None else (time.time() - self._degraded_since) / 60.0
+            )
 
     def broken_seconds(self) -> float:
         with self._lock:
-            return 0.0 if self._broken_since is None \
-                else time.time() - self._broken_since
+            return 0.0 if self._broken_since is None else time.time() - self._broken_since
 
     def ramp(self, minutes: float = 3.0) -> float:
         """0 -> 1 over `minutes` since the break — incidents build, no cliffs."""
@@ -191,9 +204,12 @@ class DeviceState:
 
     def dump(self) -> dict:
         with self._lock:
-            return {"state": self._state, "state_since": self._state_since,
-                    "degraded_since": self._degraded_since,
-                    "broken_since": self._broken_since}
+            return {
+                "state": self._state,
+                "state_since": self._state_since,
+                "degraded_since": self._degraded_since,
+                "broken_since": self._broken_since,
+            }
 
     def restore(self, data: dict) -> None:
         with self._lock:
@@ -222,8 +238,7 @@ def hex_bytes(raw: bytes) -> str:
 
 
 def mac(dev_seed: int, index: int) -> str:
-    return hex_bytes(bytes([0x00, 0x1B, 0x2C, dev_seed & 0xFF,
-                            (index >> 8) & 0xFF, index & 0xFF]))
+    return hex_bytes(bytes([0x00, 0x1B, 0x2C, dev_seed & 0xFF, (index >> 8) & 0xFF, index & 0xFF]))
 
 
 def render_walk(rows: list[tuple[str, str]]) -> str:
@@ -235,7 +250,7 @@ def render_walk(rows: list[tuple[str, str]]) -> str:
     return "".join(out)
 
 
-U32 = 2 ** 32
+U32 = 2**32
 
 
 # --------------------------------------------------------------------------- #
@@ -247,27 +262,35 @@ U32 = 2 ** 32
 #  packages/cmk-plugins/cmk/plugins/lib/interfaces.py.
 # --------------------------------------------------------------------------- #
 class Iface:
-    def __init__(self, dev: str, index: int, name: str, descr: str, alias: str,
-                 mbit: int, in_bps: float, out_bps: float, seed: int) -> None:
+    def __init__(
+        self,
+        dev: str,
+        index: int,
+        name: str,
+        descr: str,
+        alias: str,
+        mbit: int,
+        in_bps: float,
+        out_bps: float,
+        seed: int,
+    ) -> None:
         self.index = index
         self.name = name
         self.descr = descr
         self.alias = alias
-        self.mbit = mbit                      # ifHighSpeed (Mbit/s)
-        self.in_bps = in_bps                  # healthy octets/s in
+        self.mbit = mbit  # ifHighSpeed (Mbit/s)
+        self.in_bps = in_bps  # healthy octets/s in
         self.out_bps = out_bps
         self.oper = 1
         self.seed = seed
         key = f"{dev}.if{index}"
         ph = (index * 0.73) % 6.28
-        aged = 87 * 86400                     # pretend counters aged ~87 days
+        aged = 87 * 86400  # pretend counters aged ~87 days
         self.c = {
             "in_oct": Counter(f"{key}.in_oct", phase=ph, start=in_bps * aged),
             "out_oct": Counter(f"{key}.out_oct", phase=ph + 0.5, start=out_bps * aged),
-            "in_ucast": Counter(f"{key}.in_ucast", phase=ph + 1.0,
-                                start=in_bps / 700 * aged),
-            "out_ucast": Counter(f"{key}.out_ucast", phase=ph + 1.5,
-                                 start=out_bps / 700 * aged),
+            "in_ucast": Counter(f"{key}.in_ucast", phase=ph + 1.0, start=in_bps / 700 * aged),
+            "out_ucast": Counter(f"{key}.out_ucast", phase=ph + 1.5, start=out_bps / 700 * aged),
             "in_mcast": Counter(f"{key}.in_mcast", phase=ph + 2.0, start=2 * aged),
             "in_bcast": Counter(f"{key}.in_bcast", phase=ph + 2.5, start=0.5 * aged),
             "out_mcast": Counter(f"{key}.out_mcast", phase=ph + 3.0, start=1 * aged),
@@ -278,9 +301,9 @@ class Iface:
             "out_err": Counter(f"{key}.out_err", phase=ph + 4.6, start=0),
         }
         # current modifiers, set by the owning device before sampling
-        self.rate_factor = 1.0                # scales traffic
-        self.err_rate = 0.0                   # ifInErrors per second
-        self.disc_rate = 0.0                  # ifOutDiscards per second
+        self.rate_factor = 1.0  # scales traffic
+        self.err_rate = 0.0  # ifInErrors per second
+        self.disc_rate = 0.0  # ifOutDiscards per second
 
     def rows(self) -> list[tuple[str, str]]:
         i = self.index
@@ -302,11 +325,11 @@ class Iface:
             "out_disc": c["out_disc"].sample(self.disc_rate if up else 0.0),
             "out_err": c["out_err"].sample(0.0),
         }
-        if_speed = min(self.mbit * 1_000_000, U32 - 1)   # ifSpeed caps at ~4.3G
+        if_speed = min(self.mbit * 1_000_000, U32 - 1)  # ifSpeed caps at ~4.3G
         return [
             (f".1.3.6.1.2.1.2.2.1.1.{i}", str(i)),
             (f".1.3.6.1.2.1.2.2.1.2.{i}", self.descr),
-            (f".1.3.6.1.2.1.2.2.1.3.{i}", "6"),          # ethernetCsmacd
+            (f".1.3.6.1.2.1.2.2.1.3.{i}", "6"),  # ethernetCsmacd
             (f".1.3.6.1.2.1.2.2.1.5.{i}", str(if_speed)),
             (f".1.3.6.1.2.1.2.2.1.6.{i}", mac(self.seed, i)),
             (f".1.3.6.1.2.1.2.2.1.8.{i}", str(self.oper)),
@@ -314,7 +337,7 @@ class Iface:
             (f".1.3.6.1.2.1.2.2.1.14.{i}", str(vals["in_err"] % U32)),
             (f".1.3.6.1.2.1.2.2.1.19.{i}", str(vals["out_disc"] % U32)),
             (f".1.3.6.1.2.1.2.2.1.20.{i}", str(vals["out_err"] % U32)),
-            (f".1.3.6.1.2.1.2.2.1.21.{i}", "0"),         # ifOutQLen
+            (f".1.3.6.1.2.1.2.2.1.21.{i}", "0"),  # ifOutQLen
             (f".1.3.6.1.2.1.31.1.1.1.1.{i}", self.name),
             (f".1.3.6.1.2.1.31.1.1.1.6.{i}", str(vals["in_oct"])),
             (f".1.3.6.1.2.1.31.1.1.1.7.{i}", str(vals["in_ucast"])),
@@ -339,7 +362,7 @@ class Device:
     sys_objectid: str = ""
     location: str = ""
     incident = False
-    role: str = "network"            # folder-taxonomy key (deploy/cmk_setup.py)
+    role: str = "network"  # folder-taxonomy key (deploy/cmk_setup.py)
     parent: str | None = "sw-core-01"  # short name of the upstream device
     tagline_effects: dict[str, list[str]] = {}
 
@@ -391,17 +414,22 @@ def envmon_temp_rows(descr: str, celsius: float, threshold: int) -> list[tuple[s
 def envmon_fan_psu_rows(fans: list[str], psus: list[str]) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
     for n, name in enumerate(fans, start=1):
-        rows += [(f".1.3.6.1.4.1.9.9.13.1.4.1.2.{n}", name),
-                 (f".1.3.6.1.4.1.9.9.13.1.4.1.3.{n}", "1")]       # normal
+        rows += [
+            (f".1.3.6.1.4.1.9.9.13.1.4.1.2.{n}", name),
+            (f".1.3.6.1.4.1.9.9.13.1.4.1.3.{n}", "1"),
+        ]  # normal
     for n, name in enumerate(psus, start=1):
-        rows += [(f".1.3.6.1.4.1.9.9.13.1.5.1.2.{n}", name),
-                 (f".1.3.6.1.4.1.9.9.13.1.5.1.3.{n}", "1"),       # normal
-                 (f".1.3.6.1.4.1.9.9.13.1.5.1.4.{n}", "2")]       # source: ac
+        rows += [
+            (f".1.3.6.1.4.1.9.9.13.1.5.1.2.{n}", name),
+            (f".1.3.6.1.4.1.9.9.13.1.5.1.3.{n}", "1"),  # normal
+            (f".1.3.6.1.4.1.9.9.13.1.5.1.4.{n}", "2"),
+        ]  # source: ac
     return rows
 
 
-def catalyst_platform_rows(dev: str, cpu_pct: float, temp_c: float,
-                           mem_used: int, mem_free: int) -> list[tuple[str, str]]:
+def catalyst_platform_rows(
+    dev: str, cpu_pct: float, temp_c: float, mem_used: int, mem_free: int
+) -> list[tuple[str, str]]:
     """Modern IOS-XE Catalyst: cisco_cpu_multiitem (cpmCPU row 7 -> ENTITY
     1001), enhanced-64 cisco_mem pool, CISCO-ENTITY-SENSOR temperature with
     device thresholds WARN 65 / CRIT 75, ENVMON fans + PSUs."""
@@ -410,9 +438,9 @@ def catalyst_platform_rows(dev: str, cpu_pct: float, temp_c: float,
         (".1.3.6.1.2.1.47.1.1.1.1.4.1", "0"),
         (".1.3.6.1.2.1.47.1.1.1.1.4.1001", "1"),
         (".1.3.6.1.2.1.47.1.1.1.1.4.1010", "1"),
-        (".1.3.6.1.2.1.47.1.1.1.1.5.1", "3"),            # chassis
-        (".1.3.6.1.2.1.47.1.1.1.1.5.1001", "12"),        # cpu
-        (".1.3.6.1.2.1.47.1.1.1.1.5.1010", "8"),         # sensor
+        (".1.3.6.1.2.1.47.1.1.1.1.5.1", "3"),  # chassis
+        (".1.3.6.1.2.1.47.1.1.1.1.5.1001", "12"),  # cpu
+        (".1.3.6.1.2.1.47.1.1.1.1.5.1010", "8"),  # sensor
         (".1.3.6.1.2.1.47.1.1.1.1.7.1", "Switch 1 Chassis"),
         (".1.3.6.1.2.1.47.1.1.1.1.7.1001", "Switch 1 CPU"),
         (".1.3.6.1.2.1.47.1.1.1.1.7.1010", "Switch 1 - Temp Sensor 0"),
@@ -439,17 +467,21 @@ def catalyst_platform_rows(dev: str, cpu_pct: float, temp_c: float,
     ]
     rows += envmon_fan_psu_rows(
         fans=["Switch 1 - FAN 1", "Switch 1 - FAN 2"],
-        psus=["Switch 1 - Power Supply A, Normal", "Switch 1 - Power Supply B, Normal"])
+        psus=["Switch 1 - Power Supply A, Normal", "Switch 1 - Power Supply B, Normal"],
+    )
     return rows
 
 
 class SwCore(Device):
     """Core switch — steady-green background (12 x 10G)."""
+
     short = "sw-core-01"
     uptime_offset = 214 * 86400
-    sys_descr = ("Cisco IOS Software [Amsterdam], Catalyst L3 Switch Software "
-                 "(CAT9K_IOSXE), Version 17.3.4, RELEASE SOFTWARE (fc2), "
-                 "Copyright (c) 1986-2021 by Cisco Systems, Inc.")
+    sys_descr = (
+        "Cisco IOS Software [Amsterdam], Catalyst L3 Switch Software "
+        "(CAT9K_IOSXE), Version 17.3.4, RELEASE SOFTWARE (fc2), "
+        "Copyright (c) 1986-2021 by Cisco Systems, Inc."
+    )
     sys_objectid = ".1.3.6.1.4.1.9.1.2494"
     location = "DC comms room, network row"
     incident = False
@@ -484,9 +516,19 @@ class SwCore(Device):
             ("(spare)", 0.4e6, 0.3e6),
         ]
         for n, (alias, base_in, base_out) in enumerate(peers, start=1):
-            self.ifaces.append(Iface("sw-core-01", n, f"Te1/0/{n}",
-                                     f"TenGigabitEthernet1/0/{n}", alias,
-                                     10000, base_in, base_out, seed=1))
+            self.ifaces.append(
+                Iface(
+                    "sw-core-01",
+                    n,
+                    f"Te1/0/{n}",
+                    f"TenGigabitEthernet1/0/{n}",
+                    alias,
+                    10000,
+                    base_in,
+                    base_out,
+                    seed=1,
+                )
+            )
 
     def rows(self, now: float) -> list[tuple[str, str]]:
         rows = self.system_rows(now)
@@ -497,7 +539,9 @@ class SwCore(Device):
             self.short,
             cpu_pct=gauge("core.cpu", 14, amp_abs=4, period=900),
             temp_c=gauge("core.temp", 39, amp_abs=1.5, period=1800),
-            mem_used=1_912_602_624, mem_free=6_275_072_000)
+            mem_used=1_912_602_624,
+            mem_free=6_275_072_000,
+        )
         return rows
 
 
@@ -516,45 +560,74 @@ class SwAccess(Device):
               ports are never discovered, and the target state is the one
               recorded at discovery.
     """
+
     uptime_offset = 87 * 86400
-    sys_descr = ("Cisco IOS Software [Amsterdam], Catalyst L3 Switch Software "
-                 "(CAT9K_LITE_IOSXE), Version 17.3.4, RELEASE SOFTWARE (fc2), "
-                 "Copyright (c) 1986-2021 by Cisco Systems, Inc.")
+    sys_descr = (
+        "Cisco IOS Software [Amsterdam], Catalyst L3 Switch Software "
+        "(CAT9K_LITE_IOSXE), Version 17.3.4, RELEASE SOFTWARE (fc2), "
+        "Copyright (c) 1986-2021 by Cisco Systems, Inc."
+    )
     sys_objectid = ".1.3.6.1.4.1.9.1.2695"
     role = "net_switches"
 
     def __init__(self, num: int = 1) -> None:
         self.short = f"sw-access-{num:02d}"
-        self.incident = num == 1            # one story; replicas stay green
+        self.incident = num == 1  # one story; replicas stay green
         self.location = f"DC row {num}, server access"
         self.uptime_offset = (87 - 3 * num) * 86400
         super().__init__()
-        rnd = random.Random(42 + num)       # distinct port mix per switch
-        mac_seed = 2 if num == 1 else 16 + num   # unique MACs across replicas
+        rnd = random.Random(42 + num)  # distinct port mix per switch
+        mac_seed = 2 if num == 1 else 16 + num  # unique MACs across replicas
         self.ifaces: list[Iface] = []
         acc_in = acc_out = 0.0
-        for n in range(1, 49):                # 48 x 1G access ports
-            if rnd.random() < 0.70:           # most ports lightly used
+        for n in range(1, 49):  # 48 x 1G access ports
+            if rnd.random() < 0.70:  # most ports lightly used
                 base_in = rnd.uniform(0.1e6, 3e6) / 8
-            else:                             # a few noisy ones (backups, repl)
+            else:  # a few noisy ones (backups, repl)
                 base_in = rnd.uniform(5e6, 25e6) / 8
             base_out = base_in * rnd.uniform(0.3, 1.0)
             acc_in += base_in
             acc_out += base_out
-            self.ifaces.append(Iface(self.short, n, f"Gi1/0/{n}",
-                                     f"GigabitEthernet1/0/{n}", "",
-                                     1000, base_in, base_out, seed=mac_seed))
+            self.ifaces.append(
+                Iface(
+                    self.short,
+                    n,
+                    f"Gi1/0/{n}",
+                    f"GigabitEthernet1/0/{n}",
+                    "",
+                    1000,
+                    base_in,
+                    base_out,
+                    seed=mac_seed,
+                )
+            )
         # 2 x 10G uplinks to the core, ~balanced. Traffic conservation (a
         # network person WILL sum this): what the access ports receive from
         # the devices leaves via the uplinks and vice versa — so each
         # uplink's OUT ~= half the access-IN sum, and its IN ~= half the
         # access-OUT sum.
-        self.up1 = Iface(self.short, 49, "Te1/1/1", "TenGigabitEthernet1/1/1",
-                         "uplink sw-core-01", 10000,
-                         acc_out * 0.51, acc_in * 0.50, seed=mac_seed)
-        self.up2 = Iface(self.short, 50, "Te1/1/2", "TenGigabitEthernet1/1/2",
-                         "uplink sw-core-01", 10000,
-                         acc_out * 0.49, acc_in * 0.50, seed=mac_seed)
+        self.up1 = Iface(
+            self.short,
+            49,
+            "Te1/1/1",
+            "TenGigabitEthernet1/1/1",
+            "uplink sw-core-01",
+            10000,
+            acc_out * 0.51,
+            acc_in * 0.50,
+            seed=mac_seed,
+        )
+        self.up2 = Iface(
+            self.short,
+            50,
+            "Te1/1/2",
+            "TenGigabitEthernet1/1/2",
+            "uplink sw-core-01",
+            10000,
+            acc_out * 0.49,
+            acc_in * 0.50,
+            seed=mac_seed,
+        )
         self.ifaces += [self.up1, self.up2]
 
     def rows(self, now: float) -> list[tuple[str, str]]:
@@ -567,12 +640,12 @@ class SwAccess(Device):
             self.up1.oper, self.up1.err_rate, self.up1.rate_factor = 1, 0.0, 1.0
             self.up2.rate_factor = 1.0
         elif state == "degraded":
-            m = min(1.0, self.state.degraded_minutes() / 2.0)   # storm builds ~2 min
+            m = min(1.0, self.state.degraded_minutes() / 2.0)  # storm builds ~2 min
             self.up1.oper = 1
             self.up1.err_rate = 0.0004 * pps_in * m
             self.up1.rate_factor = 1.0
             self.up2.rate_factor = 1.0
-        else:                                  # broken: link down
+        else:  # broken: link down
             self.up1.oper = 2
             self.up1.err_rate = 0.0
             self.up2.rate_factor = 1.0 + 0.95 * self.state.ramp(2.0)
@@ -582,22 +655,34 @@ class SwAccess(Device):
             rows += it.rows()
         rows += catalyst_platform_rows(
             self.short,
-            cpu_pct=gauge(f"{self.short}.cpu", 9, amp_abs=3, period=1100,
-                          phase=sum(map(ord, self.short)) % 6),
-            temp_c=gauge(f"{self.short}.temp", 43, amp_abs=1.5, period=2000,
-                         phase=sum(map(ord, self.short)) % 5),
-            mem_used=1_204_570_112, mem_free=2_890_137_600)
+            cpu_pct=gauge(
+                f"{self.short}.cpu", 9, amp_abs=3, period=1100, phase=sum(map(ord, self.short)) % 6
+            ),
+            temp_c=gauge(
+                f"{self.short}.temp",
+                43,
+                amp_abs=1.5,
+                period=2000,
+                phase=sum(map(ord, self.short)) % 5,
+            ),
+            mem_used=1_204_570_112,
+            mem_free=2_890_137_600,
+        )
         return rows
 
     def status_extras(self) -> list[str]:
         state = self.state.get()
         if state == "degraded":
             pct = 0.04 * min(1.0, self.state.degraded_minutes() / 2.0)
-            return [f"Te1/1/1 CRC storm: ~{pct:.3f} % of inbound packets in error "
-                    f"(WARN at 0.01 %, CRIT at 0.1 %)"]
+            return [
+                f"Te1/1/1 CRC storm: ~{pct:.3f} % of inbound packets in error "
+                f"(WARN at 0.01 %, CRIT at 0.1 %)"
+            ]
         if state == "broken":
-            return ["Te1/1/1 DOWN (Interface 49 goes CRIT) — "
-                    f"Te1/1/2 carrying failover load (+{self.state.ramp(2.0) * 95:.0f} %)"]
+            return [
+                "Te1/1/1 DOWN (Interface 49 goes CRIT) — "
+                f"Te1/1/2 carrying failover load (+{self.state.ramp(2.0) * 95:.0f} %)"
+            ]
         return []
 
 
@@ -617,11 +702,14 @@ class RtWan(Device):
               and output discards appear on the WAN port. One story: the
               red CPU points at the saturated WAN graph next to it.
     """
+
     short = "rt-wan-01"
     uptime_offset = 391 * 86400
-    sys_descr = ("Cisco IOS Software, C2900 Software (C2900-UNIVERSALK9-M), "
-                 "Version 15.7(3)M5, RELEASE SOFTWARE (fc1), "
-                 "Copyright (c) 1986-2019 by Cisco Systems, Inc.")
+    sys_descr = (
+        "Cisco IOS Software, C2900 Software (C2900-UNIVERSALK9-M), "
+        "Version 15.7(3)M5, RELEASE SOFTWARE (fc1), "
+        "Copyright (c) 1986-2019 by Cisco Systems, Inc."
+    )
     sys_objectid = ".1.3.6.1.4.1.9.1.1639"
     location = "DC rack A2"
     incident = True
@@ -629,11 +717,28 @@ class RtWan(Device):
 
     def __init__(self) -> None:
         super().__init__()
-        self.lan = Iface("rt-wan-01", 1, "Gi0/0", "GigabitEthernet0/0",
-                         "LAN to sw-core-01 Te1/0/4", 1000, 24e6, 21e6, seed=3)
-        self.wan = Iface("rt-wan-01", 2, "Gi0/1", "GigabitEthernet0/1",
-                         "WAN leased lines to warehouses (rt-wh1/rt-wh2)", 1000,
-                         22.5e6, 19e6, seed=3)
+        self.lan = Iface(
+            "rt-wan-01",
+            1,
+            "Gi0/0",
+            "GigabitEthernet0/0",
+            "LAN to sw-core-01 Te1/0/4",
+            1000,
+            24e6,
+            21e6,
+            seed=3,
+        )
+        self.wan = Iface(
+            "rt-wan-01",
+            2,
+            "Gi0/1",
+            "GigabitEthernet0/1",
+            "WAN leased lines to warehouses (rt-wh1/rt-wh2)",
+            1000,
+            22.5e6,
+            19e6,
+            seed=3,
+        )
         self.ifaces = [self.lan, self.wan]
 
     def _factor_cpu(self) -> tuple[float, float]:
@@ -643,11 +748,9 @@ class RtWan(Device):
             return 1.0, gauge("wan.cpu", 22, amp_abs=5, period=1000)
         if state == "degraded":
             m = min(1.0, self.state.degraded_minutes() / 3.0)
-            return _lerp(1.0, 3.3, m), gauge("wan.cpu", _lerp(25, 68, m),
-                                             amp_abs=4, period=800)
+            return _lerp(1.0, 3.3, m), gauge("wan.cpu", _lerp(25, 68, m), amp_abs=4, period=800)
         r = self.state.ramp(3.0)
-        return _lerp(3.3, 5.2, r), gauge("wan.cpu", _lerp(68, 93, r),
-                                         amp_abs=2, period=700)
+        return _lerp(3.3, 5.2, r), gauge("wan.cpu", _lerp(68, 93, r), amp_abs=2, period=700)
 
     def rows(self, now: float) -> list[tuple[str, str]]:
         factor, cpu = self._factor_cpu()
@@ -672,16 +775,17 @@ class RtWan(Device):
             (".1.3.6.1.4.1.9.9.48.1.1.1.6.2", "31457280"),
         ]
         rows += envmon_temp_rows(
-            "chassis", gauge("wan.temp", 46 + (cpu - 22) * 0.12,
-                             amp_abs=1.2, period=1600), threshold=65)
+            "chassis",
+            gauge("wan.temp", 46 + (cpu - 22) * 0.12, amp_abs=1.2, period=1600),
+            threshold=65,
+        )
         rows += envmon_fan_psu_rows(fans=["Fan 1"], psus=["PS1 Normal"])
         return rows
 
     def status_extras(self) -> list[str]:
         factor, cpu = self._factor_cpu()
         mbit = 180 * factor
-        out = [f"WAN Gi0/1 at ~{mbit:.0f} Mbit/s of 1000, CPU ~{cpu:.0f} % "
-               f"(WARN 80 / CRIT 90)"]
+        out = [f"WAN Gi0/1 at ~{mbit:.0f} Mbit/s of 1000, CPU ~{cpu:.0f} % (WARN 80 / CRIT 90)"]
         if self.wan.disc_rate > 0:
             out.append(f"output discards on Gi0/1: ~{self.wan.disc_rate:.0f}/s")
         return out
@@ -691,13 +795,16 @@ class Ups(Device):
     """APC Smart-UPS — steady-green infrastructure corroboration. Its
     management card plugs into the server-access switch (a UPS mgmt NIC on a
     10G core port would be odd)."""
+
     short = "ups-01"
     parent = "sw-access-01"
     uptime_offset = 402 * 86400
-    sys_descr = ("APC Web/SNMP Management Card (MB:v4.1.0 PF:v6.9.6 "
-                 "PN:apc_hw05_aos_696.bin AF1:v6.9.6 "
-                 "AN1:apc_hw05_sumx_696.bin MN:AP9631 HR:05) "
-                 "(Embedded PowerNet SNMP Agent SW v2.2 compatible)")
+    sys_descr = (
+        "APC Web/SNMP Management Card (MB:v4.1.0 PF:v6.9.6 "
+        "PN:apc_hw05_aos_696.bin AF1:v6.9.6 "
+        "AN1:apc_hw05_sumx_696.bin MN:AP9631 HR:05) "
+        "(Embedded PowerNet SNMP Agent SW v2.2 compatible)"
+    )
     sys_objectid = ".1.3.6.1.4.1.318.1.3.27"
     location = "DC rack A2, bottom"
     incident = False
@@ -720,31 +827,31 @@ class Ups(Device):
         load = int(round(gauge("ups.load", 37, amp_abs=4, period=1300)))
         volt_out = int(round(gauge("ups.vout", 231, amp_abs=2, period=1600)))
         volt_in = int(round(gauge("ups.vin", 230, amp_abs=2, period=1900)))
-        runtime_ticks = int(gauge("ups.runtime", 7200, amp_abs=350,
-                                  period=2100)) * 100        # TimeTicks (1/100 s)
+        runtime_ticks = (
+            int(gauge("ups.runtime", 7200, amp_abs=350, period=2100)) * 100
+        )  # TimeTicks (1/100 s)
         amps = max(1, int(round(load / 9)))
         diag = time.strftime("%m/%d/%Y", time.localtime(now - 37 * 86400))
-        state_bits = ("0001010000000000001000000000000000000000"
-                      "000000000000000000000000")
+        state_bits = "0001010000000000001000000000000000000000000000000000000000000000"
         rows = self.system_rows(now)
         rows += [
-            (".1.3.6.1.4.1.318.1.1.1.2.1.1.0", "2"),      # battery: normal
+            (".1.3.6.1.4.1.318.1.1.1.2.1.1.0", "2"),  # battery: normal
             (".1.3.6.1.4.1.318.1.1.1.2.2.1.0", str(cap)),
             (".1.3.6.1.4.1.318.1.1.1.2.2.2.0", str(temp)),
             (".1.3.6.1.4.1.318.1.1.1.2.2.3.0", str(runtime_ticks)),
-            (".1.3.6.1.4.1.318.1.1.1.2.2.4.0", "1"),      # no replace
-            (".1.3.6.1.4.1.318.1.1.1.2.2.6.0", "1"),      # battery packs
+            (".1.3.6.1.4.1.318.1.1.1.2.2.4.0", "1"),  # no replace
+            (".1.3.6.1.4.1.318.1.1.1.2.2.6.0", "1"),  # battery packs
             (".1.3.6.1.4.1.318.1.1.1.2.2.9.0", str(amps)),
             (".1.3.6.1.4.1.318.1.1.1.3.2.1.0", str(volt_in)),
-            (".1.3.6.1.4.1.318.1.1.1.4.1.1.0", "2"),      # output: onLine
+            (".1.3.6.1.4.1.318.1.1.1.4.1.1.0", "2"),  # output: onLine
             # output-phase rows (.4.2.1/.4.2.3/.4.2.4) intentionally absent:
             # parse_apc_symmetra_output crashes on the 3.0.0 dev branch
             # (ElPhase.from_dict re-parses ReadingWithState -> TypeError,
             # introduced in c1802b42504) — restore once fixed upstream
-            (".1.3.6.1.4.1.318.1.1.1.7.2.3.0", "1"),      # self test: ok
+            (".1.3.6.1.4.1.318.1.1.1.7.2.3.0", "1"),  # self test: ok
             (".1.3.6.1.4.1.318.1.1.1.7.2.4.0", diag),
-            (".1.3.6.1.4.1.318.1.1.1.7.2.6.0", "1"),      # calibration: ok
-            (".1.3.6.1.4.1.318.1.1.1.8.1.0", "1"),        # comm status ok
+            (".1.3.6.1.4.1.318.1.1.1.7.2.6.0", "1"),  # calibration: ok
+            (".1.3.6.1.4.1.318.1.1.1.8.1.0", "1"),  # comm status ok
             (".1.3.6.1.4.1.318.1.1.1.11.1.1.0", state_bits),
         ]
         return rows
@@ -768,7 +875,7 @@ _IF32 = {"10": "ifin", "11": "ifinu", "16": "ifout", "17": "ifoutu"}
 _IFHC = {"6": "ifin", "7": "ifinu", "10": "ifout", "11": "ifoutu"}
 _HRCPU_PREFIX = ".1.3.6.1.2.1.25.3.3.1.2."
 _PAGES_PREFIX = ".1.3.6.1.2.1.43.10.2.1.4."
-_HP_CPU_OID = ".1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0"   # hpSwitchCpuStat (%)
+_HP_CPU_OID = ".1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0"  # hpSwitchCpuStat (%)
 _APC_DIAG_DATE_OID = ".1.3.6.1.4.1.318.1.1.1.7.2.4.0"  # last self test (M/D/Y)
 
 
@@ -801,8 +908,8 @@ class ReplayModel:
         # segments: static text blocks interleaved with dynamic slots
         # slot = (kind, oid, key, recorded_int)
         self.segments: list[str | tuple] = []
-        self.rates: dict[str, float] = {}      # counter key -> base rate/s
-        self.uptime_rec = 90 * 86400           # seconds, fallback
+        self.rates: dict[str, float] = {}  # counter key -> base rate/s
+        self.uptime_rec = 90 * 86400  # seconds, fallback
 
         rows: list[tuple[str, str]] = []
         with open(path) as f:
@@ -866,9 +973,9 @@ class ReplayModel:
                 self._note_rate(key, int(value))
                 return ("ctr64", oid, key, int(value))
         if oid.startswith(_HRCPU_PREFIX) and value.isdigit():
-            return ("hrcpu", oid, oid[len(_HRCPU_PREFIX):], int(value))
+            return ("hrcpu", oid, oid[len(_HRCPU_PREFIX) :], int(value))
         if oid.startswith(_PAGES_PREFIX) and value.isdigit():
-            key = f"pages.{oid[len(_PAGES_PREFIX):]}"
+            key = f"pages.{oid[len(_PAGES_PREFIX) :]}"
             self._note_rate(key, int(value))
             return ("ctr32", oid, key, int(value))
         return None
@@ -887,8 +994,9 @@ class ReplayDevice(Device):
 
     incident = False
 
-    def __init__(self, short: str, model: ReplayModel, role: str,
-                 location: str, parent: str | None) -> None:
+    def __init__(
+        self, short: str, model: ReplayModel, role: str, location: str, parent: str | None
+    ) -> None:
         self.short = short
         self.role = role
         self.location = location
@@ -897,16 +1005,19 @@ class ReplayDevice(Device):
         super().__init__()
         rnd = random.Random(f"{short}:replay-v1")
         self.rate_jit = rnd.uniform(0.7, 1.3)
-        self.uptime_extra = rnd.uniform(0, 120) * 86400   # instances differ
+        self.uptime_extra = rnd.uniform(0, 120) * 86400  # instances differ
         self.phase = rnd.uniform(0, 6.28)
         self._counters: dict[str, Counter] = {}
 
     def _counter(self, key: str, recorded: int) -> Counter:
         c = self._counters.get(key)
         if c is None:
-            c = Counter(f"{self.short}.{key}", phase=self.phase
-                        + (hash(key) % 63) / 10.0, amp=0.30,
-                        start=float(recorded))
+            c = Counter(
+                f"{self.short}.{key}",
+                phase=self.phase + (hash(key) % 63) / 10.0,
+                amp=0.30,
+                start=float(recorded),
+            )
             self._counters[key] = c
         return c
 
@@ -914,8 +1025,7 @@ class ReplayDevice(Device):
     # syslocation and all the recorded static lines) is fixed for an instance
     _DYNAMIC_KINDS = frozenset({"uptime", "hrcpu", "apcdate", "ctr32", "ctr64"})
 
-    def _slot_value(self, seg: tuple, elapsed: float, now: float,
-                    sampled: dict) -> str:
+    def _slot_value(self, seg: tuple, elapsed: float, now: float, sampled: dict) -> str:
         kind, oid, key, rec = seg
         if kind == "sysname":
             return self.fqdn
@@ -924,8 +1034,7 @@ class ReplayDevice(Device):
         if kind == "uptime":
             return str(int(rec + elapsed * 100) % U32)
         if kind == "hrcpu":
-            v = gauge(f"{self.short}.hrcpu.{key}", rec, amp_abs=3.0,
-                      phase=self.phase, period=900)
+            v = gauge(f"{self.short}.hrcpu.{key}", rec, amp_abs=3.0, phase=self.phase, period=900)
             return str(max(1, min(97, int(round(v)))))
         if kind == "apcdate":
             return time.strftime("%m/%d/%Y", time.localtime(now - 37 * 86400))
@@ -952,9 +1061,11 @@ class ReplayDevice(Device):
         cached table in place instead of rebuilding all ~17k OIDs each poll."""
         elapsed = now - START + self.uptime_extra
         sampled: dict[str, int] = {}
-        return [(seg[1], self._slot_value(seg, elapsed, now, sampled))
-                for seg in self.model.segments
-                if not isinstance(seg, str) and seg[0] in self._DYNAMIC_KINDS]
+        return [
+            (seg[1], self._slot_value(seg, elapsed, now, sampled))
+            for seg in self.model.segments
+            if not isinstance(seg, str) and seg[0] in self._DYNAMIC_KINDS
+        ]
 
     def rows(self, now: float) -> list[tuple[str, str]]:  # pragma: no cover
         raise NotImplementedError("ReplayDevice renders via walk()")
@@ -970,100 +1081,150 @@ REPLAY_ROSTER: list[tuple[int, str, str, str, str, str | None]] = [
     # Only the distribution switches uplink to the core; everything else hangs
     # off a distribution switch (ToR carry the servers; storage/mgmt/power/env
     # aggregate on the pair). Keeps the 12-port core's fan-out realistic.
-    (2, "sw-dc-dist-{n:02d}", "hp-5406r", "net_switches",
-     "DC row {n}, end of row (distribution)", "sw-core-01"),
-    (6, "sw-dc-tor-{n:02d}", "aruba-6200f", "net_switches",
-     "DC rack A{n}, top of rack", "sw-dc-dist-01"),
-    (2, "sw-dc-tor-{nn:02d}", "huawei-s6730", "net_switches",
-     "DC rack B{n}, top of rack", "sw-dc-dist-02"),
+    (
+        2,
+        "sw-dc-dist-{n:02d}",
+        "hp-5406r",
+        "net_switches",
+        "DC row {n}, end of row (distribution)",
+        "sw-core-01",
+    ),
+    (
+        6,
+        "sw-dc-tor-{n:02d}",
+        "aruba-6200f",
+        "net_switches",
+        "DC rack A{n}, top of rack",
+        "sw-dc-dist-01",
+    ),
+    (
+        2,
+        "sw-dc-tor-{nn:02d}",
+        "huawei-s6730",
+        "net_switches",
+        "DC rack B{n}, top of rack",
+        "sw-dc-dist-02",
+    ),
     # dedicated OOB/management switch: iDRACs, rack PDUs and environment
     # sensors live on the management network, not on the production fabric
-    (1, "sw-dc-oob-{n:02d}", "hp-2530", "net_switches",
-     "DC comms room, OOB management", "sw-dc-dist-01"),
-    (2, "fw-{n:02d}", "fortigate", "net_firewalls",
-     "DC rack A1 (HA pair, unit {n})", "sw-core-01"),
-    (1, "fw-dmz-{n:02d}", "cisco-asa", "net_firewalls",
-     "DC rack A1, DMZ tier", "sw-core-01"),
-    (2, "lb-{n:02d}", "kemp-lb", "net_loadbalancers",
-     "DC rack A2 (HA pair, unit {n})", "sw-dc-dist-01"),
-    (2, "nas-{n:02d}", "synology-nas", "storage",
-     "DC rack B1", "sw-dc-dist-02"),
-    (2, "san-fc-{n:02d}", "brocade-fc", "storage",
-     "DC rack B2, SAN fabric {n}", "sw-dc-dist-02"),
-    (16, "oob-idrac-{n:02d}", "idrac", "mgmt",
-     "DC rack A{n} (iDRAC)", "sw-dc-oob-01"),
-    (1, "ntp-gps-{n:02d}", "meinberg-ntp", "infrastructure",
-     "DC comms room, GPS antenna on roof", "sw-dc-dist-02"),
-    (3, "ups-dc-{n:02d}", "apc-symmetra", "net_ups",
-     "DC power room, feed {n}", "sw-dc-oob-01"),
-    (4, "pdu-dc-{n:02d}", "apc-pdu", "net_ups",
-     "DC rack A{n}, rack PDU", "sw-dc-oob-01"),
-    (2, "pdu-dc-{nn:02d}", "raritan-pdu", "net_ups",
-     "DC rack B{n}, rack PDU", "sw-dc-oob-01"),
-    (2, "pdu-dc-{nnn:02d}", "gude-pdu", "net_ups",
-     "DC rack C{n}, rack PDU", "sw-dc-oob-01"),
-    (6, "env-dc-{n:02d}", "akcp-sensor", "net_ups",
-     "DC row {n}, hot aisle", "sw-dc-oob-01"),
-    (2, "env-dc-{nn:02d}", "avtech-ra3s", "net_ups",
-     "DC comms room {n}", "sw-dc-oob-01"),
+    (
+        1,
+        "sw-dc-oob-{n:02d}",
+        "hp-2530",
+        "net_switches",
+        "DC comms room, OOB management",
+        "sw-dc-dist-01",
+    ),
+    (2, "fw-{n:02d}", "fortigate", "net_firewalls", "DC rack A1 (HA pair, unit {n})", "sw-core-01"),
+    (1, "fw-dmz-{n:02d}", "cisco-asa", "net_firewalls", "DC rack A1, DMZ tier", "sw-core-01"),
+    (
+        2,
+        "lb-{n:02d}",
+        "kemp-lb",
+        "net_loadbalancers",
+        "DC rack A2 (HA pair, unit {n})",
+        "sw-dc-dist-01",
+    ),
+    (2, "nas-{n:02d}", "synology-nas", "storage", "DC rack B1", "sw-dc-dist-02"),
+    (2, "san-fc-{n:02d}", "brocade-fc", "storage", "DC rack B2, SAN fabric {n}", "sw-dc-dist-02"),
+    (16, "oob-idrac-{n:02d}", "idrac", "mgmt", "DC rack A{n} (iDRAC)", "sw-dc-oob-01"),
+    (
+        1,
+        "ntp-gps-{n:02d}",
+        "meinberg-ntp",
+        "infrastructure",
+        "DC comms room, GPS antenna on roof",
+        "sw-dc-dist-02",
+    ),
+    (3, "ups-dc-{n:02d}", "apc-symmetra", "net_ups", "DC power room, feed {n}", "sw-dc-oob-01"),
+    (4, "pdu-dc-{n:02d}", "apc-pdu", "net_ups", "DC rack A{n}, rack PDU", "sw-dc-oob-01"),
+    (2, "pdu-dc-{nn:02d}", "raritan-pdu", "net_ups", "DC rack B{n}, rack PDU", "sw-dc-oob-01"),
+    (2, "pdu-dc-{nnn:02d}", "gude-pdu", "net_ups", "DC rack C{n}, rack PDU", "sw-dc-oob-01"),
+    (6, "env-dc-{n:02d}", "akcp-sensor", "net_ups", "DC row {n}, hot aisle", "sw-dc-oob-01"),
+    (2, "env-dc-{nn:02d}", "avtech-ra3s", "net_ups", "DC comms room {n}", "sw-dc-oob-01"),
     # --- HQ office: core -> HQ distribution -> floor switches + leaves --------
-    (1, "sw-hq-dist-{n:02d}", "hp-5406r", "net_switches",
-     "HQ comms room, distribution", "sw-core-01"),
-    (7, "sw-hq-f{n:02d}", "aruba-2930f", "net_switches",
-     "HQ floor {n}, IDF {n}A", "sw-hq-dist-01"),
-    (7, "sw-hq-f{nn:02d}", "hp-2530", "net_switches",
-     "HQ floor {n}, IDF {n}B", "sw-hq-dist-01"),
-    (2, "wlc-{n:02d}", "extreme-wlc", "net_wifi",
-     "HQ comms room (controller {n})", "sw-hq-dist-01"),
+    (
+        1,
+        "sw-hq-dist-{n:02d}",
+        "hp-5406r",
+        "net_switches",
+        "HQ comms room, distribution",
+        "sw-core-01",
+    ),
+    (7, "sw-hq-f{n:02d}", "aruba-2930f", "net_switches", "HQ floor {n}, IDF {n}A", "sw-hq-dist-01"),
+    (7, "sw-hq-f{nn:02d}", "hp-2530", "net_switches", "HQ floor {n}, IDF {n}B", "sw-hq-dist-01"),
+    (
+        2,
+        "wlc-{n:02d}",
+        "extreme-wlc",
+        "net_wifi",
+        "HQ comms room (controller {n})",
+        "sw-hq-dist-01",
+    ),
     # a floor's printer plugs into that floor's switch (index matches 1:1)
-    (6, "prt-hq-{n:02d}", "printer-ricoh", "printers",
-     "HQ floor {n}, print room", "sw-hq-f{n:02d}"),
-    (6, "prt-hq-{nn:02d}", "printer-canon", "printers",
-     "HQ floor {n}, print room", "sw-hq-f{n:02d}"),
-    (1, "ups-hq-{n:02d}", "apc-symmetra", "net_ups",
-     "HQ comms room", "sw-hq-dist-01"),
-    (2, "pdu-hq-{n:02d}", "gude-pdu", "net_ups",
-     "HQ comms room, rack {n}", "sw-hq-dist-01"),
-    (1, "env-hq-{n:02d}", "avtech-ra3s", "net_ups",
-     "HQ comms room", "sw-hq-dist-01"),
+    (
+        6,
+        "prt-hq-{n:02d}",
+        "printer-ricoh",
+        "printers",
+        "HQ floor {n}, print room",
+        "sw-hq-f{n:02d}",
+    ),
+    (
+        6,
+        "prt-hq-{nn:02d}",
+        "printer-canon",
+        "printers",
+        "HQ floor {n}, print room",
+        "sw-hq-f{n:02d}",
+    ),
+    (1, "ups-hq-{n:02d}", "apc-symmetra", "net_ups", "HQ comms room", "sw-hq-dist-01"),
+    (2, "pdu-hq-{n:02d}", "gude-pdu", "net_ups", "HQ comms room, rack {n}", "sw-hq-dist-01"),
+    (1, "env-hq-{n:02d}", "avtech-ra3s", "net_ups", "HQ comms room", "sw-hq-dist-01"),
     # --- warehouse 1 (CPE router rt-wh1-01, behind the DC head-end rt-wan-01) ---
     # Path: device -> hall switch -> rt-wh1-01 (local CPE) -> rt-wan-01 -> core.
     # Only the three hall switches plug into the CPE (a small Lancom has 4-5
     # LAN ports); the mezzanine switches daisy-chain off hall 1, the packing-
     # line printers plug into their line's switch, and the comms-room power/
     # env gear shares hall 1's switch.
-    (1, "rt-wh1-{n:02d}", "lancom-router", "net_routers",
-     "warehouse 1, comms room", "rt-wan-01"),
-    (3, "wh1-sw-{n:02d}", "procurve-2510", "net_switches",
-     "warehouse 1, hall {n}", "rt-wh1-01"),
-    (2, "wh1-sw-{nn:02d}", "hp-2530", "net_switches",
-     "warehouse 1, mezzanine {n}", "wh1-sw-01"),
-    (4, "wh1-prt-{n:02d}", "printer-zebra", "printers",
-     "warehouse 1, packing line {n}", "wh1-sw-{n:02d}"),
-    (1, "wh1-ups-{n:02d}", "apc-symmetra", "net_ups",
-     "warehouse 1, comms room", "wh1-sw-01"),
-    (1, "wh1-pdu-{n:02d}", "raritan-pdu", "net_ups",
-     "warehouse 1, comms room", "wh1-sw-01"),
-    (1, "wh1-env-{n:02d}", "akcp-sensor", "net_ups",
-     "warehouse 1, comms room", "wh1-sw-01"),
+    (1, "rt-wh1-{n:02d}", "lancom-router", "net_routers", "warehouse 1, comms room", "rt-wan-01"),
+    (3, "wh1-sw-{n:02d}", "procurve-2510", "net_switches", "warehouse 1, hall {n}", "rt-wh1-01"),
+    (2, "wh1-sw-{nn:02d}", "hp-2530", "net_switches", "warehouse 1, mezzanine {n}", "wh1-sw-01"),
+    (
+        4,
+        "wh1-prt-{n:02d}",
+        "printer-zebra",
+        "printers",
+        "warehouse 1, packing line {n}",
+        "wh1-sw-{n:02d}",
+    ),
+    (1, "wh1-ups-{n:02d}", "apc-symmetra", "net_ups", "warehouse 1, comms room", "wh1-sw-01"),
+    (1, "wh1-pdu-{n:02d}", "raritan-pdu", "net_ups", "warehouse 1, comms room", "wh1-sw-01"),
+    (1, "wh1-env-{n:02d}", "akcp-sensor", "net_ups", "warehouse 1, comms room", "wh1-sw-01"),
     # --- warehouse 2 (CPE router rt-wh2-01, behind the DC head-end rt-wan-01) ---
-    (1, "rt-wh2-{n:02d}", "lancom-router", "net_routers",
-     "warehouse 2, comms room", "rt-wan-01"),
-    (3, "wh2-sw-{n:02d}", "procurve-2510", "net_switches",
-     "warehouse 2, hall {n}", "rt-wh2-01"),
-    (2, "wh2-sw-{nn:02d}", "hp-2530", "net_switches",
-     "warehouse 2, mezzanine {n}", "wh2-sw-01"),
-    (4, "wh2-prt-{n:02d}", "printer-zebra", "printers",
-     "warehouse 2, packing line {n}", "wh2-sw-{n:02d}"),
-    (1, "wh2-ups-{n:02d}", "apc-symmetra", "net_ups",
-     "warehouse 2, comms room", "wh2-sw-01"),
-    (1, "wh2-pdu-{n:02d}", "raritan-pdu", "net_ups",
-     "warehouse 2, comms room", "wh2-sw-01"),
-    (1, "wh2-env-{n:02d}", "akcp-sensor", "net_ups",
-     "warehouse 2, comms room", "wh2-sw-01"),
+    (1, "rt-wh2-{n:02d}", "lancom-router", "net_routers", "warehouse 2, comms room", "rt-wan-01"),
+    (3, "wh2-sw-{n:02d}", "procurve-2510", "net_switches", "warehouse 2, hall {n}", "rt-wh2-01"),
+    (2, "wh2-sw-{nn:02d}", "hp-2530", "net_switches", "warehouse 2, mezzanine {n}", "wh2-sw-01"),
+    (
+        4,
+        "wh2-prt-{n:02d}",
+        "printer-zebra",
+        "printers",
+        "warehouse 2, packing line {n}",
+        "wh2-sw-{n:02d}",
+    ),
+    (1, "wh2-ups-{n:02d}", "apc-symmetra", "net_ups", "warehouse 2, comms room", "wh2-sw-01"),
+    (1, "wh2-pdu-{n:02d}", "raritan-pdu", "net_ups", "warehouse 2, comms room", "wh2-sw-01"),
+    (1, "wh2-env-{n:02d}", "akcp-sensor", "net_ups", "warehouse 2, comms room", "wh2-sw-01"),
     # --- internet edge ----------------------------------------------------------
-    (1, "rt-inet-{n:02d}", "lancom-router", "net_routers",
-     "DC rack A1, internet backup line", "sw-core-01"),
+    (
+        1,
+        "rt-inet-{n:02d}",
+        "lancom-router",
+        "net_routers",
+        "DC rack A1, internet backup line",
+        "sw-core-01",
+    ),
 ]
 
 
@@ -1082,14 +1243,18 @@ def build_replay_devices(walklib: str) -> list[ReplayDevice]:
         try:
             model = ReplayModel.load(model_name, walklib)
         except OSError as exc:
-            print(f"[replay] WARN: model {model_name} unavailable ({exc}) — "
-                  f"skipping {count}x {prefix}*")
+            print(
+                f"[replay] WARN: model {model_name} unavailable ({exc}) — "
+                f"skipping {count}x {prefix}*"
+            )
             continue
         for i in range(count):
             n = start + i
-            short = pattern.replace("{n:02d}", f"{n:02d}") \
-                           .replace("{nn:02d}", f"{n:02d}") \
-                           .replace("{nnn:02d}", f"{n:02d}")
+            short = (
+                pattern.replace("{n:02d}", f"{n:02d}")
+                .replace("{nn:02d}", f"{n:02d}")
+                .replace("{nnn:02d}", f"{n:02d}")
+            )
             location = loc_pattern.replace("{n}", str(n))
             parent_n = parent.replace("{n:02d}", f"{n:02d}") if parent else parent
             devices.append(ReplayDevice(short, model, role, location, parent_n))
@@ -1141,15 +1306,14 @@ def load_state() -> None:
         if name in saved:
             c.acc, c.last = saved[name]
             restored += 1
-    print(f"[state] restored {restored}/{len(_ALL_COUNTERS)} counters, "
-          f"uptime continuous")
+    print(f"[state] restored {restored}/{len(_ALL_COUNTERS)} counters, uptime continuous")
 
 
 # --------------------------------------------------------------------------- #
 #  Walk writer loop
 # --------------------------------------------------------------------------- #
 WALKS_DIR = ""
-TRANSPORT = "walk"           # set to "snmp" by _main_snmp
+TRANSPORT = "walk"  # set to "snmp" by _main_snmp
 SNMP_PORT: int | None = None
 
 
@@ -1160,7 +1324,7 @@ def write_walks() -> None:
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
             f.write(dev.walk(now))
-        os.replace(tmp, path)         # atomic: a poll never sees a torn file
+        os.replace(tmp, path)  # atomic: a poll never sees a torn file
 
 
 def render_loop() -> None:
@@ -1177,12 +1341,16 @@ def auto_break_watchdog() -> None:
     while True:
         time.sleep(5)
         for dev in DEVICES:
-            if (dev.incident and dev.state.get() == "degraded"
-                    and dev.state.since_seconds() >= AUTO_BREAK_AFTER_MIN * 60):
+            if (
+                dev.incident
+                and dev.state.get() == "degraded"
+                and dev.state.since_seconds() >= AUTO_BREAK_AFTER_MIN * 60
+            ):
                 dev.state.set("broken")
                 write_walks()
-                print(f"[ctl] {dev.short} -> BROKEN "
-                      f"(auto: degraded for {AUTO_BREAK_AFTER_MIN:g} min)")
+                print(
+                    f"[ctl] {dev.short} -> BROKEN (auto: degraded for {AUTO_BREAK_AFTER_MIN:g} min)"
+                )
 
 
 # --------------------------------------------------------------------------- #
@@ -1192,22 +1360,32 @@ STATE_COLORS = {"healthy": "#2e7d32", "degraded": "#f9a825", "broken": "#c62828"
 
 DEVICE_EFFECTS = {
     "sw-access-01": {
-        "healthy": ["all 50 interfaces green, uplinks Te1/1/1 + Te1/1/2 balanced",
-                    "discover the host in THIS state (down ports are never "
-                    "discovered; target state = state at discovery)"],
-        "degraded": ["Te1/1/1 (Interface 49): CRC error storm ~0.04 % of packets "
-                     "-> WARN (defaults 0.01/0.1 %)",
-                     "traffic still flows — the classic dying-SFP picture"],
-        "broken": ["Te1/1/1 goes DOWN -> Interface 49 CRIT (state != discovered)",
-                   "Te1/1/2 load roughly doubles (failover) — visible in graphs"],
+        "healthy": [
+            "all 50 interfaces green, uplinks Te1/1/1 + Te1/1/2 balanced",
+            "discover the host in THIS state (down ports are never "
+            "discovered; target state = state at discovery)",
+        ],
+        "degraded": [
+            "Te1/1/1 (Interface 49): CRC error storm ~0.04 % of packets "
+            "-> WARN (defaults 0.01/0.1 %)",
+            "traffic still flows — the classic dying-SFP picture",
+        ],
+        "broken": [
+            "Te1/1/1 goes DOWN -> Interface 49 CRIT (state != discovered)",
+            "Te1/1/2 load roughly doubles (failover) — visible in graphs",
+        ],
     },
     "rt-wan-01": {
         "healthy": ["warehouse WAN Gi0/1 ~180 Mbit/s, CPU ~22 %, all green"],
-        "degraded": ["WAN ramps to ~600 Mbit/s (runaway inventory "
-                     "replication), CPU ~70 % — graphs move, nothing red yet"],
-        "broken": ["WAN saturates ~940 Mbit/s of 1G",
-                   "CPU utilization climbs ~93 % -> CRIT (defaults 80/90)",
-                   "output discards appear on Gi0/1 (graph corroboration)"],
+        "degraded": [
+            "WAN ramps to ~600 Mbit/s (runaway inventory "
+            "replication), CPU ~70 % — graphs move, nothing red yet"
+        ],
+        "broken": [
+            "WAN saturates ~940 Mbit/s of 1G",
+            "CPU utilization climbs ~93 % -> CRIT (defaults 80/90)",
+            "output discards appear on Gi0/1 (graph corroboration)",
+        ],
     },
 }
 
@@ -1229,32 +1407,35 @@ def _admin_page() -> str:
             continue  # rendered compactly below
         state = dev.state.get()
         color = STATE_COLORS[state]
-        extras = "".join(f"<div class='extra'>{e}</div>"
-                         for e in dev.status_extras())
+        extras = "".join(f"<div class='extra'>{e}</div>" for e in dev.status_extras())
         effects = DEVICE_EFFECTS.get(dev.short, {})
         state_cards = []
         for action, target in ACTION_TO_STATE.items():
             tcolor = STATE_COLORS[target]
             lis = "".join(f"<li>{e}</li>" for e in effects.get(target, []))
-            btn = ("<span class='btn current'>current</span>" if target == state
-                   else f"<a class='btn' style='background:{tcolor}' "
-                        f"href='/admin/{dev.short}/{action}?ui=1'>&rarr; {action}</a>")
+            btn = (
+                "<span class='btn current'>current</span>"
+                if target == state
+                else f"<a class='btn' style='background:{tcolor}' "
+                f"href='/admin/{dev.short}/{action}?ui=1'>&rarr; {action}</a>"
+            )
             state_cards.append(
                 f"<div class='card{' active' if target == state else ''}' "
                 f"style='border-color:{tcolor}'>"
                 f"<h3 style='color:{tcolor}'>{target.upper()}</h3>"
-                f"<ul>{lis}</ul>{btn}</div>")
+                f"<ul>{lis}</ul>{btn}</div>"
+            )
         auto = ""
         if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0:
             left = max(0.0, AUTO_BREAK_AFTER_MIN * 60 - dev.state.since_seconds())
-            auto = (f"<div class='extra'>auto-escalates to BROKEN in "
-                    f"{_fmt_duration(left)}</div>")
+            auto = f"<div class='extra'>auto-escalates to BROKEN in {_fmt_duration(left)}</div>"
         cards.append(
             f"<div class='dev' style='border-color:{color}'>"
             f"<h2>{dev.fqdn}</h2>"
             f"<span class='badge' style='background:{color}'>{state.upper()}</span>"
             f" <span class='since'>for {_fmt_duration(dev.state.since_seconds())}</span>"
-            f"{extras}{auto}<div class='cards'>{''.join(state_cards)}</div></div>")
+            f"{extras}{auto}<div class='cards'>{''.join(state_cards)}</div></div>"
+        )
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
 <title>Meridian Retail — network estate control</title>
@@ -1285,7 +1466,7 @@ def _admin_page() -> str:
 </style></head><body>
  <h1>network estate control — <b>SNMP walk simulator</b>
  <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
- {''.join(cards)}
+ {"".join(cards)}
  {_steady_section(steady)}
  <div class="foot">walks: {WALKS_DIR} (rewritten every {RENDER_INTERVAL:g} s)
   · curl API: /admin/&lt;device&gt;/degrade|break|heal · / (JSON status)<br>
@@ -1305,16 +1486,17 @@ def _steady_section(steady: list[Device]) -> str:
     for role in sorted(by_role):
         chips = " ".join(
             f"<span class='chip' title='{d.location}'>{d.short}</span>"
-            for d in sorted(by_role[role], key=lambda x: x.short))
-        blocks.append(f"<div class='crole'><b>{role}</b> "
-                      f"({len(by_role[role])})<br>{chips}</div>")
-    return (f"<h2 style='color:#9aa4af;font-size:1.05rem;margin-top:1.6rem'>"
-            f"steady-green devices — {len(steady)} "
-            f"<span style='color:#2e7d32;font-size:.85rem'>no toggles</span></h2>"
-            "<style>.chip{display:inline-block;background:#22313f;color:#9fc59f;"
-            "border-radius:.25rem;padding:.06rem .4rem;margin:.12rem;"
-            "font-size:.78rem}.crole{margin:.5rem 0;color:#9aa4af}</style>"
-            + "".join(blocks))
+            for d in sorted(by_role[role], key=lambda x: x.short)
+        )
+        blocks.append(f"<div class='crole'><b>{role}</b> ({len(by_role[role])})<br>{chips}</div>")
+    return (
+        f"<h2 style='color:#9aa4af;font-size:1.05rem;margin-top:1.6rem'>"
+        f"steady-green devices — {len(steady)} "
+        f"<span style='color:#2e7d32;font-size:.85rem'>no toggles</span></h2>"
+        "<style>.chip{display:inline-block;background:#22313f;color:#9fc59f;"
+        "border-radius:.25rem;padding:.06rem .4rem;margin:.12rem;"
+        "font-size:.78rem}.crole{margin:.5rem 0;color:#9aa4af}</style>" + "".join(blocks)
+    )
 
 
 class HttpHandler(BaseHTTPRequestHandler):
@@ -1353,17 +1535,18 @@ class HttpHandler(BaseHTTPRequestHandler):
             self._send(200, {"shutdown": True})
             threading.Thread(
                 target=lambda: (time.sleep(0.3), os._exit(0)),  # noqa: SLF001
-                daemon=True).start()
+                daemon=True,
+            ).start()
             return None
 
         if path.startswith("/admin/"):
-            parts = path[len("/admin/"):].split("/")
+            parts = path[len("/admin/") :].split("/")
             if len(parts) == 2 and parts[1] in ACTION_TO_STATE:
                 dev = next((d for d in DEVICES if d.short == parts[0]), None)
                 if dev is None or not dev.incident:
                     return self._send(404, {"error": f"unknown device {parts[0]}"})
                 dev.state.set(ACTION_TO_STATE[parts[1]])
-                write_walks()          # take effect on the very next poll
+                write_walks()  # take effect on the very next poll
                 save_state()
                 print(f"[ctl] {dev.short} -> {dev.state.get().upper()}")
                 if "ui=1" in query:
@@ -1374,28 +1557,35 @@ class HttpHandler(BaseHTTPRequestHandler):
                 return self._send(200, {"device": dev.short, "state": dev.state.get()})
             return self._send(404, {"error": "unknown action"})
 
-        return self._send(200, {
-            "devices": {d.short: {
-                "fqdn": d.fqdn,
-                "state": d.state.get(),
-                "in_state_for_s": round(d.state.since_seconds(), 1),
-                "incident": d.incident,
-                "extras": d.status_extras(),
-                "role": d.role,
-                "parent": d.parent,
-                "location": d.location,
-                # live SNMP: all devices share one ip:port; the community
-                # (= the device short name) is what routes a poll to a device
-                "community": d.short if TRANSPORT == "snmp" else None,
-            } for d in DEVICES},
-            "transport": TRANSPORT,
-            "snmp_port": SNMP_PORT,
-            "walks_dir": WALKS_DIR,
-            "render_interval_s": RENDER_INTERVAL,
-            "toggles": [f"/admin/{d.short}/{a}" for d in DEVICES if d.incident
-                        for a in ACTION_TO_STATE],
-            "ui": "/admin",
-        })
+        return self._send(
+            200,
+            {
+                "devices": {
+                    d.short: {
+                        "fqdn": d.fqdn,
+                        "state": d.state.get(),
+                        "in_state_for_s": round(d.state.since_seconds(), 1),
+                        "incident": d.incident,
+                        "extras": d.status_extras(),
+                        "role": d.role,
+                        "parent": d.parent,
+                        "location": d.location,
+                        # live SNMP: all devices share one ip:port; the community
+                        # (= the device short name) is what routes a poll to a device
+                        "community": d.short if TRANSPORT == "snmp" else None,
+                    }
+                    for d in DEVICES
+                },
+                "transport": TRANSPORT,
+                "snmp_port": SNMP_PORT,
+                "walks_dir": WALKS_DIR,
+                "render_interval_s": RENDER_INTERVAL,
+                "toggles": [
+                    f"/admin/{d.short}/{a}" for d in DEVICES if d.incident for a in ACTION_TO_STATE
+                ],
+                "ui": "/admin",
+            },
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -1419,8 +1609,10 @@ def assemble_devices(args: argparse.Namespace) -> list:
     if args.fleet:
         replay = build_replay_devices(args.walklib)
         devs += replay
-        print(f"[boot] replay fleet: {len(replay)} devices from "
-              f"{len(ReplayModel._cache)} walk models ({args.walklib})")
+        print(
+            f"[boot] replay fleet: {len(replay)} devices from "
+            f"{len(ReplayModel._cache)} walk models ({args.walklib})"
+        )
     if args.devices.strip():
         wanted = {d.strip() for d in args.devices.split(",") if d.strip()}
         devs = [d for d in devs if d.short in wanted]
@@ -1435,7 +1627,7 @@ def assemble_devices(args: argparse.Namespace) -> list:
 # yet well under the ~60s check interval so consecutive polls still see advanced
 # counters. Big replay devices (17k OIDs) make the build cost real — this keeps
 # it to once per walk per device.
-_TABLE_CACHE: dict[str, list] = {}   # community -> [built_or_refreshed_ts, Table]
+_TABLE_CACHE: dict[str, list] = {}  # community -> [built_or_refreshed_ts, Table]
 _TABLE_TTL = 15.0
 
 
@@ -1445,12 +1637,12 @@ def _main_snmp(args: argparse.Namespace) -> None:
     (like the gateway), no --network host for per-device IPs. No sudo, no site
     filesystem. The community IS the device's short name."""
     global DEVICES, SNMP_PORT, TRANSPORT
-    from snmpserver import SnmpServer, Table   # local: walk mode needn't import
+    from snmpserver import SnmpServer, Table  # local: walk mode needn't import
 
     TRANSPORT = "snmp"
     SNMP_PORT = args.snmp_port
     DEVICES = assemble_devices(args)
-    by_comm = {d.short: d for d in DEVICES}    # community == device short name
+    by_comm = {d.short: d for d in DEVICES}  # community == device short name
     load_state()
 
     def table_for(community: str):
@@ -1466,8 +1658,11 @@ def _main_snmp(args: argparse.Namespace) -> None:
         now = time.time()
         hit = _TABLE_CACHE.get(community)
         if hit is None:
-            rows = [(oid, val) for oid, _, val in
-                    (ln.partition(" ") for ln in dev.walk(now).splitlines()) if oid]
+            rows = [
+                (oid, val)
+                for oid, _, val in (ln.partition(" ") for ln in dev.walk(now).splitlines())
+                if oid
+            ]
             _TABLE_CACHE[community] = [now, Table(rows)]
             return _TABLE_CACHE[community][1]
         if now - hit[0] >= _TABLE_TTL:
@@ -1482,8 +1677,10 @@ def _main_snmp(args: argparse.Namespace) -> None:
         threading.Thread(target=auto_break_watchdog, daemon=True).start()
 
     http = ThreadingHTTPServer(("0.0.0.0", args.http_port), HttpHandler)  # nosec B104
-    print(f"[boot] transport: SNMP v2c on {args.bind}:{SNMP_PORT} "
-          f"({len(DEVICES)} devices, routed by community = device name)")
+    print(
+        f"[boot] transport: SNMP v2c on {args.bind}:{SNMP_PORT} "
+        f"({len(DEVICES)} devices, routed by community = device name)"
+    )
     print(f"[boot] control: http://localhost:{args.http_port}/admin")
     print("[boot] IMPORTANT: run service discovery in Checkmk while HEALTHY.")
     try:
@@ -1508,43 +1705,59 @@ def main() -> None:
     parser.add_argument("--site", help="write into /omd/sites/<site>/var/check_mk/snmpwalks")
     parser.add_argument("--walks-dir", help="explicit target directory for walk files")
     parser.add_argument("--http-port", type=int, default=HTTP_PORT)
-    parser.add_argument("--access-switches", type=int,
-                        default=int(os.environ.get("NETSIM_ACCESS_SWITCHES", "1")),
-                        help="stamp out N access switches (sw-access-01..NN); "
-                             "only the first carries the incident story")
-    parser.add_argument("--devices",
-                        default=os.environ.get("NETSIM_DEVICES", ""),
-                        help="comma list of device shorts to render "
-                             "(default: all)")
-    parser.add_argument("--fleet", action="store_true",
-                        default=os.environ.get("NETSIM_FLEET", "0") == "1",
-                        help="also render the replay fleet (~110 devices from "
-                             "anonymized real walks in --walklib)")
-    parser.add_argument("--walklib",
-                        default=os.environ.get(
-                            "NETSIM_WALKLIB",
-                            os.path.join(os.path.dirname(
-                                os.path.abspath(__file__)), "walklib")),
-                        help="directory with the curated model walks "
-                             "(walklib/*.walk; estate.py copies it to a "
-                             "site-readable location)")
-    parser.add_argument("--once", action="store_true",
-                        help="render one set of walks and exit (no daemon)")
-    parser.add_argument("--transport", choices=("snmp", "walk"),
-                        default=os.environ.get("NETSIM_TRANSPORT", "snmp"),
-                        help="snmp = answer SNMP live on one port, routed by "
-                             "community "
-                             "(no site filesystem, no sudo); walk = write "
-                             "stored-walk files into the site (legacy, needs "
-                             "the site user)")
-    parser.add_argument("--snmp-port", type=int,
-                        default=int(os.environ.get("NETSIM_SNMP_PORT", "1161")),
-                        help="UDP port the SNMP responder listens on (per "
-                             "device IP); a non-privileged port needs no root")
-    parser.add_argument("--bind",
-                        default=os.environ.get("NETSIM_BIND", "127.0.0.1"),
-                        help="address the SNMP responder binds (127.0.0.1 as a "
-                             "host process; 0.0.0.0 in a port-mapped container)")
+    parser.add_argument(
+        "--access-switches",
+        type=int,
+        default=int(os.environ.get("NETSIM_ACCESS_SWITCHES", "1")),
+        help="stamp out N access switches (sw-access-01..NN); "
+        "only the first carries the incident story",
+    )
+    parser.add_argument(
+        "--devices",
+        default=os.environ.get("NETSIM_DEVICES", ""),
+        help="comma list of device shorts to render (default: all)",
+    )
+    parser.add_argument(
+        "--fleet",
+        action="store_true",
+        default=os.environ.get("NETSIM_FLEET", "0") == "1",
+        help="also render the replay fleet (~110 devices from anonymized real walks in --walklib)",
+    )
+    parser.add_argument(
+        "--walklib",
+        default=os.environ.get(
+            "NETSIM_WALKLIB", os.path.join(os.path.dirname(os.path.abspath(__file__)), "walklib")
+        ),
+        help="directory with the curated model walks "
+        "(walklib/*.walk; estate.py copies it to a "
+        "site-readable location)",
+    )
+    parser.add_argument(
+        "--once", action="store_true", help="render one set of walks and exit (no daemon)"
+    )
+    parser.add_argument(
+        "--transport",
+        choices=("snmp", "walk"),
+        default=os.environ.get("NETSIM_TRANSPORT", "snmp"),
+        help="snmp = answer SNMP live on one port, routed by "
+        "community "
+        "(no site filesystem, no sudo); walk = write "
+        "stored-walk files into the site (legacy, needs "
+        "the site user)",
+    )
+    parser.add_argument(
+        "--snmp-port",
+        type=int,
+        default=int(os.environ.get("NETSIM_SNMP_PORT", "1161")),
+        help="UDP port the SNMP responder listens on (per "
+        "device IP); a non-privileged port needs no root",
+    )
+    parser.add_argument(
+        "--bind",
+        default=os.environ.get("NETSIM_BIND", "127.0.0.1"),
+        help="address the SNMP responder binds (127.0.0.1 as a "
+        "host process; 0.0.0.0 in a port-mapped container)",
+    )
     args = parser.parse_args()
 
     if args.transport == "snmp" and not args.once:
@@ -1558,8 +1771,10 @@ def main() -> None:
             f.write("ok")
         os.remove(probe)
     except OSError as exc:
-        sys.exit(f"cannot write to {WALKS_DIR} ({exc}) — run as the site user, "
-                 f"e.g.: sudo -u <site> python3 netsim.py")
+        sys.exit(
+            f"cannot write to {WALKS_DIR} ({exc}) — run as the site user, "
+            f"e.g.: sudo -u <site> python3 netsim.py"
+        )
 
     DEVICES = assemble_devices(args)
     load_state()
@@ -1579,8 +1794,10 @@ def main() -> None:
     if len(DEVICES) <= 8:
         print(f"[boot] devices: {', '.join(d.fqdn for d in DEVICES)}")
     else:
-        print(f"[boot] devices: {len(DEVICES)} "
-              f"({sum(1 for d in DEVICES if d.incident)} with incident toggles)")
+        print(
+            f"[boot] devices: {len(DEVICES)} "
+            f"({sum(1 for d in DEVICES if d.incident)} with incident toggles)"
+        )
     print(f"[boot] walks:   {WALKS_DIR} (every {RENDER_INTERVAL:g} s)")
     print(f"[boot] control: http://localhost:{args.http_port}/admin")
     print("[boot] IMPORTANT: run service discovery in Checkmk while HEALTHY —")

@@ -34,6 +34,7 @@ Config via env (see also AGENT_PORT/HTTP_PORT/START_STATE/STATE_FILE):
   BREAK_RAMP_MIN minutes for the broken impact (swap peg -> virtual CRIT) to
                  reach full force (default: 4; 0 = instant)
 """
+
 from __future__ import annotations
 
 import json
@@ -156,7 +157,7 @@ def oom_kills() -> int:
 #  Autocorrelated gauges + monotonic counters (verbatim machinery from the
 #  dying-disk reference; see CLAUDE.md for why a single sine is wrong).
 # --------------------------------------------------------------------------- #
-_ALL_COUNTERS: dict[str, "Counter"] = {}
+_ALL_COUNTERS: dict[str, Counter] = {}
 
 
 class _Wobble:
@@ -166,9 +167,11 @@ class _Wobble:
         self.noise = 0.0
 
     def step(self, now: float) -> float:
-        harm = (0.60 * math.sin(self.omega * now + self.phase)
-                + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
-                + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5))
+        harm = (
+            0.60 * math.sin(self.omega * now + self.phase)
+            + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
+            + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5)
+        )
         self.noise = max(-1.5, min(1.5, self.noise * 0.9 + random.gauss(0.0, 0.25)))
         return max(-1.0, min(1.0, (harm + 0.45 * self.noise) / 1.8))
 
@@ -177,9 +180,15 @@ _GAUGES: dict[str, _Wobble] = {}
 _GAUGE_LOCK = threading.Lock()
 
 
-def gauge(name: str, base: float, *, amp_abs: float | None = None,
-          amp_frac: float | None = None, phase: float = 0.0,
-          period: float = 1200.0) -> float:
+def gauge(
+    name: str,
+    base: float,
+    *,
+    amp_abs: float | None = None,
+    amp_frac: float | None = None,
+    phase: float = 0.0,
+    period: float = 1200.0,
+) -> float:
     with _GAUGE_LOCK:
         w = _GAUGES.get(name)
         if w is None:
@@ -191,8 +200,14 @@ def gauge(name: str, base: float, *, amp_abs: float | None = None,
 
 
 class Counter:
-    def __init__(self, name: str, phase: float = 0.0, amp: float = 0.30,
-                 period: float = 1200.0, start: float = 0.0) -> None:
+    def __init__(
+        self,
+        name: str,
+        phase: float = 0.0,
+        amp: float = 0.30,
+        period: float = 1200.0,
+        start: float = 0.0,
+    ) -> None:
         self.acc = start
         self.last = time.time()
         self.amp = amp
@@ -258,20 +273,52 @@ def _smart_json(name: str, model: str, serial: str, hours: int, temp: int) -> st
         "smart_status": {"passed": True},
         "power_on_time": {"hours": hours},
         "temperature": {"current": temp},
-        "ata_smart_attributes": {"table": [
-            {"id": 5, "name": "Reallocated_Sector_Ct", "value": 100, "thresh": 10,
-             "raw": {"value": 0}},
-            {"id": 12, "name": "Power_Cycle_Count", "value": 100, "thresh": 0,
-             "raw": {"value": 23}},
-            {"id": 187, "name": "Reported_Uncorrect", "value": 100, "thresh": 0,
-             "raw": {"value": 0}},
-            {"id": 197, "name": "Current_Pending_Sector", "value": 100, "thresh": 0,
-             "raw": {"value": 0}},
-            {"id": 199, "name": "UDMA_CRC_Error_Count", "value": 200, "thresh": 0,
-             "raw": {"value": 0}},
-            {"id": 177, "name": "Wear_Leveling_Count", "value": 96, "thresh": 5,
-             "raw": {"value": 88}},
-        ]},
+        "ata_smart_attributes": {
+            "table": [
+                {
+                    "id": 5,
+                    "name": "Reallocated_Sector_Ct",
+                    "value": 100,
+                    "thresh": 10,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 12,
+                    "name": "Power_Cycle_Count",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 23},
+                },
+                {
+                    "id": 187,
+                    "name": "Reported_Uncorrect",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 197,
+                    "name": "Current_Pending_Sector",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 199,
+                    "name": "UDMA_CRC_Error_Count",
+                    "value": 200,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 177,
+                    "name": "Wear_Leveling_Count",
+                    "value": 96,
+                    "thresh": 5,
+                    "raw": {"value": 88},
+                },
+            ]
+        },
     }
     return json.dumps(doc, separators=(",", ":"))
 
@@ -284,16 +331,18 @@ def filesystem_usage(now: float) -> tuple[int, int]:
     """root / and /opt/orderworker — both green, growing + cleaned over time."""
     uptime = now - START + UPTIME_OFFSET
     day = 86_400.0
-    root_base = 13_631_488                                  # ~13 GiB of 40
-    root_logs = 1_048_576 * ((now % day) / day)             # 0..1 GiB daily
+    root_base = 13_631_488  # ~13 GiB of 40
+    root_logs = 1_048_576 * ((now % day) / day)  # 0..1 GiB daily
     root_growth = min(1_572_864, uptime * 0.04)
-    root_used = int(root_base + root_logs + root_growth
-                    + gauge("fs.root", 0, amp_abs=80_000, period=1500))
-    opt_base = 28_311_552                                   # ~27 GiB of 80
-    opt_spool = 2_097_152 * ((now % 1800.0) / 1800.0)       # job spool, 30-min teeth
+    root_used = int(
+        root_base + root_logs + root_growth + gauge("fs.root", 0, amp_abs=80_000, period=1500)
+    )
+    opt_base = 28_311_552  # ~27 GiB of 80
+    opt_spool = 2_097_152 * ((now % 1800.0) / 1800.0)  # job spool, 30-min teeth
     opt_growth = min(3_145_728, uptime * 0.6)
-    opt_used = int(opt_base + opt_spool + opt_growth
-                   + gauge("fs.opt", 0, amp_abs=160_000, period=900))
+    opt_used = int(
+        opt_base + opt_spool + opt_growth + gauge("fs.opt", 0, amp_abs=160_000, period=900)
+    )
     return root_used, opt_used
 
 
@@ -314,13 +363,14 @@ def build_agent_output(state: str) -> bytes:
     #      degraded WARN. We drive cached/free/swap from `pressure`. ---------- #
     mem_total = 16_384_000  # kB
     swap_total = 4_194_300
-    commit_limit = swap_total + mem_total // 2              # kernel default
+    commit_limit = swap_total + mem_total // 2  # kernel default
 
     # leak fills RAM and reclaims page cache; swap engages past ~35 % pressure.
     mem_used_t = _lerp(6_500_000, 15_200_000, p)
     swap_used_t = _lerp(0, 3_950_000, max(0.0, min(1.0, (p - 0.35) / 0.65)))
-    cached = int(gauge("mem.cached", _lerp(6_000_000, 900_000, p),
-                       amp_frac=0.02, phase=0.4, period=1500))
+    cached = int(
+        gauge("mem.cached", _lerp(6_000_000, 900_000, p), amp_frac=0.02, phase=0.4, period=1500)
+    )
     buffers = int(_lerp(180_000, 40_000, p))
     sreclaim = int(_lerp(488_256, 144_000, p))
     swapcached = int(_lerp(0, 120_000, max(0.0, (p - 0.35) / 0.65)))
@@ -329,8 +379,11 @@ def build_agent_output(state: str) -> bytes:
     swap_free = max(40_000, swap_total - int(swap_used_t))
     # JVM commits heap aggressively -> Committed_AS crosses the commit limit
     # (12.19 GiB) around mid-leak, the Memory service's degraded WARN.
-    committed = int(gauge("mem.committed", _lerp(7_000_000, 16_800_000, p),
-                          amp_frac=0.01, phase=1.2, period=1700))
+    committed = int(
+        gauge(
+            "mem.committed", _lerp(7_000_000, 16_800_000, p), amp_frac=0.01, phase=1.2, period=1700
+        )
+    )
 
     # anon LRU = AnonPages + Shmem ; file LRU = Buffers + Cached - Shmem
     shmem = 49_152
@@ -346,8 +399,7 @@ def build_agent_output(state: str) -> bytes:
     # threads: a leaking JVM spawns more (~16 KiB kernel stack each)
     threads = int(_lerp(360, 540, p))
     kernel_stack = threads * 16
-    dirty = max(8_192, int(gauge("mem.dirty", 18_432, amp_frac=0.15,
-                                 phase=2.0, period=800)))
+    dirty = max(8_192, int(gauge("mem.dirty", 18_432, amp_frac=0.15, phase=2.0, period=800)))
 
     # ---- load: elevated by GC + swap-in D-state, but stays GREEN (the root
     #      cause is memory, not CPU — keep the noise down). 15-min < 20 WARN. -- #
@@ -381,8 +433,13 @@ def build_agent_output(state: str) -> bytes:
     jobs = C_JOBS.sample(_lerp(38, 3, p))  # throughput collapses under thrash
 
     sda_temp = round(gauge("smart.sda.temp", 31, amp_abs=1.2, phase=2.1, period=1100))
-    sda_smart = _smart_json("/dev/sda", "SAMSUNG MZ7L3480HCHQ-00A07",
-                            "S6KSNX0T214518", int(uptime / 3600) + 18000, sda_temp)
+    sda_smart = _smart_json(
+        "/dev/sda",
+        "SAMSUNG MZ7L3480HCHQ-00A07",
+        "S6KSNX0T214518",
+        int(uptime / 3600) + 18000,
+        sda_temp,
+    )
 
     lines: list[str] = []
     a = lines.append
@@ -402,32 +459,51 @@ def build_agent_output(state: str) -> bytes:
     a("SSHClient: ")
 
     a("<<<cmk_agent_ctl_status:sep(0)>>>")
-    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000",
-                            time.gmtime(now + 318 * 86400))
-    a(json.dumps({
-        "version": AGENT_VERSION, "agent_socket_operational": True,
-        "ip_allowlist": [], "allow_legacy_pull": False,
-        "connections": [{
-            "site_id": "monitoring/prod", "receiver_port": 8000,
-            "uuid": "b21e7740-1f0c-4c2a-9d33-2a7c5e9b4d02",
-            "local": {"connection_mode": "pull-agent", "cert_info": {
-                "issuer": "Site 'prod' local CA",
-                "from": "Tue, 03 Jun 2025 09:12:44 +0000", "to": cert_to}},
-            "remote": "remote_query_disabled"}]}, separators=(",", ":")))
+    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(now + 318 * 86400))
+    a(
+        json.dumps(
+            {
+                "version": AGENT_VERSION,
+                "agent_socket_operational": True,
+                "ip_allowlist": [],
+                "allow_legacy_pull": False,
+                "connections": [
+                    {
+                        "site_id": "monitoring/prod",
+                        "receiver_port": 8000,
+                        "uuid": "b21e7740-1f0c-4c2a-9d33-2a7c5e9b4d02",
+                        "local": {
+                            "connection_mode": "pull-agent",
+                            "cert_info": {
+                                "issuer": "Site 'prod' local CA",
+                                "from": "Tue, 03 Jun 2025 09:12:44 +0000",
+                                "to": cert_to,
+                            },
+                        },
+                        "remote": "remote_query_disabled",
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        )
+    )
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"'
-      % AGENT_VERSION)
+    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
 
     a("<<<df_v2>>>")
     root_size = 41_943_040
     opt_size = 83_886_080
     root_used, opt_used = filesystem_usage(time.time())
-    a(f"/dev/sda1 ext4 {root_size} {root_used} {root_size - root_used} "
-      f"{round(root_used / root_size * 100)}% /")
-    a(f"/dev/sda2 ext4 {opt_size} {opt_used} {opt_size - opt_used} "
-      f"{round(opt_used / opt_size * 100)}% /opt/orderworker")
+    a(
+        f"/dev/sda1 ext4 {root_size} {root_used} {root_size - root_used} "
+        f"{round(root_used / root_size * 100)}% /"
+    )
+    a(
+        f"/dev/sda2 ext4 {opt_size} {opt_used} {opt_size - opt_used} "
+        f"{round(opt_used / opt_size * 100)}% /opt/orderworker"
+    )
     a("[df_inodes_start]")
     a(f"/dev/sda1 ext4 2621440 286331 {2621440 - 286331} 11% /")
     a(f"/dev/sda2 ext4 5242880 142887 {5242880 - 142887} 3% /opt/orderworker")
@@ -524,11 +600,13 @@ def build_agent_output(state: str) -> bytes:
     a("    Frequency: +9.114ppm")
     a(f"[[[{last_sync}]]]")
     a("<<<timesyncd_ntpmessage:sep(10)>>>")
-    a("NTPMessage={ Leap=0, Version=4, Mode=4, Stratum=2, Precision=-25, "
-      "RootDelay=9.323ms, RootDispersion=1.221ms, Reference=B97D5A38, "
-      f"OriginateTimestamp={sync_str}, ReceiveTimestamp={sync_str}, "
-      f"TransmitTimestamp={sync_str}, DestinationTimestamp={sync_str}, "
-      "Ignored=no, PacketCount=58, Jitter=1.118ms }")
+    a(
+        "NTPMessage={ Leap=0, Version=4, Mode=4, Stratum=2, Precision=-25, "
+        "RootDelay=9.323ms, RootDispersion=1.221ms, Reference=B97D5A38, "
+        f"OriginateTimestamp={sync_str}, ReceiveTimestamp={sync_str}, "
+        f"TransmitTimestamp={sync_str}, DestinationTimestamp={sync_str}, "
+        "Ignored=no, PacketCount=58, Jitter=1.118ms }"
+    )
     a("Timezone=UTC")
 
     a("<<<apt:sep(0)>>>")
@@ -543,16 +621,19 @@ def build_agent_output(state: str) -> bytes:
 
     a("<<<diskstat>>>")
     a(str(now))
-    a(f"8 0 sda {sda_rd} 0 {sda_rd * 24} {sda_rdt} {sda_wr} 0 "
-      f"{sda_wr * 40} {sda_wrt} 0 {sda_iot} {sda_iot * 2} 0 0 0 0")
+    a(
+        f"8 0 sda {sda_rd} 0 {sda_rd * 24} {sda_rdt} {sda_wr} 0 "
+        f"{sda_wr * 40} {sda_wrt} 0 {sda_iot} {sda_iot * 2} 0 0 0 0"
+    )
 
     a("<<<lnx_if>>>")
     a("[start_iplink]")
-    a("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN "
-      "group default qlen 1000")
+    a("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000")
     a("    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00")
-    a("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel "
-      "state UP group default qlen 1000")
+    a(
+        "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel "
+        "state UP group default qlen 1000"
+    )
     a("    link/ether 02:42:ac:11:00:2a brd ff:ff:ff:ff:ff:ff")
     a("[end_iplink]")
     a("<<<lnx_if:sep(58)>>>")
@@ -582,49 +663,116 @@ def build_agent_output(state: str) -> bytes:
     a("[processes]")
     a("[header] CGROUP USER VSZ RSS TIME ELAPSED PID COMMAND")
     for cgs, usr, vsz, rss, cputime, pid, cmd in (
-            ("init.scope", "root", 168_000, 12_800, "00:00:31", 1, "/sbin/init"),
-            ("system.slice/systemd-journald.service", "root", 58_300, 19_400,
-             "00:01:21", 401, "/usr/lib/systemd/systemd-journald"),
-            ("system.slice/systemd-udevd.service", "root", 25_900, 7_900,
-             "00:00:03", 438, "/usr/lib/systemd/systemd-udevd"),
-            ("system.slice/systemd-resolved.service", "systemd-resolve", 26_600, 13_100,
-             "00:00:44", 489, "/usr/lib/systemd/systemd-resolved"),
-            ("system.slice/systemd-timesyncd.service", "systemd-timesync", 91_000, 7_600,
-             "00:00:10", 503, "/usr/lib/systemd/systemd-timesyncd"),
-            ("system.slice/dbus.service", "messagebus", 10_200, 5_100,
-             "00:00:18", 515, "@dbus-daemon --system --address=systemd:"),
-            ("system.slice/rsyslog.service", "syslog", 222_400, 6_700,
-             "00:00:39", 612, "/usr/sbin/rsyslogd -n -iNONE"),
-            ("system.slice/ssh.service", "root", 15_400, 9_000,
-             "00:00:01", 690, "sshd: /usr/sbin/sshd -D [listener]"),
-            ("system.slice/cron.service", "root", 11_500, 2_500,
-             "00:00:02", 705, "/usr/sbin/cron -f -P"),
-            ("system.slice/containerd.service", "root", 1_810_000, 41_200,
-             "01:42:11", 760, "/usr/bin/containerd"),
+        ("init.scope", "root", 168_000, 12_800, "00:00:31", 1, "/sbin/init"),
+        (
+            "system.slice/systemd-journald.service",
+            "root",
+            58_300,
+            19_400,
+            "00:01:21",
+            401,
+            "/usr/lib/systemd/systemd-journald",
+        ),
+        (
+            "system.slice/systemd-udevd.service",
+            "root",
+            25_900,
+            7_900,
+            "00:00:03",
+            438,
+            "/usr/lib/systemd/systemd-udevd",
+        ),
+        (
+            "system.slice/systemd-resolved.service",
+            "systemd-resolve",
+            26_600,
+            13_100,
+            "00:00:44",
+            489,
+            "/usr/lib/systemd/systemd-resolved",
+        ),
+        (
+            "system.slice/systemd-timesyncd.service",
+            "systemd-timesync",
+            91_000,
+            7_600,
+            "00:00:10",
+            503,
+            "/usr/lib/systemd/systemd-timesyncd",
+        ),
+        (
+            "system.slice/dbus.service",
+            "messagebus",
+            10_200,
+            5_100,
+            "00:00:18",
+            515,
+            "@dbus-daemon --system --address=systemd:",
+        ),
+        (
+            "system.slice/rsyslog.service",
+            "syslog",
+            222_400,
+            6_700,
+            "00:00:39",
+            612,
+            "/usr/sbin/rsyslogd -n -iNONE",
+        ),
+        (
+            "system.slice/ssh.service",
+            "root",
+            15_400,
+            9_000,
+            "00:00:01",
+            690,
+            "sshd: /usr/sbin/sshd -D [listener]",
+        ),
+        (
+            "system.slice/cron.service",
+            "root",
+            11_500,
+            2_500,
+            "00:00:02",
+            705,
+            "/usr/sbin/cron -f -P",
+        ),
+        (
+            "system.slice/containerd.service",
+            "root",
+            1_810_000,
+            41_200,
+            "01:42:11",
+            760,
+            "/usr/bin/containerd",
+        ),
     ):
         a(f"0::/{cgs} {usr} {vsz} {rss} {cputime} 09-02:41:40 {pid} {cmd}")
     # the leaking worker
-    a(f"0::/system.slice/order-worker.service worker {java_vsz} {java_rss} "
-      f"02:51:44 {'0-00:00:%02d' % (broken_seconds() % 60) if broken else '09-02:39:50'} "
-      "1180 /usr/bin/java -Xmx10g -XX:+UseG1GC -jar /opt/orderworker/order-worker.jar")
+    a(
+        f"0::/system.slice/order-worker.service worker {java_vsz} {java_rss} "
+        f"02:51:44 {'0-00:00:%02d' % (broken_seconds() % 60) if broken else '09-02:39:50'} "
+        "1180 /usr/bin/java -Xmx10g -XX:+UseG1GC -jar /opt/orderworker/order-worker.jar"
+    )
 
     # ---- systemd units: ~30, all green EXCEPT order-worker.service which the
     #      OOM killer reaped while broken -> "failed" -> Service Summary CRIT. - #
     a("<<<systemd_units>>>")
-    worker_act, worker_sub = (("failed", "failed") if broken else ("active", "running"))
+    worker_act, worker_sub = ("failed", "failed") if broken else ("active", "running")
     units = [
         ("order-worker.service", worker_act, worker_sub, "Meridian order settlement worker"),
         ("ssh.service", "active", "running", "OpenBSD Secure Shell server"),
-        ("cron.service", "active", "running",
-         "Regular background program processing daemon"),
+        ("cron.service", "active", "running", "Regular background program processing daemon"),
         ("containerd.service", "active", "running", "containerd container runtime"),
         ("dbus.service", "active", "running", "D-Bus System Message Bus"),
         ("getty@tty1.service", "active", "running", "Getty on tty1"),
         ("irqbalance.service", "active", "running", "irqbalance daemon"),
-        ("multipathd.service", "active", "running",
-         "Device-Mapper Multipath Device Controller"),
-        ("networkd-dispatcher.service", "active", "running",
-         "Dispatcher daemon for systemd-networkd"),
+        ("multipathd.service", "active", "running", "Device-Mapper Multipath Device Controller"),
+        (
+            "networkd-dispatcher.service",
+            "active",
+            "running",
+            "Dispatcher daemon for systemd-networkd",
+        ),
         ("polkit.service", "active", "running", "Authorization Manager"),
         ("rsyslog.service", "active", "running", "System Logging Service"),
         ("snapd.service", "active", "running", "Snap Daemon"),
@@ -632,23 +780,27 @@ def build_agent_output(state: str) -> bytes:
         ("systemd-logind.service", "active", "running", "User Login Management"),
         ("systemd-networkd.service", "active", "running", "Network Configuration"),
         ("systemd-resolved.service", "active", "running", "Network Name Resolution"),
-        ("systemd-timesyncd.service", "active", "running",
-         "Network Time Synchronization"),
-        ("systemd-udevd.service", "active", "running",
-         "Rule-based Manager for Device Events and Files"),
+        ("systemd-timesyncd.service", "active", "running", "Network Time Synchronization"),
+        (
+            "systemd-udevd.service",
+            "active",
+            "running",
+            "Rule-based Manager for Device Events and Files",
+        ),
         ("udisks2.service", "active", "running", "Disk Manager"),
-        ("unattended-upgrades.service", "active", "running",
-         "Unattended Upgrades Shutdown"),
+        ("unattended-upgrades.service", "active", "running", "Unattended Upgrades Shutdown"),
         ("user@1000.service", "active", "running", "User Manager for UID 1000"),
         ("apparmor.service", "active", "exited", "Load AppArmor profiles"),
-        ("blk-availability.service", "active", "exited",
-         "Availability of block devices"),
+        ("blk-availability.service", "active", "exited", "Availability of block devices"),
         ("console-setup.service", "active", "exited", "Set console font and keymap"),
-        ("finalrd.service", "active", "exited",
-         "Create final runtime dir for shutdown pivot root"),
+        ("finalrd.service", "active", "exited", "Create final runtime dir for shutdown pivot root"),
         ("keyboard-setup.service", "active", "exited", "Set the console keyboard layout"),
-        ("lvm2-monitor.service", "active", "exited",
-         "Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling"),
+        (
+            "lvm2-monitor.service",
+            "active",
+            "exited",
+            "Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling",
+        ),
         ("setvtrgb.service", "active", "exited", "Set console scheme"),
         ("snapd.seeded.service", "active", "exited", "Wait until snapd is fully seeded"),
         ("systemd-user-sessions.service", "active", "exited", "Permit User Sessions"),
@@ -686,8 +838,11 @@ def save_state() -> None:
         return
     with _state_lock:
         data = {
-            "version": 1, "start": START, "state": _state,
-            "degraded_since": _degraded_since, "broken_since": _broken_since,
+            "version": 1,
+            "start": START,
+            "state": _state,
+            "degraded_since": _degraded_since,
+            "broken_since": _broken_since,
             "state_since": _state_since,
             "counters": {n: [c.acc, c.last] for n, c in _ALL_COUNTERS.items()},
         }
@@ -722,8 +877,10 @@ def load_state() -> None:
             if name in saved:
                 c.acc, c.last = saved[name]
                 restored += 1
-    print(f"[state] restored: state={_state!r}, "
-          f"{restored}/{len(_ALL_COUNTERS)} counters, uptime continuous")
+    print(
+        f"[state] restored: state={_state!r}, "
+        f"{restored}/{len(_ALL_COUNTERS)} counters, uptime continuous"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -746,7 +903,8 @@ class AgentServer(ThreadingTCPServer):
 
 STATE_META = {
     "healthy": {
-        "color": "#2e7d32", "label": "HEALTHY",
+        "color": "#2e7d32",
+        "label": "HEALTHY",
         "tagline": "All green. ~6.5 GiB RAM used of 16, swap empty, worker draining the queue.",
         "effects": [
             "every service OK — the starting picture",
@@ -755,11 +913,15 @@ STATE_META = {
         ],
     },
     "degraded": {
-        "color": "#f9a825", "label": "DEGRADED",
+        "color": "#f9a825",
+        "label": "DEGRADED",
         "tagline": "The heap leak grows. Memory climbs, swap starts filling, the box thrashes — "
-                   "but the worker is still up. Trigger ~20 min before showtime."
-                   + (f" Auto-escalates (OOM) after {AUTO_BREAK_AFTER_MIN:g} min."
-                      if AUTO_BREAK_AFTER_MIN > 0 else ""),
+        "but the worker is still up. Trigger ~20 min before showtime."
+        + (
+            f" Auto-escalates (OOM) after {AUTO_BREAK_AFTER_MIN:g} min."
+            if AUTO_BREAK_AFTER_MIN > 0
+            else ""
+        ),
         "effects": [
             "Memory service crosses WARN on Committed_AS (the JVM commits heap past the "
             "12.19 GiB commit limit) — the breadcrumb",
@@ -769,10 +931,14 @@ STATE_META = {
         ],
     },
     "broken": {
-        "color": "#c62828", "label": "BROKEN",
+        "color": "#c62828",
+        "label": "BROKEN",
         "tagline": "Memory is full — the OOM killer reaps the JVM and the worker flaps. "
-                   + (f"Swap pegs / virtual CRIT ramps over ~{BREAK_RAMP_MIN:g} min."
-                      if BREAK_RAMP_MIN > 0 else "Instant."),
+        + (
+            f"Swap pegs / virtual CRIT ramps over ~{BREAK_RAMP_MIN:g} min."
+            if BREAK_RAMP_MIN > 0
+            else "Instant."
+        ),
         "effects": [
             "Memory CRIT: virtual (RAM+swap) usage > 90 % (default levels 80/90) — the headline",
             "order-worker.service FAILED (OOM-killed) -> Systemd Service Summary CRIT — the symptom",
@@ -800,11 +966,14 @@ def _admin_page() -> str:
     meta = STATE_META[state]
     extras = []
     if degraded_seconds() > 0:
-        extras.append(f"heap leaking for {_fmt_duration(degraded_seconds())} — "
-                      f"memory pressure ~{pressure() * 100:.0f} %")
+        extras.append(
+            f"heap leaking for {_fmt_duration(degraded_seconds())} — "
+            f"memory pressure ~{pressure() * 100:.0f} %"
+        )
     if broken_seconds() > 0:
-        extras.append(f"OOM-killed {oom_kills()}x (worker flapping for "
-                      f"{_fmt_duration(broken_seconds())})")
+        extras.append(
+            f"OOM-killed {oom_kills()}x (worker flapping for {_fmt_duration(broken_seconds())})"
+        )
         if break_ramp() < 1.0:
             extras.append(f"virtual-memory CRIT ramping: {break_ramp() * 100:.0f} %")
     if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0:
@@ -817,14 +986,18 @@ def _admin_page() -> str:
         tmeta = STATE_META[target]
         current = target == state
         effects = "".join(f"<li>{e}</li>" for e in tmeta["effects"])
-        btn = ("<span class='btn current'>current state</span>" if current else
-               f"<a class='btn' href='/admin/{action}?ui=1' "
-               f"style='background:{tmeta['color']}'>&rarr; {action}</a>")
+        btn = (
+            "<span class='btn current'>current state</span>"
+            if current
+            else f"<a class='btn' href='/admin/{action}?ui=1' "
+            f"style='background:{tmeta['color']}'>&rarr; {action}</a>"
+        )
         cards.append(
             f"<div class='card{' active' if current else ''}' "
             f"style='border-color:{tmeta['color']}'>"
             f"<h2 style='color:{tmeta['color']}'>{tmeta['label']}</h2>"
-            f"<p class='tag'>{tmeta['tagline']}</p><ul>{effects}</ul>{btn}</div>")
+            f"<p class='tag'>{tmeta['tagline']}</p><ul>{effects}</ul>{btn}</div>"
+        )
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
@@ -836,7 +1009,7 @@ def _admin_page() -> str:
  h1 b {{ color:#d8dee4; }}
  .state {{ display:inline-block; padding:.4rem 1.1rem; border-radius:.4rem;
           color:#fff; font-weight:700; font-size:1.6rem; letter-spacing:.05em;
-          background:{meta['color']}; }}
+          background:{meta["color"]}; }}
  .since {{ color:#9aa4af; margin:.6rem 0 0; }}
  .extra {{ color:#f9a825; margin-top:.3rem; }}
  .cards {{ display:flex; gap:1rem; margin-top:2rem; flex-wrap:wrap; }}
@@ -853,11 +1026,11 @@ def _admin_page() -> str:
  .foot {{ margin-top:2rem; color:#666; font-size:.85rem; }}
 </style></head><body>
  <h1>demo control — <b>{HOSTNAME}</b> <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
- <div class="state">{meta['label']}</div>
+ <div class="state">{meta["label"]}</div>
  <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b>
-  — {meta['tagline']}</div>
+  — {meta["tagline"]}</div>
  {extra_html}
- <div class="cards">{''.join(cards)}</div>
+ <div class="cards">{"".join(cards)}</div>
  <div class="foot">curl API: /admin/heal · /admin/degrade · /admin/break · / (JSON status)</div>
 </body></html>"""
 
@@ -890,11 +1063,16 @@ class HttpHandler(BaseHTTPRequestHandler):
         if path == "/admin":
             return self._send_html(_admin_page())
         if path == "/admin/meta":
-            return self._send(200, {"state": get_state(),
-                                    "in_state_for_s": round(state_since_seconds(), 1),
-                                    "action_to_state": ACTION_TO_STATE,
-                                    "states": STATE_META})
-        if path.startswith("/admin/") and (action := path[len("/admin/"):]) in ACTION_TO_STATE:
+            return self._send(
+                200,
+                {
+                    "state": get_state(),
+                    "in_state_for_s": round(state_since_seconds(), 1),
+                    "action_to_state": ACTION_TO_STATE,
+                    "states": STATE_META,
+                },
+            )
+        if path.startswith("/admin/") and (action := path[len("/admin/") :]) in ACTION_TO_STATE:
             target = ACTION_TO_STATE[action]
             set_state(target)
             print(f"[ctl] -> {target.upper()}")
@@ -907,24 +1085,28 @@ class HttpHandler(BaseHTTPRequestHandler):
         state = get_state()
         auto_break_in = (
             round(max(0.0, AUTO_BREAK_AFTER_MIN * 60 - state_since_seconds()))
-            if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0 else None)
-        return self._send(200, {
-            "state": state,
-            "in_state_for_s": round(state_since_seconds(), 1),
-            "memory_pressure_pct": round(pressure() * 100, 1),
-            "leaking_for_s": round(degraded_seconds(), 1),
-            "oom_kills": oom_kills(),
-            "auto_break_in_s": auto_break_in,
-            "toggles": ["/admin/degrade", "/admin/break", "/admin/heal"],
-            "ui": "/admin",
-        })
+            if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0
+            else None
+        )
+        return self._send(
+            200,
+            {
+                "state": state,
+                "in_state_for_s": round(state_since_seconds(), 1),
+                "memory_pressure_pct": round(pressure() * 100, 1),
+                "leaking_for_s": round(degraded_seconds(), 1),
+                "oom_kills": oom_kills(),
+                "auto_break_in_s": auto_break_in,
+                "toggles": ["/admin/degrade", "/admin/break", "/admin/heal"],
+                "ui": "/admin",
+            },
+        )
 
 
 def _auto_break_watchdog() -> None:
     while True:
         time.sleep(5)
-        if (get_state() == "degraded"
-                and state_since_seconds() >= AUTO_BREAK_AFTER_MIN * 60):
+        if get_state() == "degraded" and state_since_seconds() >= AUTO_BREAK_AFTER_MIN * 60:
             set_state("broken")
             print(f"[ctl] -> BROKEN (auto: OOM after {AUTO_BREAK_AFTER_MIN:g} min leaking)")
 
@@ -936,10 +1118,13 @@ def main() -> None:
     threading.Thread(target=agent.serve_forever, daemon=True).start()
     if AUTO_BREAK_AFTER_MIN > 0:
         threading.Thread(target=_auto_break_watchdog, daemon=True).start()
-        print(f"[boot] auto-escalation: degraded -> broken (OOM) after "
-              f"{AUTO_BREAK_AFTER_MIN:g} min")
-    print(f"[boot] host={HOSTNAME!r}  agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  "
-          f"start_state={get_state()}")
+        print(
+            f"[boot] auto-escalation: degraded -> broken (OOM) after {AUTO_BREAK_AFTER_MIN:g} min"
+        )
+    print(
+        f"[boot] host={HOSTNAME!r}  agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  "
+        f"start_state={get_state()}"
+    )
     print(f"[boot] control UI:   http://localhost:{HTTP_PORT}/admin")
     try:
         http.serve_forever()

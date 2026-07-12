@@ -45,6 +45,7 @@ Config via env (see also AGENT_PORT/HTTP_PORT/START_STATE/STATE_FILE):
   BREAK_RAMP_MIN minutes for the broken impact (CRIT conns / connect-time creep)
                  to reach full force (default: 4; 0 = instant)
 """
+
 from __future__ import annotations
 
 import json
@@ -176,8 +177,7 @@ def connection_counts() -> tuple[int, int]:
 
     if ds <= 0:
         # healthy: ~30 total, almost all idle (pooled dashboards holding slots)
-        idle = round(gauge("pg.idle", HEALTHY_CONNS - 4, amp_abs=3,
-                           phase=1.3, period=600))
+        idle = round(gauge("pg.idle", HEALTHY_CONNS - 4, amp_abs=3, phase=1.3, period=600))
         return max(1, idle), active
 
     # degraded: leak climbs 90 -> DEGRADED_PEAK over LEAK_FILL_MIN
@@ -196,11 +196,9 @@ def connection_counts() -> tuple[int, int]:
         # (the leak can't open the last few slots). Time constant ~4 min so the
         # count still ticks up between 1-min polls long after the ramp.
         creep = (BROKEN_CAP - 184) * (1.0 - math.exp(-bs / 240.0))
-        idle_total = max(idle_total,
-                         _lerp(DEGRADED_PEAK, 184, runaway) + creep)
+        idle_total = max(idle_total, _lerp(DEGRADED_PEAK, 184, runaway) + creep)
 
-    idle = round(idle_total + gauge("pg.idle", 0, amp_abs=1.2,
-                                    phase=1.3, period=600))
+    idle = round(idle_total + gauge("pg.idle", 0, amp_abs=1.2, phase=1.3, period=600))
     idle = max(HEALTHY_CONNS, min(BROKEN_CAP - active, idle))
     return idle, active
 
@@ -209,7 +207,7 @@ def connection_counts() -> tuple[int, int]:
 #  Autocorrelated gauges + monotonic counters (verbatim machinery from the
 #  dying-disk reference; see CLAUDE.md for why a single sine is wrong).
 # --------------------------------------------------------------------------- #
-_ALL_COUNTERS: dict[str, "Counter"] = {}
+_ALL_COUNTERS: dict[str, Counter] = {}
 
 
 class _Wobble:
@@ -219,9 +217,11 @@ class _Wobble:
         self.noise = 0.0
 
     def step(self, now: float) -> float:
-        harm = (0.60 * math.sin(self.omega * now + self.phase)
-                + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
-                + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5))
+        harm = (
+            0.60 * math.sin(self.omega * now + self.phase)
+            + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
+            + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5)
+        )
         self.noise = max(-1.5, min(1.5, self.noise * 0.9 + random.gauss(0.0, 0.25)))
         return max(-1.0, min(1.0, (harm + 0.45 * self.noise) / 1.8))
 
@@ -230,9 +230,15 @@ _GAUGES: dict[str, _Wobble] = {}
 _GAUGE_LOCK = threading.Lock()
 
 
-def gauge(name: str, base: float, *, amp_abs: float | None = None,
-          amp_frac: float | None = None, phase: float = 0.0,
-          period: float = 1200.0) -> float:
+def gauge(
+    name: str,
+    base: float,
+    *,
+    amp_abs: float | None = None,
+    amp_frac: float | None = None,
+    phase: float = 0.0,
+    period: float = 1200.0,
+) -> float:
     with _GAUGE_LOCK:
         w = _GAUGES.get(name)
         if w is None:
@@ -244,8 +250,14 @@ def gauge(name: str, base: float, *, amp_abs: float | None = None,
 
 
 class Counter:
-    def __init__(self, name: str, phase: float = 0.0, amp: float = 0.30,
-                 period: float = 1200.0, start: float = 0.0) -> None:
+    def __init__(
+        self,
+        name: str,
+        phase: float = 0.0,
+        amp: float = 0.30,
+        period: float = 1200.0,
+        start: float = 0.0,
+    ) -> None:
         self.acc = start
         self.last = time.time()
         self.amp = amp
@@ -334,22 +346,59 @@ def _smart_json(name: str, model: str, serial: str, hours: int, temp: int) -> st
         "smart_status": {"passed": True},
         "power_on_time": {"hours": hours},
         "temperature": {"current": temp},
-        "ata_smart_attributes": {"table": [
-            {"id": 5, "name": "Reallocated_Sector_Ct", "value": 100, "thresh": 10,
-             "raw": {"value": 0}},
-            {"id": 12, "name": "Power_Cycle_Count", "value": 100, "thresh": 0,
-             "raw": {"value": 37}},
-            {"id": 187, "name": "Reported_Uncorrect", "value": 100, "thresh": 0,
-             "raw": {"value": 0}},
-            {"id": 197, "name": "Current_Pending_Sector", "value": 100, "thresh": 0,
-             "raw": {"value": 0}},
-            {"id": 199, "name": "UDMA_CRC_Error_Count", "value": 200, "thresh": 0,
-             "raw": {"value": 0}},
-            {"id": 177, "name": "Wear_Leveling_Count", "value": 94, "thresh": 5,
-             "raw": {"value": 118}},
-            {"id": 179, "name": "Used_Rsvd_Blk_Cnt_Tot", "value": 100, "thresh": 10,
-             "raw": {"value": 0}},
-        ]},
+        "ata_smart_attributes": {
+            "table": [
+                {
+                    "id": 5,
+                    "name": "Reallocated_Sector_Ct",
+                    "value": 100,
+                    "thresh": 10,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 12,
+                    "name": "Power_Cycle_Count",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 37},
+                },
+                {
+                    "id": 187,
+                    "name": "Reported_Uncorrect",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 197,
+                    "name": "Current_Pending_Sector",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 199,
+                    "name": "UDMA_CRC_Error_Count",
+                    "value": 200,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 177,
+                    "name": "Wear_Leveling_Count",
+                    "value": 94,
+                    "thresh": 5,
+                    "raw": {"value": 118},
+                },
+                {
+                    "id": 179,
+                    "name": "Used_Rsvd_Blk_Cnt_Tot",
+                    "value": 100,
+                    "thresh": 10,
+                    "raw": {"value": 0},
+                },
+            ]
+        },
     }
     return json.dumps(doc, separators=(",", ":"))
 
@@ -367,16 +416,16 @@ def filesystem_usage(now: float) -> tuple[int, int]:
     """
     uptime = now - START + UPTIME_OFFSET
     day = 86_400.0
-    root_base = 14_680_064                                  # ~14 GiB of 40
-    root_logs = 1_048_576 * ((now % day) / day)             # 0..1 GiB daily
+    root_base = 14_680_064  # ~14 GiB of 40
+    root_logs = 1_048_576 * ((now % day) / day)  # 0..1 GiB daily
     root_growth = min(1_572_864, uptime * 0.04)
-    root_used = int(root_base + root_logs + root_growth
-                    + gauge("fs.root", 0, amp_abs=90_000, period=1500))
-    data_base = 121_634_816                                 # ~116 GiB (mirrors -01)
-    wal = 1_572_864 * ((now % 720.0) / 720.0)               # 0..1.5 GiB, 12-min teeth
-    db_growth = min(6_291_456, uptime * 2.0)                # ~2 kB/s, capped ~6 GiB
-    data_used = int(data_base + wal + db_growth
-                    + gauge("fs.data", 0, amp_abs=300_000, period=900))
+    root_used = int(
+        root_base + root_logs + root_growth + gauge("fs.root", 0, amp_abs=90_000, period=1500)
+    )
+    data_base = 121_634_816  # ~116 GiB (mirrors -01)
+    wal = 1_572_864 * ((now % 720.0) / 720.0)  # 0..1.5 GiB, 12-min teeth
+    db_growth = min(6_291_456, uptime * 2.0)  # ~2 kB/s, capped ~6 GiB
+    data_used = int(data_base + wal + db_growth + gauge("fs.data", 0, amp_abs=300_000, period=900))
     return root_used, data_used
 
 
@@ -403,18 +452,20 @@ def build_agent_output(state: str) -> bytes:
     commit_limit = swap_total + mem_total // 2  # kernel default
     # ~2.5 KiB private RSS bump per leaked backend — a few hundred MB at worst.
     backend_mem = total_conns * 2560
-    mem_free = int(gauge("mem.free", 3_100_000, amp_frac=0.015,
-                         phase=0.4, period=1500)) - backend_mem
+    mem_free = (
+        int(gauge("mem.free", 3_100_000, amp_frac=0.015, phase=0.4, period=1500)) - backend_mem
+    )
     mem_free = max(1_800_000, mem_free)
-    mem_available = int(gauge("mem.avail", 8_200_000, amp_frac=0.012,
-                              phase=1.2, period=1700)) - backend_mem
+    mem_available = (
+        int(gauge("mem.avail", 8_200_000, amp_frac=0.012, phase=1.2, period=1700)) - backend_mem
+    )
     mem_available = max(2_500_000, mem_available)
     cached = 6_700_000
-    shmem = 2_621_440          # 2.5 GiB shared_buffers (< 20 % of RAM -> green)
-    dirty = max(8_192, int(gauge("mem.dirty", 18_432, amp_frac=0.12,
-                                 phase=2.0, period=800)))
-    committed = int(gauge("mem.committed", 6_900_000 + backend_mem,
-                          amp_frac=0.01, phase=1.2, period=1700))
+    shmem = 2_621_440  # 2.5 GiB shared_buffers (< 20 % of RAM -> green)
+    dirty = max(8_192, int(gauge("mem.dirty", 18_432, amp_frac=0.12, phase=2.0, period=800)))
+    committed = int(
+        gauge("mem.committed", 6_900_000 + backend_mem, amp_frac=0.01, phase=1.2, period=1700)
+    )
 
     # ---- load: modest analytics load; nudged up slightly by the extra
     #      backends but stays GREEN (15-min well under the 20 WARN; the CPU is
@@ -452,10 +503,16 @@ def build_agent_output(state: str) -> bytes:
 
     sda_temp = round(gauge("smart.sda.temp", 29, amp_abs=1.2, phase=2.1, period=1100))
     sdb_temp = round(gauge("smart.sdb.temp", 30, amp_abs=1.3, phase=0.7, period=900))
-    sda_smart = _smart_json("/dev/sda", "INTEL SSDSC2KB240G8", "PHYF108200KL240A",
-                            int(uptime / 3600) + 22000, sda_temp)
-    sdb_smart = _smart_json("/dev/sdb", "SAMSUNG MZ7L3480HCHQ-00A07", "S6KSNG0T618907",
-                            int(uptime / 3600) + 26000, sdb_temp)
+    sda_smart = _smart_json(
+        "/dev/sda", "INTEL SSDSC2KB240G8", "PHYF108200KL240A", int(uptime / 3600) + 22000, sda_temp
+    )
+    sdb_smart = _smart_json(
+        "/dev/sdb",
+        "SAMSUNG MZ7L3480HCHQ-00A07",
+        "S6KSNG0T618907",
+        int(uptime / 3600) + 26000,
+        sdb_temp,
+    )
 
     lines: list[str] = []
     a = lines.append
@@ -476,42 +533,59 @@ def build_agent_output(state: str) -> bytes:
     a("SSHClient: ")
 
     a("<<<cmk_agent_ctl_status:sep(0)>>>")
-    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000",
-                            time.gmtime(now + 324 * 86400))
-    a(json.dumps({
-        "version": AGENT_VERSION, "agent_socket_operational": True,
-        "ip_allowlist": [], "allow_legacy_pull": False,
-        "connections": [{
-            "site_id": "monitoring/prod", "receiver_port": 8000,
-            "uuid": "7c9a1f02-3b8e-4d51-9a6c-1e4d2f8b7a55",
-            "local": {"connection_mode": "pull-agent", "cert_info": {
-                "issuer": "Site 'prod' local CA",
-                "from": "Tue, 03 Jun 2025 09:12:44 +0000", "to": cert_to}},
-            "remote": "remote_query_disabled"}]}, separators=(",", ":")))
+    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(now + 324 * 86400))
+    a(
+        json.dumps(
+            {
+                "version": AGENT_VERSION,
+                "agent_socket_operational": True,
+                "ip_allowlist": [],
+                "allow_legacy_pull": False,
+                "connections": [
+                    {
+                        "site_id": "monitoring/prod",
+                        "receiver_port": 8000,
+                        "uuid": "7c9a1f02-3b8e-4d51-9a6c-1e4d2f8b7a55",
+                        "local": {
+                            "connection_mode": "pull-agent",
+                            "cert_info": {
+                                "issuer": "Site 'prod' local CA",
+                                "from": "Tue, 03 Jun 2025 09:12:44 +0000",
+                                "to": cert_to,
+                            },
+                        },
+                        "remote": "remote_query_disabled",
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        )
+    )
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/mk_postgres.py:CMK_VERSION="%s"'
-      % AGENT_VERSION)
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"'
-      % AGENT_VERSION)
+    a('/opt/checkmk/agent/default/package/plugins/mk_postgres.py:CMK_VERSION="%s"' % AGENT_VERSION)
+    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
 
     # --- filesystems: / on sda, the DB volume on sdb. Both green, growing +
     #     cleaned over time (WAL recycle teeth + slow growth). ---
     a("<<<df_v2>>>")
-    root_size = 41_943_040    # 40 GiB
-    data_size = 468_713_472   # ~447 GiB usable of the 480 GB data SSD
+    root_size = 41_943_040  # 40 GiB
+    data_size = 468_713_472  # ~447 GiB usable of the 480 GB data SSD
     root_used, data_used = filesystem_usage(time.time())
-    a(f"/dev/sda1 ext4 {root_size} {root_used} {root_size - root_used} "
-      f"{round(root_used / root_size * 100)}% /")
-    a(f"/dev/sdb1 ext4 {data_size} {data_used} {data_size - data_used} "
-      f"{round(data_used / data_size * 100)}% /var/lib/postgresql")
+    a(
+        f"/dev/sda1 ext4 {root_size} {root_used} {root_size - root_used} "
+        f"{round(root_used / root_size * 100)}% /"
+    )
+    a(
+        f"/dev/sdb1 ext4 {data_size} {data_used} {data_size - data_used} "
+        f"{round(data_used / data_size * 100)}% /var/lib/postgresql"
+    )
     a("[df_inodes_start]")
     root_inodes = 2_621_440
     a(f"/dev/sda1 ext4 {root_inodes} 301722 {root_inodes - 301722} 12% /")
     data_inodes = 29_302_784
-    a(f"/dev/sdb1 ext4 {data_inodes} 46118 {data_inodes - 46118} 1% "
-      "/var/lib/postgresql")
+    a(f"/dev/sdb1 ext4 {data_inodes} 46118 {data_inodes - 46118} 1% /var/lib/postgresql")
     a("[df_inodes_end]")
 
     # --- mount options (noatime on the DB volume — standard DBA practice) ---
@@ -608,11 +682,13 @@ def build_agent_output(state: str) -> bytes:
     a("    Frequency: +11.602ppm")
     a(f"[[[{last_sync}]]]")
     a("<<<timesyncd_ntpmessage:sep(10)>>>")
-    a("NTPMessage={ Leap=0, Version=4, Mode=4, Stratum=2, Precision=-25, "
-      "RootDelay=10.118ms, RootDispersion=1.287ms, Reference=B97D5A38, "
-      f"OriginateTimestamp={sync_str}, ReceiveTimestamp={sync_str}, "
-      f"TransmitTimestamp={sync_str}, DestinationTimestamp={sync_str}, "
-      "Ignored=no, PacketCount=61, Jitter=1.204ms }")
+    a(
+        "NTPMessage={ Leap=0, Version=4, Mode=4, Stratum=2, Precision=-25, "
+        "RootDelay=10.118ms, RootDispersion=1.287ms, Reference=B97D5A38, "
+        f"OriginateTimestamp={sync_str}, ReceiveTimestamp={sync_str}, "
+        f"TransmitTimestamp={sync_str}, DestinationTimestamp={sync_str}, "
+        "Ignored=no, PacketCount=61, Jitter=1.204ms }"
+    )
     a("Timezone=UTC")
 
     a("<<<apt:sep(0)>>>")
@@ -627,18 +703,23 @@ def build_agent_output(state: str) -> bytes:
 
     a("<<<diskstat>>>")
     a(str(now))
-    a(f"8 0 sda {sda_rd} 0 {sda_rd * 24} {sda_rdt} {sda_wr} 0 "
-      f"{sda_wr * 48} {sda_wrt} 0 {sda_iot} {sda_iot * 2} 0 0 0 0")
-    a(f"8 16 sdb {sdb_rd} 0 {sdb_rd * 64} {sdb_rdt} {sdb_wr} 0 "
-      f"{sdb_wr * 96} {sdb_wrt} {sdb_queue} {sdb_iot} {sdb_iot * 3} 0 0 0 0")
+    a(
+        f"8 0 sda {sda_rd} 0 {sda_rd * 24} {sda_rdt} {sda_wr} 0 "
+        f"{sda_wr * 48} {sda_wrt} 0 {sda_iot} {sda_iot * 2} 0 0 0 0"
+    )
+    a(
+        f"8 16 sdb {sdb_rd} 0 {sdb_rd * 64} {sdb_rdt} {sdb_wr} 0 "
+        f"{sdb_wr * 96} {sdb_wrt} {sdb_queue} {sdb_iot} {sdb_iot * 3} 0 0 0 0"
+    )
 
     a("<<<lnx_if>>>")
     a("[start_iplink]")
-    a("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN "
-      "group default qlen 1000")
+    a("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000")
     a("    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00")
-    a("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel "
-      "state UP group default qlen 1000")
+    a(
+        "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel "
+        "state UP group default qlen 1000"
+    )
     a("    link/ether 02:42:ac:11:00:41 brd ff:ff:ff:ff:ff:ff")
     a("[end_iplink]")
     a("<<<lnx_if:sep(58)>>>")
@@ -675,43 +756,120 @@ def build_agent_output(state: str) -> bytes:
     a("[processes]")
     a("[header] CGROUP USER VSZ RSS TIME ELAPSED PID COMMAND")
     for cgs, usr, vsz, rss, cputime, pid, cmd in (
-            ("init.scope", "root", 168_000, 13_000, "00:00:36", 1, "/sbin/init"),
-            ("system.slice/systemd-journald.service", "root", 63_800, 21_400,
-             "00:01:33", 410, "/usr/lib/systemd/systemd-journald"),
-            ("system.slice/systemd-udevd.service", "root", 26_100, 8_100,
-             "00:00:04", 447, "/usr/lib/systemd/systemd-udevd"),
-            ("system.slice/systemd-resolved.service", "systemd-resolve", 26_700, 13_400,
-             "00:00:52", 498, "/usr/lib/systemd/systemd-resolved"),
-            ("system.slice/systemd-timesyncd.service", "systemd-timesync", 91_000, 7_700,
-             "00:00:11", 516, "/usr/lib/systemd/systemd-timesyncd"),
-            ("system.slice/dbus.service", "messagebus", 10_300, 5_100,
-             "00:00:19", 528, "@dbus-daemon --system --address=systemd:"),
-            ("system.slice/rsyslog.service", "syslog", 222_400, 6_800,
-             "00:00:43", 636, "/usr/sbin/rsyslogd -n -iNONE"),
-            ("system.slice/smartmontools.service", "root", 13_100, 6_200,
-             "00:00:08", 650, "/usr/sbin/smartd -n"),
-            ("system.slice/ssh.service", "root", 15_400, 9_000,
-             "00:00:01", 705, "sshd: /usr/sbin/sshd -D [listener]"),
-            ("system.slice/cron.service", "root", 11_500, 2_500,
-             "00:00:03", 716, "/usr/sbin/cron -f -P"),
-            ("system.slice/pgbouncer.service", "postgres", 18_900, 7_300,
-             "00:11:48", 781, "/usr/sbin/pgbouncer -d /etc/pgbouncer/pgbouncer.ini"),
+        ("init.scope", "root", 168_000, 13_000, "00:00:36", 1, "/sbin/init"),
+        (
+            "system.slice/systemd-journald.service",
+            "root",
+            63_800,
+            21_400,
+            "00:01:33",
+            410,
+            "/usr/lib/systemd/systemd-journald",
+        ),
+        (
+            "system.slice/systemd-udevd.service",
+            "root",
+            26_100,
+            8_100,
+            "00:00:04",
+            447,
+            "/usr/lib/systemd/systemd-udevd",
+        ),
+        (
+            "system.slice/systemd-resolved.service",
+            "systemd-resolve",
+            26_700,
+            13_400,
+            "00:00:52",
+            498,
+            "/usr/lib/systemd/systemd-resolved",
+        ),
+        (
+            "system.slice/systemd-timesyncd.service",
+            "systemd-timesync",
+            91_000,
+            7_700,
+            "00:00:11",
+            516,
+            "/usr/lib/systemd/systemd-timesyncd",
+        ),
+        (
+            "system.slice/dbus.service",
+            "messagebus",
+            10_300,
+            5_100,
+            "00:00:19",
+            528,
+            "@dbus-daemon --system --address=systemd:",
+        ),
+        (
+            "system.slice/rsyslog.service",
+            "syslog",
+            222_400,
+            6_800,
+            "00:00:43",
+            636,
+            "/usr/sbin/rsyslogd -n -iNONE",
+        ),
+        (
+            "system.slice/smartmontools.service",
+            "root",
+            13_100,
+            6_200,
+            "00:00:08",
+            650,
+            "/usr/sbin/smartd -n",
+        ),
+        (
+            "system.slice/ssh.service",
+            "root",
+            15_400,
+            9_000,
+            "00:00:01",
+            705,
+            "sshd: /usr/sbin/sshd -D [listener]",
+        ),
+        (
+            "system.slice/cron.service",
+            "root",
+            11_500,
+            2_500,
+            "00:00:03",
+            716,
+            "/usr/sbin/cron -f -P",
+        ),
+        (
+            "system.slice/pgbouncer.service",
+            "postgres",
+            18_900,
+            7_300,
+            "00:11:48",
+            781,
+            "/usr/sbin/pgbouncer -d /etc/pgbouncer/pgbouncer.ini",
+        ),
     ):
         a(f"0::/{cgs} {usr} {vsz} {rss} {cputime} 12-01:52:40 {pid} {cmd}")
     cg = "0::/system.slice/postgresql.service"
-    a(f"{cg} postgres {pg_vsz} 158000 00:52:11 12-01:52:08 802 "
-      f"/usr/lib/postgresql/16/bin/postgres -D /var/lib/postgresql/16/main")
+    a(
+        f"{cg} postgres {pg_vsz} 158000 00:52:11 12-01:52:08 802 "
+        f"/usr/lib/postgresql/16/bin/postgres -D /var/lib/postgresql/16/main"
+    )
     # standby-specific + standard helpers (a hot standby runs a startup/recovery
     # process + a walreceiver streaming from the primary)
-    for i, (helper, rss) in enumerate((
+    for i, (helper, rss) in enumerate(
+        (
             ("startup recovering 0000000100000A2F0000003C", 1_980_000),
             ("walreceiver streaming A2F/3C418800", 142_000),
             ("checkpointer", 2_350_000),
             ("background writer", 1_650_000),
             ("autovacuum launcher", 92_000),
-            ("logical replication launcher", 84_000))):
-        a(f"{cg} postgres {pg_vsz} {rss} 00:0{i}:1{i} 12-01:52:05 "
-          f"{805 + i} postgres: 16/main: {helper}")
+            ("logical replication launcher", 84_000),
+        )
+    ):
+        a(
+            f"{cg} postgres {pg_vsz} {rss} 00:0{i}:1{i} 12-01:52:05 "
+            f"{805 + i} postgres: 16/main: {helper}"
+        )
     # client backends: run_sess running a SELECT, the rest idle / idle in
     # transaction (the leaked BI connections). Counts match the sessions /
     # connections / numbackends sections exactly.
@@ -721,12 +879,14 @@ def build_agent_output(state: str) -> bytes:
         elif i < run_sess + max(0, idle_sess - (idle_sess * 2 // 3)):
             verb = "idle"
         else:
-            verb = "idle in transaction"   # the leaked BI connections
+            verb = "idle in transaction"  # the leaked BI connections
         rss = 168_000 + (i * 41) % 220 * 1000
-        a(f"{cg} postgres {pg_vsz} {rss} 00:0{i % 9}:{10 + i % 50:02d} "
-          f"0-00:{10 + i % 48:02d}:0{i % 9} {2200 + i} "
-          f"postgres: 16/main: analytics bi_reporter 10.1.4.{60 + i % 12}"
-          f"(5{3200 + i}) {verb}")
+        a(
+            f"{cg} postgres {pg_vsz} {rss} 00:0{i % 9}:{10 + i % 50:02d} "
+            f"0-00:{10 + i % 48:02d}:0{i % 9} {2200 + i} "
+            f"postgres: 16/main: analytics bi_reporter 10.1.4.{60 + i % 12}"
+            f"(5{3200 + i}) {verb}"
+        )
 
     # --- systemd units: ALL green in every state — the DB and replica are UP,
     #     the failure is "no free connection slots", not a crashed unit. ---
@@ -735,41 +895,51 @@ def build_agent_output(state: str) -> bytes:
         ("postgresql.service", "active", "running", "PostgreSQL RDBMS"),
         ("pgbouncer.service", "active", "running", "connection pooler for PostgreSQL"),
         ("ssh.service", "active", "running", "OpenBSD Secure Shell server"),
-        ("cron.service", "active", "running",
-         "Regular background program processing daemon"),
+        ("cron.service", "active", "running", "Regular background program processing daemon"),
         ("dbus.service", "active", "running", "D-Bus System Message Bus"),
         ("getty@tty1.service", "active", "running", "Getty on tty1"),
         ("irqbalance.service", "active", "running", "irqbalance daemon"),
-        ("multipathd.service", "active", "running",
-         "Device-Mapper Multipath Device Controller"),
-        ("networkd-dispatcher.service", "active", "running",
-         "Dispatcher daemon for systemd-networkd"),
+        ("multipathd.service", "active", "running", "Device-Mapper Multipath Device Controller"),
+        (
+            "networkd-dispatcher.service",
+            "active",
+            "running",
+            "Dispatcher daemon for systemd-networkd",
+        ),
         ("polkit.service", "active", "running", "Authorization Manager"),
         ("rsyslog.service", "active", "running", "System Logging Service"),
-        ("smartmontools.service", "active", "running",
-         "Self Monitoring and Reporting Technology (SMART) Daemon"),
+        (
+            "smartmontools.service",
+            "active",
+            "running",
+            "Self Monitoring and Reporting Technology (SMART) Daemon",
+        ),
         ("snapd.service", "active", "running", "Snap Daemon"),
         ("systemd-journald.service", "active", "running", "Journal Service"),
         ("systemd-logind.service", "active", "running", "User Login Management"),
         ("systemd-networkd.service", "active", "running", "Network Configuration"),
         ("systemd-resolved.service", "active", "running", "Network Name Resolution"),
-        ("systemd-timesyncd.service", "active", "running",
-         "Network Time Synchronization"),
-        ("systemd-udevd.service", "active", "running",
-         "Rule-based Manager for Device Events and Files"),
+        ("systemd-timesyncd.service", "active", "running", "Network Time Synchronization"),
+        (
+            "systemd-udevd.service",
+            "active",
+            "running",
+            "Rule-based Manager for Device Events and Files",
+        ),
         ("udisks2.service", "active", "running", "Disk Manager"),
-        ("unattended-upgrades.service", "active", "running",
-         "Unattended Upgrades Shutdown"),
+        ("unattended-upgrades.service", "active", "running", "Unattended Upgrades Shutdown"),
         ("user@1000.service", "active", "running", "User Manager for UID 1000"),
         ("apparmor.service", "active", "exited", "Load AppArmor profiles"),
-        ("blk-availability.service", "active", "exited",
-         "Availability of block devices"),
+        ("blk-availability.service", "active", "exited", "Availability of block devices"),
         ("console-setup.service", "active", "exited", "Set console font and keymap"),
-        ("finalrd.service", "active", "exited",
-         "Create final runtime dir for shutdown pivot root"),
+        ("finalrd.service", "active", "exited", "Create final runtime dir for shutdown pivot root"),
         ("keyboard-setup.service", "active", "exited", "Set the console keyboard layout"),
-        ("lvm2-monitor.service", "active", "exited",
-         "Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling"),
+        (
+            "lvm2-monitor.service",
+            "active",
+            "exited",
+            "Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling",
+        ),
         ("setvtrgb.service", "active", "exited", "Set console scheme"),
         ("snapd.seeded.service", "active", "exited", "Wait until snapd is fully seeded"),
         ("systemd-user-sessions.service", "active", "exited", "Permit User Sessions"),
@@ -818,8 +988,10 @@ def build_agent_output(state: str) -> bytes:
 
     a("<<<postgres_version:sep(1)>>>")
     a("[[[main]]]")
-    a("PostgreSQL 16.3 (Ubuntu 16.3-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, "
-      "compiled by gcc (Ubuntu 13.2.0-23ubuntu4) 13.2.0, 64-bit")
+    a(
+        "PostgreSQL 16.3 (Ubuntu 16.3-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, "
+        "compiled by gcc (Ubuntu 13.2.0-23ubuntu4) 13.2.0, 64-bit"
+    )
 
     # --- sessions: t = idle, f = running. The leaked backends are idle, so the
     #     idle (t) count climbs with the leak; running (f) stays modest. ps,
@@ -849,12 +1021,16 @@ def build_agent_output(state: str) -> bytes:
     sys_ret = PG_SYS["tup_returned"].sample(28)
     a("<<<postgres_stat_database:sep(59)>>>")
     a("[[[main]]]")
-    a("datid;datname;numbackends;xact_commit;xact_rollback;blks_read;blks_hit;"
-      "tup_returned;tup_fetched;tup_inserted;tup_updated;tup_deleted;datsize")
+    a(
+        "datid;datname;numbackends;xact_commit;xact_rollback;blks_read;blks_hit;"
+        "tup_returned;tup_fetched;tup_inserted;tup_updated;tup_deleted;datsize"
+    )
     a(f"5;postgres;1;{sys_commit};0;208;{sys_hit};{sys_ret};{sys_ret // 2};0;0;0;7421056")
-    a(f"16401;analytics;{total_conns};{ana['xact_commit']};{ana['xact_rollback']};"
-      f"{ana['blks_read']};{ana['blks_hit']};{ana['tup_returned']};{ana['tup_fetched']};"
-      f"{ana['tup_inserted']};{ana['tup_updated']};{ana['tup_deleted']};{ana_size}")
+    a(
+        f"16401;analytics;{total_conns};{ana['xact_commit']};{ana['xact_rollback']};"
+        f"{ana['blks_read']};{ana['blks_hit']};{ana['tup_returned']};{ana['tup_fetched']};"
+        f"{ana['tup_inserted']};{ana['tup_updated']};{ana['tup_deleted']};{ana_size}"
+    )
 
     # --- connections: THE incident lever. mc = MAX_CONNECTIONS (200). The leak
     #     drives `idle` toward mc; the check computes used % per connection
@@ -873,15 +1049,19 @@ def build_agent_output(state: str) -> bytes:
     a("[[[main]]]")
     a(db_list)
     a("datname;datid;usename;client_addr;state;seconds;pid;current_query")
-    a(f"analytics;16401;bi_reporter;10.1.4.60;active;{random.randint(2, 14)};2207;"
-      "SELECT date_trunc('day', o.created_at) d, sum(o.amount) "
-      "FROM orders o GROUP BY 1 ORDER BY 1 DESC LIMIT 90")
+    a(
+        f"analytics;16401;bi_reporter;10.1.4.60;active;{random.randint(2, 14)};2207;"
+        "SELECT date_trunc('day', o.created_at) d, sum(o.amount) "
+        "FROM orders o GROUP BY 1 ORDER BY 1 DESC LIMIT 90"
+    )
     if broken:
         # the leaking BI client's oldest idle-in-transaction backend has been
         # holding its transaction open since the runaway started — grows live
         idle_age = 60 + int(broken_seconds())
-        a(f"analytics;16401;bi_reporter;10.1.4.61;idle in transaction;{idle_age};2261;"
-          "BEGIN; SELECT * FROM orders WHERE settled = false")
+        a(
+            f"analytics;16401;bi_reporter;10.1.4.61;idle in transaction;{idle_age};2261;"
+            "BEGIN; SELECT * FROM orders WHERE settled = false"
+        )
     a("postgres;5;postgres;;active;0;802;SELECT 1")
 
     # --- locks: read replica -> mostly AccessShareLocks held by the readers ---
@@ -908,17 +1088,27 @@ def build_agent_output(state: str) -> bytes:
     a("<<<postgres_bloat:sep(59)>>>")
     a("[[[main]]]")
     a(db_list)
-    a("db;schemaname;tablename;tups;pages;otta;tbloat;wastedpages;wastedbytes;"
-      "wastedsize;iname;itups;ipages;iotta;ibloat;wastedipages;wastedibytes;"
-      "wastedisize;totalwastedbytes")
-    a("postgres;pg_catalog;pg_statistic;398;13;10;1.3;3;24576;24 kB;"
-      "pg_statistic_relid_att_inh_index;398;6;4;1.5;2;16384;16 kB;40960")
-    a("analytics;public;orders;18412022;312480;271722;1.2;40758;333930496;318 MB;"
-      "orders_pkey;18412022;91220;70169;1.3;21051;172449792;164 MB;506380288")
-    a("analytics;public;transactions;44820110;780122;709201;1.1;70921;580984832;554 MB;"
-      "transactions_pkey;44820110;221080;138175;1.6;82905;679157760;648 MB;1260142592")
-    a("analytics;public;daily_rollup;1240882;28140;25102;1.1;3038;24887296;24 MB;"
-      "daily_rollup_pkey;1240882;7012;5388;1.3;1624;13303808;13 MB;38191104")
+    a(
+        "db;schemaname;tablename;tups;pages;otta;tbloat;wastedpages;wastedbytes;"
+        "wastedsize;iname;itups;ipages;iotta;ibloat;wastedipages;wastedibytes;"
+        "wastedisize;totalwastedbytes"
+    )
+    a(
+        "postgres;pg_catalog;pg_statistic;398;13;10;1.3;3;24576;24 kB;"
+        "pg_statistic_relid_att_inh_index;398;6;4;1.5;2;16384;16 kB;40960"
+    )
+    a(
+        "analytics;public;orders;18412022;312480;271722;1.2;40758;333930496;318 MB;"
+        "orders_pkey;18412022;91220;70169;1.3;21051;172449792;164 MB;506380288"
+    )
+    a(
+        "analytics;public;transactions;44820110;780122;709201;1.1;70921;580984832;554 MB;"
+        "transactions_pkey;44820110;221080;138175;1.6;82905;679157760;648 MB;1260142592"
+    )
+    a(
+        "analytics;public;daily_rollup;1240882;28140;25102;1.1;3038;24887296;24 MB;"
+        "daily_rollup_pkey;1240882;7012;5388;1.3;1624;13303808;13 MB;38191104"
+    )
 
     # --- connect time: every new client has to find a free slot — as the leak
     #     hogs them, opening a connection crawls. Creeps up with the pile-up
@@ -928,9 +1118,9 @@ def build_agent_output(state: str) -> bytes:
     # baseline ~12 ms; climbs to ~1.6 s as the leak saturates the pool (backends
     # spend longer competing for the connection-establishment lock / proc slots)
     sat = max(0.0, min(1.0, (total_conns - 90) / float(BROKEN_CAP - 90)))
-    conn_t = round(_lerp(0.012, 1.6, sat)
-                   * gauge("pg.conn_time", 1.0, amp_frac=0.15,
-                           phase=1.5, period=350), 3)
+    conn_t = round(
+        _lerp(0.012, 1.6, sat) * gauge("pg.conn_time", 1.0, amp_frac=0.15, phase=1.5, period=350), 3
+    )
     a(str(conn_t))
 
     return ("\n".join(lines) + "\n").encode("utf-8")
@@ -948,8 +1138,11 @@ def save_state() -> None:
         return
     with _state_lock:
         data = {
-            "version": 1, "start": START, "state": _state,
-            "degraded_since": _degraded_since, "broken_since": _broken_since,
+            "version": 1,
+            "start": START,
+            "state": _state,
+            "degraded_since": _degraded_since,
+            "broken_since": _broken_since,
             "state_since": _state_since,
             "counters": {n: [c.acc, c.last] for n, c in _ALL_COUNTERS.items()},
         }
@@ -984,8 +1177,10 @@ def load_state() -> None:
             if name in saved:
                 c.acc, c.last = saved[name]
                 restored += 1
-    print(f"[state] restored: state={_state!r}, "
-          f"{restored}/{len(_ALL_COUNTERS)} counters, uptime continuous")
+    print(
+        f"[state] restored: state={_state!r}, "
+        f"{restored}/{len(_ALL_COUNTERS)} counters, uptime continuous"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1008,9 +1203,10 @@ class AgentServer(ThreadingTCPServer):
 
 STATE_META = {
     "healthy": {
-        "color": "#2e7d32", "label": "HEALTHY",
+        "color": "#2e7d32",
+        "label": "HEALTHY",
         "tagline": f"All green. ~{HEALTHY_CONNS}/{MAX_CONNECTIONS} connections, "
-                   "the replica streaming WAL and serving analytics reads.",
+        "the replica streaming WAL and serving analytics reads.",
         "effects": [
             "every service OK — the starting picture",
             f"PostgreSQL Connections MAIN/analytics ~{HEALTHY_CONNS}/{MAX_CONNECTIONS} "
@@ -1019,12 +1215,16 @@ STATE_META = {
         ],
     },
     "degraded": {
-        "color": "#f9a825", "label": "DEGRADED",
+        "color": "#f9a825",
+        "label": "DEGRADED",
         "tagline": "A BI/reporting client starts leaking connections. The count climbs "
-                   f"90 -> ~{DEGRADED_PEAK}/{MAX_CONNECTIONS} — approaching, but still under "
-                   "the 80 % WARN. The breadcrumb. Trigger ~15-20 min before showtime."
-                   + (f" Auto-escalates after {AUTO_BREAK_AFTER_MIN:g} min."
-                      if AUTO_BREAK_AFTER_MIN > 0 else ""),
+        f"90 -> ~{DEGRADED_PEAK}/{MAX_CONNECTIONS} — approaching, but still under "
+        "the 80 % WARN. The breadcrumb. Trigger ~15-20 min before showtime."
+        + (
+            f" Auto-escalates after {AUTO_BREAK_AFTER_MIN:g} min."
+            if AUTO_BREAK_AFTER_MIN > 0
+            else ""
+        ),
         "effects": [
             f"PostgreSQL Connections MAIN/analytics climbs to ~{DEGRADED_PEAK}/"
             f"{MAX_CONNECTIONS} — still OK (under 80 % = {int(MAX_CONNECTIONS * 0.8)})",
@@ -1033,11 +1233,11 @@ STATE_META = {
         ],
     },
     "broken": {
-        "color": "#c62828", "label": "BROKEN",
+        "color": "#c62828",
+        "label": "BROKEN",
         "tagline": "The leak runs away — connections cross 90 % of max_connections and the "
-                   "count grows live, capped just under max (new clients can't connect)."
-                   + (f" Ramps over ~{BREAK_RAMP_MIN:g} min."
-                      if BREAK_RAMP_MIN > 0 else " Instant."),
+        "count grows live, capped just under max (new clients can't connect)."
+        + (f" Ramps over ~{BREAK_RAMP_MIN:g} min." if BREAK_RAMP_MIN > 0 else " Instant."),
         "effects": [
             f"PostgreSQL Connections MAIN/analytics CRIT: idle % > 90 % "
             f"(> {int(MAX_CONNECTIONS * 0.9)} of {MAX_CONNECTIONS}; WARN 80 % / CRIT 90 %) "
@@ -1070,14 +1270,18 @@ def _admin_page() -> str:
     pct = total_conns / MAX_CONNECTIONS * 100
     extras = []
     if degraded_seconds() > 0:
-        extras.append(f"connection leak running for {_fmt_duration(degraded_seconds())} — "
-                      f"{total_conns}/{MAX_CONNECTIONS} connections "
-                      f"({pct:.0f} %; {idle_sess} idle, {run_sess} active)")
+        extras.append(
+            f"connection leak running for {_fmt_duration(degraded_seconds())} — "
+            f"{total_conns}/{MAX_CONNECTIONS} connections "
+            f"({pct:.0f} %; {idle_sess} idle, {run_sess} active)"
+        )
     if broken_seconds() > 0:
         crit_at = int(MAX_CONNECTIONS * 0.9)
         if total_conns >= crit_at:
-            extras.append(f"Connections MAIN/analytics CRIT — idle {idle_sess} > 90 % "
-                          f"({crit_at}); still climbing toward max")
+            extras.append(
+                f"Connections MAIN/analytics CRIT — idle {idle_sess} > 90 % "
+                f"({crit_at}); still climbing toward max"
+            )
         if break_ramp() < 1.0:
             extras.append(f"runaway ramping: {break_ramp() * 100:.0f} %")
     if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0:
@@ -1090,14 +1294,18 @@ def _admin_page() -> str:
         tmeta = STATE_META[target]
         current = target == state
         effects = "".join(f"<li>{e}</li>" for e in tmeta["effects"])
-        btn = ("<span class='btn current'>current state</span>" if current else
-               f"<a class='btn' href='/admin/{action}?ui=1' "
-               f"style='background:{tmeta['color']}'>&rarr; {action}</a>")
+        btn = (
+            "<span class='btn current'>current state</span>"
+            if current
+            else f"<a class='btn' href='/admin/{action}?ui=1' "
+            f"style='background:{tmeta['color']}'>&rarr; {action}</a>"
+        )
         cards.append(
             f"<div class='card{' active' if current else ''}' "
             f"style='border-color:{tmeta['color']}'>"
             f"<h2 style='color:{tmeta['color']}'>{tmeta['label']}</h2>"
-            f"<p class='tag'>{tmeta['tagline']}</p><ul>{effects}</ul>{btn}</div>")
+            f"<p class='tag'>{tmeta['tagline']}</p><ul>{effects}</ul>{btn}</div>"
+        )
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
@@ -1109,7 +1317,7 @@ def _admin_page() -> str:
  h1 b {{ color:#d8dee4; }}
  .state {{ display:inline-block; padding:.4rem 1.1rem; border-radius:.4rem;
           color:#fff; font-weight:700; font-size:1.6rem; letter-spacing:.05em;
-          background:{meta['color']}; }}
+          background:{meta["color"]}; }}
  .since {{ color:#9aa4af; margin:.6rem 0 0; }}
  .extra {{ color:#f9a825; margin-top:.3rem; }}
  .cards {{ display:flex; gap:1rem; margin-top:2rem; flex-wrap:wrap; }}
@@ -1126,11 +1334,11 @@ def _admin_page() -> str:
  .foot {{ margin-top:2rem; color:#666; font-size:.85rem; }}
 </style></head><body>
  <h1>demo control — <b>{HOSTNAME}</b> <span style="color:#555">(PostgreSQL 16 read replica · auto-refreshes every 5 s)</span></h1>
- <div class="state">{meta['label']}</div>
+ <div class="state">{meta["label"]}</div>
  <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b>
-  — {meta['tagline']}</div>
+  — {meta["tagline"]}</div>
  {extra_html}
- <div class="cards">{''.join(cards)}</div>
+ <div class="cards">{"".join(cards)}</div>
  <div class="foot">curl API: /admin/heal · /admin/degrade · /admin/break · / (JSON status)</div>
 </body></html>"""
 
@@ -1163,11 +1371,16 @@ class HttpHandler(BaseHTTPRequestHandler):
         if path == "/admin":
             return self._send_html(_admin_page())
         if path == "/admin/meta":
-            return self._send(200, {"state": get_state(),
-                                    "in_state_for_s": round(state_since_seconds(), 1),
-                                    "action_to_state": ACTION_TO_STATE,
-                                    "states": STATE_META})
-        if path.startswith("/admin/") and (action := path[len("/admin/"):]) in ACTION_TO_STATE:
+            return self._send(
+                200,
+                {
+                    "state": get_state(),
+                    "in_state_for_s": round(state_since_seconds(), 1),
+                    "action_to_state": ACTION_TO_STATE,
+                    "states": STATE_META,
+                },
+            )
+        if path.startswith("/admin/") and (action := path[len("/admin/") :]) in ACTION_TO_STATE:
             target = ACTION_TO_STATE[action]
             set_state(target)
             print(f"[ctl] -> {target.upper()}")
@@ -1181,30 +1394,33 @@ class HttpHandler(BaseHTTPRequestHandler):
         state = get_state()
         auto_break_in = (
             round(max(0.0, AUTO_BREAK_AFTER_MIN * 60 - state_since_seconds()))
-            if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0 else None)
-        return self._send(200, {
-            "state": state,
-            "in_state_for_s": round(state_since_seconds(), 1),
-            "connections": idle_sess + run_sess,
-            "max_connections": MAX_CONNECTIONS,
-            "connections_pct": round((idle_sess + run_sess) / MAX_CONNECTIONS * 100, 1),
-            "idle_connections": idle_sess,
-            "active_connections": run_sess,
-            "leaking_for_s": round(degraded_seconds(), 1),
-            "auto_break_in_s": auto_break_in,
-            "toggles": ["/admin/degrade", "/admin/break", "/admin/heal"],
-            "ui": "/admin",
-        })
+            if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0
+            else None
+        )
+        return self._send(
+            200,
+            {
+                "state": state,
+                "in_state_for_s": round(state_since_seconds(), 1),
+                "connections": idle_sess + run_sess,
+                "max_connections": MAX_CONNECTIONS,
+                "connections_pct": round((idle_sess + run_sess) / MAX_CONNECTIONS * 100, 1),
+                "idle_connections": idle_sess,
+                "active_connections": run_sess,
+                "leaking_for_s": round(degraded_seconds(), 1),
+                "auto_break_in_s": auto_break_in,
+                "toggles": ["/admin/degrade", "/admin/break", "/admin/heal"],
+                "ui": "/admin",
+            },
+        )
 
 
 def _auto_break_watchdog() -> None:
     while True:
         time.sleep(5)
-        if (get_state() == "degraded"
-                and state_since_seconds() >= AUTO_BREAK_AFTER_MIN * 60):
+        if get_state() == "degraded" and state_since_seconds() >= AUTO_BREAK_AFTER_MIN * 60:
             set_state("broken")
-            print(f"[ctl] -> BROKEN (auto: leak ran away after "
-                  f"{AUTO_BREAK_AFTER_MIN:g} min)")
+            print(f"[ctl] -> BROKEN (auto: leak ran away after {AUTO_BREAK_AFTER_MIN:g} min)")
 
 
 def main() -> None:
@@ -1214,10 +1430,14 @@ def main() -> None:
     threading.Thread(target=agent.serve_forever, daemon=True).start()
     if AUTO_BREAK_AFTER_MIN > 0:
         threading.Thread(target=_auto_break_watchdog, daemon=True).start()
-        print(f"[boot] auto-escalation: degraded -> broken after "
-              f"{AUTO_BREAK_AFTER_MIN:g} min in degraded")
-    print(f"[boot] host={HOSTNAME!r}  agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  "
-          f"start_state={get_state()}  max_connections={MAX_CONNECTIONS}")
+        print(
+            f"[boot] auto-escalation: degraded -> broken after "
+            f"{AUTO_BREAK_AFTER_MIN:g} min in degraded"
+        )
+    print(
+        f"[boot] host={HOSTNAME!r}  agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  "
+        f"start_state={get_state()}  max_connections={MAX_CONNECTIONS}"
+    )
     print(f"[boot] control UI:   http://localhost:{HTTP_PORT}/admin")
     print(f"[boot] curl API:     curl localhost:{HTTP_PORT}/admin/degrade|/admin/break|/admin/heal")
     try:

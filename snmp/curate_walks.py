@@ -24,6 +24,7 @@ Usage:
 Output: snmp/walklib/<model>.walk (numerically sorted, netsim walk format)
 plus walklib/manifest.json metadata for netsim.py's replay layer.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,7 +32,6 @@ import hashlib
 import json
 import os
 import re
-import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WALKLIB = os.path.join(HERE, "walklib")
@@ -42,24 +42,24 @@ WALKLIB = os.path.join(HERE, "walklib")
 #  monitoring (hr_ps would read hrSWRun — we deliberately drop process tables).
 # --------------------------------------------------------------------------- #
 GLOBAL_STRIP = [
-    ".1.3.6.1.2.1.3.",        # AT (net-to-media: real MAC/IP pairs)
-    ".1.3.6.1.2.1.4.",        # ip: own addresses, routes, ARP
-    ".1.3.6.1.2.1.5.",        # icmp counters (useless bulk)
-    ".1.3.6.1.2.1.6.",        # tcp incl. connection table (real peers)
-    ".1.3.6.1.2.1.7.",        # udp table
-    ".1.3.6.1.2.1.10.",       # transmission (dot3 etc. — unused bulk)
-    ".1.3.6.1.2.1.14.",       # OSPF (real neighbors)
-    ".1.3.6.1.2.1.15.",       # BGP (real peers/AS)
-    ".1.3.6.1.2.1.16.",       # RMON (packet capture stats — huge)
-    ".1.3.6.1.2.1.17.",       # bridge MIB incl. FDB (real MACs)
-    ".1.3.6.1.2.1.25.4.",     # hrSWRun (process names)
-    ".1.3.6.1.2.1.25.5.",     # hrSWRunPerf
-    ".1.3.6.1.2.1.25.6.",     # hrSWInstalled
-    ".1.3.6.1.2.1.26.",       # MAU (bulk)
-    ".1.0.8802.",             # LLDP (real neighbor names/IPs)
-    ".1.3.6.1.4.1.9.9.23.",   # Cisco CDP (real neighbors)
-    ".1.3.6.1.4.1.9.9.43.",   # Cisco config-copy (tftp server IPs)
-    ".1.3.6.1.6.3.",          # SNMP framework/usm/notification targets
+    ".1.3.6.1.2.1.3.",  # AT (net-to-media: real MAC/IP pairs)
+    ".1.3.6.1.2.1.4.",  # ip: own addresses, routes, ARP
+    ".1.3.6.1.2.1.5.",  # icmp counters (useless bulk)
+    ".1.3.6.1.2.1.6.",  # tcp incl. connection table (real peers)
+    ".1.3.6.1.2.1.7.",  # udp table
+    ".1.3.6.1.2.1.10.",  # transmission (dot3 etc. — unused bulk)
+    ".1.3.6.1.2.1.14.",  # OSPF (real neighbors)
+    ".1.3.6.1.2.1.15.",  # BGP (real peers/AS)
+    ".1.3.6.1.2.1.16.",  # RMON (packet capture stats — huge)
+    ".1.3.6.1.2.1.17.",  # bridge MIB incl. FDB (real MACs)
+    ".1.3.6.1.2.1.25.4.",  # hrSWRun (process names)
+    ".1.3.6.1.2.1.25.5.",  # hrSWRunPerf
+    ".1.3.6.1.2.1.25.6.",  # hrSWInstalled
+    ".1.3.6.1.2.1.26.",  # MAU (bulk)
+    ".1.0.8802.",  # LLDP (real neighbor names/IPs)
+    ".1.3.6.1.4.1.9.9.23.",  # Cisco CDP (real neighbors)
+    ".1.3.6.1.4.1.9.9.43.",  # Cisco config-copy (tftp server IPs)
+    ".1.3.6.1.6.3.",  # SNMP framework/usm/notification targets
 ]
 
 # Identity/serial OIDs rewritten in every walk (prefix -> replacement scheme).
@@ -69,17 +69,17 @@ SYSLOCATION = ".1.3.6.1.2.1.1.6.0"
 IFALIAS = ".1.3.6.1.2.1.31.1.1.1.18."
 IFPHYS = ".1.3.6.1.2.1.2.2.1.6."
 SERIAL_PREFIXES = [
-    ".1.3.6.1.2.1.47.1.1.1.1.11.",   # entPhysicalSerialNum
-    ".1.3.6.1.2.1.47.1.1.1.1.14.",   # entPhysicalAlias
-    ".1.3.6.1.2.1.47.1.1.1.1.15.",   # entPhysicalAssetID
-    ".1.3.6.1.2.1.43.5.1.1.17.",     # prtGeneralSerialNumber
-    ".1.3.6.1.4.1.318.1.1.1.1.2.3.",   # APC UPS serial
-    ".1.3.6.1.4.1.318.1.4.1.4.",       # APC hw serial (mgmt card)
-    ".1.3.6.1.4.1.318.1.4.2.4.1.2.",   # APC module serial table
-    ".1.3.6.1.4.1.12356.100.1.1.1.",   # Fortinet serial
-    ".1.3.6.1.4.1.6574.1.5.2.",        # Synology serial
-    ".1.3.6.1.4.1.674.10892.5.1.3.2.", # iDRAC chassis service tag
-    ".1.3.6.1.4.1.674.10892.5.1.3.3.", # iDRAC express service code
+    ".1.3.6.1.2.1.47.1.1.1.1.11.",  # entPhysicalSerialNum
+    ".1.3.6.1.2.1.47.1.1.1.1.14.",  # entPhysicalAlias
+    ".1.3.6.1.2.1.47.1.1.1.1.15.",  # entPhysicalAssetID
+    ".1.3.6.1.2.1.43.5.1.1.17.",  # prtGeneralSerialNumber
+    ".1.3.6.1.4.1.318.1.1.1.1.2.3.",  # APC UPS serial
+    ".1.3.6.1.4.1.318.1.4.1.4.",  # APC hw serial (mgmt card)
+    ".1.3.6.1.4.1.318.1.4.2.4.1.2.",  # APC module serial table
+    ".1.3.6.1.4.1.12356.100.1.1.1.",  # Fortinet serial
+    ".1.3.6.1.4.1.6574.1.5.2.",  # Synology serial
+    ".1.3.6.1.4.1.674.10892.5.1.3.2.",  # iDRAC chassis service tag
+    ".1.3.6.1.4.1.674.10892.5.1.3.3.",  # iDRAC express service code
     ".1.3.6.1.4.1.674.10892.5.4.300.1.1.11.",  # iDRAC system service tag
 ]
 
@@ -138,121 +138,175 @@ _HP_CPU = ".1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0"
 
 MODELS: dict[str, dict] = {
     # -- switches ------------------------------------------------------------
-    "aruba-2930f":   dict(src="Aruba-JL261A-2930F-24G-PoE-4SFP-Switch.txt",
-                          cls="switch", sub=_BM_SW,
-                          set={_HP_CPU: "20"}),   # recorded 55 % — headroom
-    "aruba-6200f":   dict(src="Aruba-JL725B-6200F-24G-CL4-4SFP-370W-Switch.txt",
-                          cls="switch",
-                          # 802.1X client table: authenticated user/host
-                          # identities + client MACs in the OID index
-                          strip=[".1.3.6.1.4.1.47196.4.1.1.3.17."]),
-    "hp-2530":       dict(src="HP-J9772A-2530-48G-PoEP-Switch.txt", cls="switch",
-                          sub=_BM_SW,
-                          # recorded CPU was 94 % -> CRIT at the 80/90 defaults
-                          set={_HP_CPU: "12"}),
-    "procurve-2510": dict(src="ProCurve-J9279A-Switch-2510G-24.txt", cls="switch",
-                          # trunk/neighbor names reveal the source org
-                          sub=[(r"(?i)\bsw-[a-z0-9-]{3,}", "mr-sw-{h}")],
-                          set={_HP_CPU: "9"}),
-    "hp-5406r":      dict(src="HP-J9850A-Switch-5406Rzl2.txt", cls="switch",
-                          sub=_BM_SW,
-                          # aux PSU slots recorded unpowered (9) -> CRIT; and
-                          # keep the recorded 75 % CPU clear of the levels
-                          set={_HP_CPU: "24",
-                               ".1.3.6.1.4.1.11.2.14.11.5.1.55.1.1.1.2.1": "3",
-                               ".1.3.6.1.4.1.11.2.14.11.5.1.55.1.1.1.2.2": "3"}),
-    "huawei-s6730":  dict(src="HUAWEI-CloudEngine-S6730-H-V2.txt", cls="switch"),
+    "aruba-2930f": dict(
+        src="Aruba-JL261A-2930F-24G-PoE-4SFP-Switch.txt",
+        cls="switch",
+        sub=_BM_SW,
+        set={_HP_CPU: "20"},
+    ),  # recorded 55 % — headroom
+    "aruba-6200f": dict(
+        src="Aruba-JL725B-6200F-24G-CL4-4SFP-370W-Switch.txt",
+        cls="switch",
+        # 802.1X client table: authenticated user/host
+        # identities + client MACs in the OID index
+        strip=[".1.3.6.1.4.1.47196.4.1.1.3.17."],
+    ),
+    "hp-2530": dict(
+        src="HP-J9772A-2530-48G-PoEP-Switch.txt",
+        cls="switch",
+        sub=_BM_SW,
+        # recorded CPU was 94 % -> CRIT at the 80/90 defaults
+        set={_HP_CPU: "12"},
+    ),
+    "procurve-2510": dict(
+        src="ProCurve-J9279A-Switch-2510G-24.txt",
+        cls="switch",
+        # trunk/neighbor names reveal the source org
+        sub=[(r"(?i)\bsw-[a-z0-9-]{3,}", "mr-sw-{h}")],
+        set={_HP_CPU: "9"},
+    ),
+    "hp-5406r": dict(
+        src="HP-J9850A-Switch-5406Rzl2.txt",
+        cls="switch",
+        sub=_BM_SW,
+        # aux PSU slots recorded unpowered (9) -> CRIT; and
+        # keep the recorded 75 % CPU clear of the levels
+        set={
+            _HP_CPU: "24",
+            ".1.3.6.1.4.1.11.2.14.11.5.1.55.1.1.1.2.1": "3",
+            ".1.3.6.1.4.1.11.2.14.11.5.1.55.1.1.1.2.2": "3",
+        },
+    ),
+    "huawei-s6730": dict(src="HUAWEI-CloudEngine-S6730-H-V2.txt", cls="switch"),
     # -- routers / firewalls / wlc / lb ---------------------------------------
     "lancom-router": dict(src="network-lancom-voip-router-lldp", cls="router"),
-    "fortigate":     dict(src="Fortigate.txt", cls="firewall",
-                          sub=[(r"Serial#: ?\w+", "Serial#: MR0000000000"),
-                               (r"\bFGT80FTK\w+", "MR0000000000"),
-                               (r"FBIN", "MRHQ")],
-                          # AV/IPS signature ages are recorded timestamps ->
-                          # permanently CRIT-old; drop the section
-                          strip=[".1.3.6.1.4.1.12356.101.4.2."]),
-    "cisco-asa":     dict(src="cisco-asa-9.16-no-name", cls="firewall",
-                          sub=[(r"\bACYN[-\w]*", "mr-fw-dmz")],
-                          # recorded mempools sat at 95/99.98 % (normal for a
-                          # real ASA heapcache, red at the cmk 80/90 defaults)
-                          set={".1.3.6.1.4.1.9.9.221.1.1.1.1.7.2.4": "120000000",
-                               ".1.3.6.1.4.1.9.9.221.1.1.1.1.18.2.4": "120000000",
-                               ".1.3.6.1.4.1.9.9.221.1.1.1.1.8.2.4": "192475648",
-                               ".1.3.6.1.4.1.9.9.221.1.1.1.1.20.2.4": "192475648",
-                               ".1.3.6.1.4.1.9.9.221.1.1.1.1.7.2.6": "9000000",
-                               ".1.3.6.1.4.1.9.9.221.1.1.1.1.18.2.6": "9000000",
-                               ".1.3.6.1.4.1.9.9.221.1.1.1.1.8.2.6": "15514560",
-                               ".1.3.6.1.4.1.9.9.221.1.1.1.1.20.2.6": "15514560"}),
-    "extreme-wlc":   dict(src="network-extreme-wlc", cls="wlc",
-                          # AP names carry the org's site codes; SSIDs its name
-                          sub=[(r"AP-[A-Z]{2,8}(-[A-Z]{2,8})*(?=[-_\d])",
-                                "AP-S{h}"),
-                               (r"\bMMH-", "MR-")]),
-    "kemp-lb":       dict(src="loadbalancer-kemp-1", cls="loadbalancer",
-                          sub=[(r"\bITC(?=[ -])", "MR")]),
+    "fortigate": dict(
+        src="Fortigate.txt",
+        cls="firewall",
+        sub=[
+            (r"Serial#: ?\w+", "Serial#: MR0000000000"),
+            (r"\bFGT80FTK\w+", "MR0000000000"),
+            (r"FBIN", "MRHQ"),
+        ],
+        # AV/IPS signature ages are recorded timestamps ->
+        # permanently CRIT-old; drop the section
+        strip=[".1.3.6.1.4.1.12356.101.4.2."],
+    ),
+    "cisco-asa": dict(
+        src="cisco-asa-9.16-no-name",
+        cls="firewall",
+        sub=[(r"\bACYN[-\w]*", "mr-fw-dmz")],
+        # recorded mempools sat at 95/99.98 % (normal for a
+        # real ASA heapcache, red at the cmk 80/90 defaults)
+        set={
+            ".1.3.6.1.4.1.9.9.221.1.1.1.1.7.2.4": "120000000",
+            ".1.3.6.1.4.1.9.9.221.1.1.1.1.18.2.4": "120000000",
+            ".1.3.6.1.4.1.9.9.221.1.1.1.1.8.2.4": "192475648",
+            ".1.3.6.1.4.1.9.9.221.1.1.1.1.20.2.4": "192475648",
+            ".1.3.6.1.4.1.9.9.221.1.1.1.1.7.2.6": "9000000",
+            ".1.3.6.1.4.1.9.9.221.1.1.1.1.18.2.6": "9000000",
+            ".1.3.6.1.4.1.9.9.221.1.1.1.1.8.2.6": "15514560",
+            ".1.3.6.1.4.1.9.9.221.1.1.1.1.20.2.6": "15514560",
+        },
+    ),
+    "extreme-wlc": dict(
+        src="network-extreme-wlc",
+        cls="wlc",
+        # AP names carry the org's site codes; SSIDs its name
+        sub=[(r"AP-[A-Z]{2,8}(-[A-Z]{2,8})*(?=[-_\d])", "AP-S{h}"), (r"\bMMH-", "MR-")],
+    ),
+    "kemp-lb": dict(src="loadbalancer-kemp-1", cls="loadbalancer", sub=[(r"\bITC(?=[ -])", "MR")]),
     # -- printers --------------------------------------------------------------
     # printers: recorded with empty toners + active alert tables — refill the
     # supplies and drop prtAlertTable (a wall of green, not a service call)
-    "printer-ricoh": dict(src="printer-ricoh-c4000", cls="printer",
-                          strip=[".1.3.6.1.2.1.43.18."],
-                          # printer_supply_ricoh reads column 5 (percent)
-                          set={".1.3.6.1.4.1.367.3.2.1.2.24.1.1.5.1": "70",
-                               ".1.3.6.1.4.1.367.3.2.1.2.24.1.1.5.2": "80",
-                               ".1.3.6.1.4.1.367.3.2.1.2.24.1.1.5.3": "75",
-                               # bypass tray recorded 'unavailable on request'
-                               ".1.3.6.1.2.1.43.8.2.1.11.1.4": "0"}),
-    "printer-canon": dict(src="printer-canon-c5240-1", cls="printer",
-                          strip=[".1.3.6.1.2.1.43.18."],
-                          set={".1.3.6.1.2.1.43.11.1.1.9.1.1": "62",
-                               ".1.3.6.1.2.1.43.11.1.1.9.1.2": "85",
-                               ".1.3.6.1.2.1.43.11.1.1.9.1.3": "71",
-                               ".1.3.6.1.2.1.43.11.1.1.9.1.4": "78"}),
+    "printer-ricoh": dict(
+        src="printer-ricoh-c4000",
+        cls="printer",
+        strip=[".1.3.6.1.2.1.43.18."],
+        # printer_supply_ricoh reads column 5 (percent)
+        set={
+            ".1.3.6.1.4.1.367.3.2.1.2.24.1.1.5.1": "70",
+            ".1.3.6.1.4.1.367.3.2.1.2.24.1.1.5.2": "80",
+            ".1.3.6.1.4.1.367.3.2.1.2.24.1.1.5.3": "75",
+            # bypass tray recorded 'unavailable on request'
+            ".1.3.6.1.2.1.43.8.2.1.11.1.4": "0",
+        },
+    ),
+    "printer-canon": dict(
+        src="printer-canon-c5240-1",
+        cls="printer",
+        strip=[".1.3.6.1.2.1.43.18."],
+        set={
+            ".1.3.6.1.2.1.43.11.1.1.9.1.1": "62",
+            ".1.3.6.1.2.1.43.11.1.1.9.1.2": "85",
+            ".1.3.6.1.2.1.43.11.1.1.9.1.3": "71",
+            ".1.3.6.1.2.1.43.11.1.1.9.1.4": "78",
+        },
+    ),
     "printer-zebra": dict(src="printer-zebra", cls="printer"),
     # -- power / environment ----------------------------------------------------
     # Output-phase tree stripped: parse_apc_symmetra_output crashes on the
     # 3.0.0 dev branch (ElPhase.from_dict re-parses ReadingWithState ->
     # TypeError; introduced in c1802b42504) — restore once fixed upstream.
     # Self-test date (.7.2.4.0) is rendered dynamically by netsim.
-    "apc-symmetra":  dict(src="usv-apc-symmetra-1", cls="ups",
-                          strip=[".1.3.6.1.4.1.318.1.1.1.4.2."],
-                          set={".1.3.6.1.4.1.318.1.1.1.7.2.4.0": "01/01/2026"}),
-    "apc-pdu":       dict(src="apc-netshelterpdu-advanced", cls="pdu"),
-    "gude-pdu":      dict(src="gude-power-switch-1", cls="pdu",
-                          sub=[(r"eth_cf52235", "eth_001b2c0")]),
-    "raritan-pdu":   dict(src="pdu-raritan-1", cls="pdu"),
-    "akcp-sensor":   dict(src="akcp-sensor-probe", cls="sensor",
-                          # dry contact 0 recorded in error state (4) -> normal
-                          set={".1.3.6.1.4.1.3854.1.2.2.1.18.1.3.0": "2"}),
-    "avtech-ra3s":   dict(src="avtech-roomalert-3s", cls="sensor"),
+    "apc-symmetra": dict(
+        src="usv-apc-symmetra-1",
+        cls="ups",
+        strip=[".1.3.6.1.4.1.318.1.1.1.4.2."],
+        set={".1.3.6.1.4.1.318.1.1.1.7.2.4.0": "01/01/2026"},
+    ),
+    "apc-pdu": dict(src="apc-netshelterpdu-advanced", cls="pdu"),
+    "gude-pdu": dict(src="gude-power-switch-1", cls="pdu", sub=[(r"eth_cf52235", "eth_001b2c0")]),
+    "raritan-pdu": dict(src="pdu-raritan-1", cls="pdu"),
+    "akcp-sensor": dict(
+        src="akcp-sensor-probe",
+        cls="sensor",
+        # dry contact 0 recorded in error state (4) -> normal
+        set={".1.3.6.1.4.1.3854.1.2.2.1.18.1.3.0": "2"},
+    ),
+    "avtech-ra3s": dict(src="avtech-roomalert-3s", cls="sensor"),
     # -- storage / san / oob mgmt / appliances ----------------------------------
-    "synology-nas":  dict(src="storage-synology-1", cls="nas",
-                          # kernel cmdline embeds the real NIC MACs
-                          sub=[(r"\bmac(\d)=[0-9a-fA-F]{12}",
-                                r"mac\g<1>=001B2C00000\g<1>")],
-                          # update status recorded 3 (Connecting): the check
-                          # yields NOTHING for it -> service pends forever;
-                          # 2 = no update available -> OK
-                          set={".1.3.6.1.4.1.6574.1.5.4.0": "2"}),
-    "brocade-fc":    dict(src="fcswitch-brocade", cls="fcswitch",
-                          # swEvent log: real login source hostnames
-                          strip=[".1.3.6.1.4.1.1588.2.1.1.1.8."]),
-    "idrac":         dict(src="idrac-dell-1", cls="mgmt",
-                          # OS volume I: recorded at 85 % -> WARN at 80/90
-                          set={".1.3.6.1.2.1.25.2.3.1.6.7": "30150000"}),
-    "meinberg-ntp":  dict(src="meinberg-lantime-1", cls="appliance",
-                          # real admin contact + the site's GPS coordinates
-                          sub=[(r"Daniele Basile - ZID Basel",
-                                "NetOps - Meridian Retail"),
-                               (r"GPS Position: [-0-9. ]+m",
-                                "GPS Position: 48.1374 11.5755 519m")],
-                          # refclock recorded 'not synchronized / antenna
-                          # disconnected' (2/3) -> synchronized / GPS sync
-                          # with 9 of 12 satellites (levels_lower 3/3);
-                          # /mnt/flash recorded 89.7 % full -> ~49 %
-                          set={".1.3.6.1.4.1.5597.30.0.1.2.1.4.1": "1",
-                               ".1.3.6.1.4.1.5597.30.0.1.2.1.5.1": "1",
-                               ".1.3.6.1.4.1.5597.30.0.1.2.1.6.1": "9",
-                               ".1.3.6.1.2.1.25.2.3.1.6.37": "24000"}),
+    "synology-nas": dict(
+        src="storage-synology-1",
+        cls="nas",
+        # kernel cmdline embeds the real NIC MACs
+        sub=[(r"\bmac(\d)=[0-9a-fA-F]{12}", r"mac\g<1>=001B2C00000\g<1>")],
+        # update status recorded 3 (Connecting): the check
+        # yields NOTHING for it -> service pends forever;
+        # 2 = no update available -> OK
+        set={".1.3.6.1.4.1.6574.1.5.4.0": "2"},
+    ),
+    "brocade-fc": dict(
+        src="fcswitch-brocade",
+        cls="fcswitch",
+        # swEvent log: real login source hostnames
+        strip=[".1.3.6.1.4.1.1588.2.1.1.1.8."],
+    ),
+    "idrac": dict(
+        src="idrac-dell-1",
+        cls="mgmt",
+        # OS volume I: recorded at 85 % -> WARN at 80/90
+        set={".1.3.6.1.2.1.25.2.3.1.6.7": "30150000"},
+    ),
+    "meinberg-ntp": dict(
+        src="meinberg-lantime-1",
+        cls="appliance",
+        # real admin contact + the site's GPS coordinates
+        sub=[
+            (r"Daniele Basile - ZID Basel", "NetOps - Meridian Retail"),
+            (r"GPS Position: [-0-9. ]+m", "GPS Position: 48.1374 11.5755 519m"),
+        ],
+        # refclock recorded 'not synchronized / antenna
+        # disconnected' (2/3) -> synchronized / GPS sync
+        # with 9 of 12 satellites (levels_lower 3/3);
+        # /mnt/flash recorded 89.7 % full -> ~49 %
+        set={
+            ".1.3.6.1.4.1.5597.30.0.1.2.1.4.1": "1",
+            ".1.3.6.1.4.1.5597.30.0.1.2.1.5.1": "1",
+            ".1.3.6.1.4.1.5597.30.0.1.2.1.6.1": "9",
+            ".1.3.6.1.2.1.25.2.3.1.6.37": "24000",
+        },
+    ),
 }
 
 
@@ -277,19 +331,21 @@ def _apply_subs(text: str, subs: list[tuple[str, str]]) -> str:
     deterministic hash of the matched text (stable renaming of site codes)."""
     for pattern, repl in subs:
         if "{h}" in repl:
+
             def _r(m: re.Match, repl=repl) -> str:
                 h = int(hashlib.sha256(m.group(0).encode()).hexdigest(), 16) % 90 + 10
                 return repl.replace("{h}", str(h))
+
             text = re.sub(pattern, _r, text)
         else:
             text = re.sub(pattern, repl, text)
     return text
 
 
-def scrub_value(value: str, sysname: str, model: str,
-                subs: list[tuple[str, str]]) -> str:
+def scrub_value(value: str, sysname: str, model: str, subs: list[tuple[str, str]]) -> str:
     """Generic value scrub: recorded sysName, e-mails, SN tokens, IPs, plus
     the model's own subs — applied to plain AND hex-encoded string values."""
+
     def scrub_text(t: str) -> str:
         if sysname and len(sysname) >= 3:
             t = re.sub(re.escape(sysname), f"mr-{model}", t, flags=re.I)
@@ -327,11 +383,11 @@ def curate(model: str, cfg: dict, source_dir: str, audit: bool) -> dict | None:
             out.append((oid, overrides[oid]))
             continue
         if oid == SYSNAME:
-            value = f"mr-{model}"          # netsim overrides per instance
+            value = f"mr-{model}"  # netsim overrides per instance
         elif oid == SYSCONTACT:
             value = "netops@meridian-retail.com"
         elif oid == SYSLOCATION:
-            value = "Meridian Retail"      # netsim overrides per instance
+            value = "Meridian Retail"  # netsim overrides per instance
         elif oid.startswith(IFALIAS):
             value = ""
         elif oid.startswith(IFPHYS):
@@ -366,16 +422,16 @@ def curate(model: str, cfg: dict, source_dir: str, audit: bool) -> dict | None:
         print(f"    -- audit: {len(seen)} distinct string values --")
         for t in sorted(seen):
             print(f"    | {t[:140]}")
-    return {"file": f"{model}.walk", "class": cfg["cls"],
-            "source": cfg["src"], "rows": kept}
+    return {"file": f"{model}.walk", "class": cfg["cls"], "source": cfg["src"], "rows": kept}
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--source", default=os.path.expanduser("~/git/zeug_cmk/walks"))
     p.add_argument("--only", help="curate a single model")
-    p.add_argument("--audit", action="store_true",
-                   help="print every remaining string value for review")
+    p.add_argument(
+        "--audit", action="store_true", help="print every remaining string value for review"
+    )
     args = p.parse_args()
 
     models = {args.only: MODELS[args.only]} if args.only else MODELS

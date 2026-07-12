@@ -19,13 +19,14 @@ bytes so Checkmk renders them back to the same hex.
 
 Self-test: `python3 snmpserver.py --selftest` (no external tools needed).
 """
+
 from __future__ import annotations
 
 import bisect
 import re
 import socket
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 # --------------------------------------------------------------------------- #
 #  BER / ASN.1 — just the pieces SNMP uses, definite length only
@@ -41,9 +42,9 @@ T_GET = 0xA0
 T_GETNEXT = 0xA1
 T_RESPONSE = 0xA2
 T_GETBULK = 0xA5
-T_NOSUCHOBJECT = 0x80    # context [0] — implicit NULL
+T_NOSUCHOBJECT = 0x80  # context [0] — implicit NULL
 T_NOSUCHINSTANCE = 0x81  # context [1]
-T_ENDOFMIBVIEW = 0x82    # context [2]
+T_ENDOFMIBVIEW = 0x82  # context [2]
 
 _HEX_VALUE = re.compile(r'^"((?:[0-9A-Fa-f]{2} )*)"$')
 
@@ -77,13 +78,13 @@ def enc_int(value: int) -> bytes:
             while n:
                 body.append(n & 0xFF)
                 n >>= 8
-            if body[-1] & 0x80:        # keep it positive
+            if body[-1] & 0x80:  # keep it positive
                 body.append(0x00)
         else:
             n = -value
             bits = n.bit_length() + 1
             nbytes = (bits + 7) // 8
-            val = (1 << (8 * nbytes)) + value    # two's complement
+            val = (1 << (8 * nbytes)) + value  # two's complement
             for _ in range(nbytes):
                 body.append(val & 0xFF)
                 val >>= 8
@@ -141,11 +142,11 @@ def _read_tlv(buf: bytes, pos: int) -> tuple[int, bytes, int]:
         nbytes = first & 0x7F
         if nbytes == 0 or pos + nbytes > len(buf):
             raise BERError("bad long-form length")
-        length = int.from_bytes(buf[pos:pos + nbytes], "big")
+        length = int.from_bytes(buf[pos : pos + nbytes], "big")
         pos += nbytes
     if pos + length > len(buf):
         raise BERError("truncated body")
-    return tag, buf[pos:pos + length], pos + length
+    return tag, buf[pos : pos + length], pos + length
 
 
 def dec_int(body: bytes) -> int:
@@ -200,7 +201,7 @@ class VarBind:
 
     def __init__(self, oid: tuple[int, ...], value_tlv: bytes) -> None:
         self.oid = oid
-        self.value_tlv = value_tlv           # already-encoded value (TLV)
+        self.value_tlv = value_tlv  # already-encoded value (TLV)
 
     def encode(self) -> bytes:
         return _tlv(T_SEQ, enc_oid(self.oid) + self.value_tlv)
@@ -268,38 +269,37 @@ def peek_community(data: bytes) -> str | None:
         return None
 
 
-def handle_message(data: bytes, table: Table,
-                   community: str | None = None) -> bytes | None:
+def handle_message(data: bytes, table: Table, community: str | None = None) -> bytes | None:
     """Parse a v2c request and return the encoded response (or None to drop)."""
     tag, body, _ = _read_tlv(data, 0)
     if tag != T_SEQ:
         return None
     pos = 0
-    vtag, vbody, pos = _read_tlv(body, pos)      # version
-    if vtag != T_INT or dec_int(vbody) != 1:     # 1 == v2c
+    vtag, vbody, pos = _read_tlv(body, pos)  # version
+    if vtag != T_INT or dec_int(vbody) != 1:  # 1 == v2c
         return None
-    ctag, cbody, pos = _read_tlv(body, pos)      # community
+    ctag, cbody, pos = _read_tlv(body, pos)  # community
     if ctag != T_OCTETSTR:
         return None
     if community is not None and cbody.decode("latin1") != community:
         return None
-    ptag, pbody, _ = _read_tlv(body, pos)        # PDU
+    ptag, pbody, _ = _read_tlv(body, pos)  # PDU
     if ptag not in (T_GET, T_GETNEXT, T_GETBULK):
         return None
 
     p = 0
-    rtag, rbody, p = _read_tlv(pbody, p)         # request-id
+    rtag, rbody, p = _read_tlv(pbody, p)  # request-id
     request_id = dec_int(rbody)
-    n1tag, n1body, p = _read_tlv(pbody, p)       # error-status / non-repeaters
-    n2tag, n2body, p = _read_tlv(pbody, p)       # error-index / max-repetitions
-    vbtag, vbbody, _ = _read_tlv(pbody, p)       # varbind list
+    n1tag, n1body, p = _read_tlv(pbody, p)  # error-status / non-repeaters
+    n2tag, n2body, p = _read_tlv(pbody, p)  # error-index / max-repetitions
+    vbtag, vbbody, _ = _read_tlv(pbody, p)  # varbind list
     oids = _parse_varbinds(vbbody)
 
     if ptag == T_GET:
         out = [VarBind(o, table.get(o) or _tlv(T_NOSUCHINSTANCE, b"")) for o in oids]
     elif ptag == T_GETNEXT:
         out = [_next_vb(table, o) for o in oids]
-    else:                                        # GETBULK
+    else:  # GETBULK
         non_rep = max(0, dec_int(n1body))
         max_rep = max(0, dec_int(n2body))
         out = []
@@ -314,8 +314,12 @@ def handle_message(data: bytes, table: Table,
                     break
                 cur = vb.oid
 
-    resp_pdu = (enc_int(request_id) + enc_int(0) + enc_int(0)
-                + _tlv(T_SEQ, b"".join(vb.encode() for vb in out)))
+    resp_pdu = (
+        enc_int(request_id)
+        + enc_int(0)
+        + enc_int(0)
+        + _tlv(T_SEQ, b"".join(vb.encode() for vb in out))
+    )
     return _tlv(T_SEQ, enc_int(1) + enc_octetstr(cbody) + _tlv(T_RESPONSE, resp_pdu))
 
 
@@ -340,9 +344,9 @@ class SnmpServer:
     worker threads reads the shared socket (the kernel hands each datagram to
     one), so concurrent bulk-discovery walks still interleave."""
 
-    def __init__(self, bind: str, port: int,
-                 table_for: "Callable[[str], Table | None]",
-                 workers: int = 16) -> None:
+    def __init__(
+        self, bind: str, port: int, table_for: Callable[[str], Table | None], workers: int = 16
+    ) -> None:
         self.bind = bind
         self.port = port
         self.table_for = table_for
@@ -354,8 +358,7 @@ class SnmpServer:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((self.bind, self.port))
         self.sock = s
-        threads = [threading.Thread(target=self._serve, daemon=True)
-                   for _ in range(self.workers)]
+        threads = [threading.Thread(target=self._serve, daemon=True) for _ in range(self.workers)]
         for t in threads:
             t.start()
         for t in threads:
@@ -372,7 +375,7 @@ class SnmpServer:
                 community = peek_community(data)
                 table = self.table_for(community) if community else None
                 if table is None:
-                    continue           # unknown community -> silently drop
+                    continue  # unknown community -> silently drop
                 reply = handle_message(data, table, community=None)
             except Exception:
                 continue
@@ -398,9 +401,8 @@ def _selftest() -> None:
 
     # 2. decode a hand-built real SNMPv2c GET (sysDescr.0, community "public")
     pkt = bytes.fromhex(
-        "3029" "020101" "0406" "7075626c6963"
-        "a01c" "02040000002a" "020100" "020100"
-        "300e" "300c" "0608" "2b06010201010100" "0500")
+        "302902010104067075626c6963a01c02040000002a020100020100300e300c06082b060102010101000500"
+    )
     tag, body, _ = _read_tlv(pkt, 0)
     assert tag == T_SEQ
     _, _, p = _read_tlv(body, 0)
@@ -409,17 +411,19 @@ def _selftest() -> None:
     ptag, pbody, _ = _read_tlv(body, p)
     assert ptag == T_GET
     _, rid, pp = _read_tlv(pbody, 0)
-    assert dec_int(rid) == 0x2a
+    assert dec_int(rid) == 0x2A
     _, _, pp = _read_tlv(pbody, pp)
     _, _, pp = _read_tlv(pbody, pp)
     _, vbs, _ = _read_tlv(pbody, pp)
     assert _parse_varbinds(vbs) == [parse_oid("1.3.6.1.2.1.1.1.0")]
 
     # 3. GET / GETNEXT / GETBULK against a small table
-    rows = [(".1.3.6.1.2.1.1.1.0", "Test Device"),
-            (".1.3.6.1.2.1.1.3.0", "12345"),
-            (".1.3.6.1.2.1.2.2.1.6.1", '"B2 E0 7D 2C 4D 15 "'),
-            (".1.3.6.1.2.1.2.2.1.10.1", "9998887776")]
+    rows = [
+        (".1.3.6.1.2.1.1.1.0", "Test Device"),
+        (".1.3.6.1.2.1.1.3.0", "12345"),
+        (".1.3.6.1.2.1.2.2.1.6.1", '"B2 E0 7D 2C 4D 15 "'),
+        (".1.3.6.1.2.1.2.2.1.10.1", "9998887776"),
+    ]
     table = Table(rows)
 
     def build(pdu_tag, oids, n1=0, n2=0, community=b"public"):
@@ -467,14 +471,17 @@ def _selftest() -> None:
     assert vb[4][1] == T_ENDOFMIBVIEW, vb
 
     # wrong community -> dropped
-    assert handle_message(build(T_GET, [".1.3.6.1.2.1.1.1.0"], community=b"nope"),
-                          table, "public") is None
+    assert (
+        handle_message(build(T_GET, [".1.3.6.1.2.1.1.1.0"], community=b"nope"), table, "public")
+        is None
+    )
 
     print("snmpserver self-test: OK")
 
 
 if __name__ == "__main__":
     import sys
+
     if "--selftest" in sys.argv:
         _selftest()
     else:

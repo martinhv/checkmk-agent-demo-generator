@@ -33,6 +33,7 @@ Config via env: CMK_HOSTNAME, AGENT_PORT, HTTP_PORT, START_STATE,
   AGENT_VERSION, AUTO_BREAK_AFTER_MIN (default 20), LEAK_FILL_MIN (default 18,
   the C:-fill window while degraded), BREAK_RAMP_MIN (default 4), STATE_FILE.
 """
+
 from __future__ import annotations
 
 import json
@@ -150,9 +151,11 @@ class _Wobble:
         self.noise = 0.0
 
     def step(self, now: float) -> float:
-        harm = (0.60 * math.sin(self.omega * now + self.phase)
-                + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
-                + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5))
+        harm = (
+            0.60 * math.sin(self.omega * now + self.phase)
+            + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
+            + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5)
+        )
         self.noise = max(-1.5, min(1.5, self.noise * 0.9 + random.gauss(0.0, 0.25)))
         return max(-1.0, min(1.0, (harm + 0.45 * self.noise) / 1.8))
 
@@ -161,9 +164,15 @@ _GAUGES: dict[str, _Wobble] = {}
 _GAUGE_LOCK = threading.Lock()
 
 
-def gauge(name: str, base: float, *, amp_abs: float | None = None,
-          amp_frac: float | None = None, phase: float = 0.0,
-          period: float = 1200.0) -> float:
+def gauge(
+    name: str,
+    base: float,
+    *,
+    amp_abs: float | None = None,
+    amp_frac: float | None = None,
+    phase: float = 0.0,
+    period: float = 1200.0,
+) -> float:
     with _GAUGE_LOCK:
         w = _GAUGES.get(name)
         if w is None:
@@ -180,7 +189,7 @@ def c_drive_used_kb(now: float) -> int:
     of pressure + a slow secular term, with a small wander — continuous across
     re-polls and restarts."""
     p = pressure()
-    base = _lerp(66_700_000, 116_800_000, p)            # 53 % -> ~92.8 %
+    base = _lerp(66_700_000, 116_800_000, p)  # 53 % -> ~92.8 %
     secular = min(1_500_000, (now - START + UPTIME_OFFSET) * 0.02)
     return int(base + secular + gauge("c.used", 0, amp_abs=90_000, period=1500))
 
@@ -234,18 +243,34 @@ def build_agent_output(state: str) -> bytes:
     #      a registered pull connection with a cert ~325 days out) so the
     #      Check_MK Agent service shows no "TLS is not activated" warning. ---- #
     a("<<<cmk_agent_ctl_status:sep(0)>>>")
-    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000",
-                            time.gmtime(now + 325 * 86400))
-    a(json.dumps({
-        "version": AGENT_VERSION, "agent_socket_operational": True,
-        "ip_allowlist": [], "allow_legacy_pull": False,
-        "connections": [{
-            "site_id": "monitoring/prod", "receiver_port": 8000,
-            "uuid": "c47b1d92-7a30-4e1f-9c8a-1b6d4f2e8a55",
-            "local": {"connection_mode": "pull-agent", "cert_info": {
-                "issuer": "Site 'prod' local CA",
-                "from": "Tue, 03 Jun 2025 09:12:44 +0000", "to": cert_to}},
-            "remote": "remote_query_disabled"}]}, separators=(",", ":")))
+    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(now + 325 * 86400))
+    a(
+        json.dumps(
+            {
+                "version": AGENT_VERSION,
+                "agent_socket_operational": True,
+                "ip_allowlist": [],
+                "allow_legacy_pull": False,
+                "connections": [
+                    {
+                        "site_id": "monitoring/prod",
+                        "receiver_port": 8000,
+                        "uuid": "c47b1d92-7a30-4e1f-9c8a-1b6d4f2e8a55",
+                        "local": {
+                            "connection_mode": "pull-agent",
+                            "cert_info": {
+                                "issuer": "Site 'prod' local CA",
+                                "from": "Tue, 03 Jun 2025 09:12:44 +0000",
+                                "to": cert_to,
+                            },
+                        },
+                        "remote": "remote_query_disabled",
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        )
+    )
 
     # ---- CPU load via WMI processor-queue (green; a DC idles) -------------- #
     a("<<<wmi_cpuload:sep(124)>>>")
@@ -293,8 +318,19 @@ def build_agent_output(state: str) -> bytes:
     a(TAB.join(["C:\\", "NTFS", str(c_size), str(c_used), str(c_avail), f"{c_pct}%", "C:\\"]))
     d_size = 419_430_400
     d_used = int(gauge("d.used", 171_000_000, amp_abs=400_000, period=1800))
-    a(TAB.join(["D:\\", "NTFS", str(d_size), str(d_used), str(d_size - d_used),
-                f"{round(d_used / d_size * 100)}%", "D:\\"]))
+    a(
+        TAB.join(
+            [
+                "D:\\",
+                "NTFS",
+                str(d_size),
+                str(d_used),
+                str(d_size - d_used),
+                f"{round(d_used / d_size * 100)}%",
+                "D:\\",
+            ]
+        )
+    )
 
     # ---- services: AD/DC services. The Meridian Backup Agent (the cleanup
     #      service) is stopped once we leave healthy -> the root cause. Note:
@@ -346,10 +382,14 @@ def build_agent_output(state: str) -> bytes:
     a("<<<checkmk_agent_plugins_win:sep(0)>>>")
     a("pluginsdir C:\\ProgramData\\checkmk\\agent\\plugins")
     a("localdir C:\\ProgramData\\checkmk\\agent\\local")
-    a('C:\\ProgramData\\checkmk\\agent\\plugins\\cmk_update_agent.checkmk.py:CMK_VERSION = "%s"'
-      % AGENT_VERSION)
-    a('C:\\ProgramData\\checkmk\\agent\\plugins\\mk_inventory.vbs:CMK_VERSION = "%s"'
-      % AGENT_VERSION)
+    a(
+        'C:\\ProgramData\\checkmk\\agent\\plugins\\cmk_update_agent.checkmk.py:CMK_VERSION = "%s"'
+        % AGENT_VERSION
+    )
+    a(
+        'C:\\ProgramData\\checkmk\\agent\\plugins\\mk_inventory.vbs:CMK_VERSION = "%s"'
+        % AGENT_VERSION
+    )
 
     # ---- processes (Windows ps:sep(9)). lsass holds the AD database on a DC;
     #      format: (user,VSZkb,WSkb,0,pid,handle?,usertime,kerneltime,handles,
@@ -364,16 +404,24 @@ def build_agent_output(state: str) -> bytes:
         ("\\\\NT AUTHORITY\\SYSTEM", 232800, 58200, 608, 52, "lsass.exe"),
         ("\\\\NT AUTHORITY\\SYSTEM", 204000, 51000, 940, 50, "svchost.exe"),
         ("\\\\NT AUTHORITY\\NETWORK SERVICE", 124800, 31200, 1820, 24, "dns.exe"),
-        ("\\\\NT AUTHORITY\\SYSTEM", 113600, 28400, 2140, 18,
-         "Microsoft.ActiveDirectory.WebServices.exe"),
+        (
+            "\\\\NT AUTHORITY\\SYSTEM",
+            113600,
+            28400,
+            2140,
+            18,
+            "Microsoft.ActiveDirectory.WebServices.exe",
+        ),
         ("\\\\NT AUTHORITY\\SYSTEM", 79200, 19800, 2360, 12, "dfsrs.exe"),
         ("\\\\NT AUTHORITY\\LOCAL SERVICE", 58400, 14600, 1280, 9, "svchost.exe"),
         ("\\\\NT AUTHORITY\\SYSTEM", 88400, 22100, 3120, 14, "MsMpEng.exe"),
         ("\\\\NT AUTHORITY\\SYSTEM", 39200, 9800, 3480, 7, "check_mk_agent.exe"),
     ]
     for usr, vsz, ws, pid, threads, name in proc_named:
-        a(f"({usr},{vsz},{ws},0,{pid},{threads * 2},{pid * 156250},{pid * 312500},"
-          f"{threads * 30},{threads},{uptime}){TAB}{name}")
+        a(
+            f"({usr},{vsz},{ws},0,{pid},{threads * 2},{pid * 156250},{pid * 312500},"
+            f"{threads * 30},{threads},{uptime}){TAB}{name}"
+        )
 
     # ---- system time (compared to the monitoring server's clock) ----------- #
     a("<<<systemtime>>>")
@@ -392,9 +440,14 @@ def save_state() -> None:
     if not STATE_FILE:
         return
     with _state_lock:
-        data = {"version": 1, "start": START, "state": _state,
-                "degraded_since": _degraded_since, "broken_since": _broken_since,
-                "state_since": _state_since}
+        data = {
+            "version": 1,
+            "start": START,
+            "state": _state,
+            "degraded_since": _degraded_since,
+            "broken_since": _broken_since,
+            "state_since": _state_since,
+        }
     try:
         tmp = STATE_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -443,7 +496,8 @@ class AgentServer(ThreadingTCPServer):
 
 STATE_META = {
     "healthy": {
-        "color": "#2e7d32", "label": "HEALTHY",
+        "color": "#2e7d32",
+        "label": "HEALTHY",
         "tagline": "All green. C: ~53 % used, every service running.",
         "effects": [
             "every service OK — the starting picture",
@@ -452,10 +506,14 @@ STATE_META = {
         ],
     },
     "degraded": {
-        "color": "#f9a825", "label": "DEGRADED",
+        "color": "#f9a825",
+        "label": "DEGRADED",
         "tagline": "The backup/cleanup service crashed; C: starts filling. "
-                   + (f"Auto-escalates after {AUTO_BREAK_AFTER_MIN:g} min."
-                      if AUTO_BREAK_AFTER_MIN > 0 else ""),
+        + (
+            f"Auto-escalates after {AUTO_BREAK_AFTER_MIN:g} min."
+            if AUTO_BREAK_AFTER_MIN > 0
+            else ""
+        ),
         "effects": [
             "MeridianBackupAgent -> stopped (the root cause) — shows in <<<services>>> "
             "(CRIT only if you add a 'Windows Services' rule for it; documented)",
@@ -464,10 +522,10 @@ STATE_META = {
         ],
     },
     "broken": {
-        "color": "#c62828", "label": "BROKEN",
+        "color": "#c62828",
+        "label": "BROKEN",
         "tagline": "C: is nearly full. "
-                   + (f"Crosses 90 % over ~{BREAK_RAMP_MIN:g} min."
-                      if BREAK_RAMP_MIN > 0 else "Instant."),
+        + (f"Crosses 90 % over ~{BREAK_RAMP_MIN:g} min." if BREAK_RAMP_MIN > 0 else "Instant."),
         "effects": [
             "Filesystem C:/ > 90 % and still GROWING live -> CRIT (the headline)",
             "MeridianBackupAgent still stopped; SoftwareDistribution cache file large",
@@ -495,8 +553,10 @@ def _admin_page() -> str:
     c_pct = round(c_used / 125_827_068 * 100)
     extras = [f"C: at {c_pct}% used"]
     if disk_dying():
-        extras.append(f"MeridianBackupAgent stopped for {_fmt_duration(degraded_seconds())} — "
-                      f"WU cache file {cache_file_bytes() // 1_000_000} MB and growing")
+        extras.append(
+            f"MeridianBackupAgent stopped for {_fmt_duration(degraded_seconds())} — "
+            f"WU cache file {cache_file_bytes() // 1_000_000} MB and growing"
+        )
     if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0:
         left = max(0.0, AUTO_BREAK_AFTER_MIN * 60 - state_since_seconds())
         extras.append(f"C:/ crosses CRIT (auto) in {_fmt_duration(left)}")
@@ -507,14 +567,18 @@ def _admin_page() -> str:
         tmeta = STATE_META[target]
         current = target == state
         effects = "".join(f"<li>{e}</li>" for e in tmeta["effects"])
-        btn = ("<span class='btn current'>current state</span>" if current else
-               f"<a class='btn' href='/admin/{action}?ui=1' "
-               f"style='background:{tmeta['color']}'>&rarr; {action}</a>")
+        btn = (
+            "<span class='btn current'>current state</span>"
+            if current
+            else f"<a class='btn' href='/admin/{action}?ui=1' "
+            f"style='background:{tmeta['color']}'>&rarr; {action}</a>"
+        )
         cards.append(
             f"<div class='card{' active' if current else ''}' "
             f"style='border-color:{tmeta['color']}'>"
             f"<h2 style='color:{tmeta['color']}'>{tmeta['label']}</h2>"
-            f"<p class='tag'>{tmeta['tagline']}</p><ul>{effects}</ul>{btn}</div>")
+            f"<p class='tag'>{tmeta['tagline']}</p><ul>{effects}</ul>{btn}</div>"
+        )
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
@@ -524,7 +588,7 @@ def _admin_page() -> str:
         margin:2rem auto; max-width:72rem; padding:0 1rem; }}
  h1 {{ font-weight:600; font-size:1.3rem; color:#9aa4af; }} h1 b {{ color:#d8dee4; }}
  .state {{ display:inline-block; padding:.4rem 1.1rem; border-radius:.4rem; color:#fff;
-          font-weight:700; font-size:1.6rem; letter-spacing:.05em; background:{meta['color']}; }}
+          font-weight:700; font-size:1.6rem; letter-spacing:.05em; background:{meta["color"]}; }}
  .since {{ color:#9aa4af; margin:.6rem 0 0; }} .extra {{ color:#f9a825; margin-top:.3rem; }}
  .cards {{ display:flex; gap:1rem; margin-top:2rem; flex-wrap:wrap; }}
  .card {{ flex:1 1 20rem; border:2px solid #333; border-radius:.6rem; padding:1rem 1.2rem;
@@ -540,10 +604,10 @@ def _admin_page() -> str:
  .foot {{ margin-top:2rem; color:#666; font-size:.85rem; }}
 </style></head><body>
  <h1>demo control — <b>{HOSTNAME}</b> <span style="color:#555">(Windows Server 2022 · auto-refreshes every 5 s)</span></h1>
- <div class="state">{meta['label']}</div>
- <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b> — {meta['tagline']}</div>
+ <div class="state">{meta["label"]}</div>
+ <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b> — {meta["tagline"]}</div>
  {extra_html}
- <div class="cards">{''.join(cards)}</div>
+ <div class="cards">{"".join(cards)}</div>
  <div class="foot">curl API: /admin/heal · /admin/degrade · /admin/break · / (JSON status)</div>
 </body></html>"""
 
@@ -576,11 +640,16 @@ class HttpHandler(BaseHTTPRequestHandler):
         if path == "/admin":
             return self._send_html(_admin_page())
         if path == "/admin/meta":
-            return self._send(200, {"state": get_state(),
-                                    "in_state_for_s": round(state_since_seconds(), 1),
-                                    "action_to_state": ACTION_TO_STATE,
-                                    "states": STATE_META})
-        if path.startswith("/admin/") and (action := path[len("/admin/"):]) in ACTION_TO_STATE:
+            return self._send(
+                200,
+                {
+                    "state": get_state(),
+                    "in_state_for_s": round(state_since_seconds(), 1),
+                    "action_to_state": ACTION_TO_STATE,
+                    "states": STATE_META,
+                },
+            )
+        if path.startswith("/admin/") and (action := path[len("/admin/") :]) in ACTION_TO_STATE:
             target = ACTION_TO_STATE[action]
             set_state(target)
             print(f"[ctl] -> {target.upper()}")
@@ -593,23 +662,27 @@ class HttpHandler(BaseHTTPRequestHandler):
         state = get_state()
         auto_break_in = (
             round(max(0.0, AUTO_BREAK_AFTER_MIN * 60 - state_since_seconds()))
-            if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0 else None)
-        return self._send(200, {
-            "state": state,
-            "in_state_for_s": round(state_since_seconds(), 1),
-            "c_drive_used_pct": round(c_drive_used_kb(time.time()) / 125_827_068 * 100, 1),
-            "backup_agent": "stopped" if disk_dying() else "running",
-            "auto_break_in_s": auto_break_in,
-            "toggles": ["/admin/degrade", "/admin/break", "/admin/heal"],
-            "ui": "/admin",
-        })
+            if state == "degraded" and AUTO_BREAK_AFTER_MIN > 0
+            else None
+        )
+        return self._send(
+            200,
+            {
+                "state": state,
+                "in_state_for_s": round(state_since_seconds(), 1),
+                "c_drive_used_pct": round(c_drive_used_kb(time.time()) / 125_827_068 * 100, 1),
+                "backup_agent": "stopped" if disk_dying() else "running",
+                "auto_break_in_s": auto_break_in,
+                "toggles": ["/admin/degrade", "/admin/break", "/admin/heal"],
+                "ui": "/admin",
+            },
+        )
 
 
 def _auto_break_watchdog() -> None:
     while True:
         time.sleep(5)
-        if (get_state() == "degraded"
-                and state_since_seconds() >= AUTO_BREAK_AFTER_MIN * 60):
+        if get_state() == "degraded" and state_since_seconds() >= AUTO_BREAK_AFTER_MIN * 60:
             set_state("broken")
             print(f"[ctl] -> BROKEN (auto: C: filling for {AUTO_BREAK_AFTER_MIN:g} min)")
 
@@ -622,8 +695,10 @@ def main() -> None:
     if AUTO_BREAK_AFTER_MIN > 0:
         threading.Thread(target=_auto_break_watchdog, daemon=True).start()
         print(f"[boot] auto-escalation: degraded -> broken after {AUTO_BREAK_AFTER_MIN:g} min")
-    print(f"[boot] host={HOSTNAME!r} (Windows)  agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  "
-          f"start_state={get_state()}")
+    print(
+        f"[boot] host={HOSTNAME!r} (Windows)  agent=tcp/{AGENT_PORT}  ctl=tcp/{HTTP_PORT}  "
+        f"start_state={get_state()}"
+    )
     print(f"[boot] control UI:   http://localhost:{HTTP_PORT}/admin")
     try:
         http.serve_forever()

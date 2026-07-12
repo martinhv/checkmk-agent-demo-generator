@@ -66,6 +66,7 @@ Requirements: docker or podman compose (unless --runtime native) and a running
 Checkmk site. The SNMP layer needs the site to reach the responder on
 127.0.0.1:1161, so it applies to a LOCAL site (self-hosted), not remote/SaaS.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -82,7 +83,7 @@ REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(REPO, "deploy"))
 import cmk_setup  # noqa: E402  (deploy/cmk_setup.py — the REST engine)
 
-PANEL = "http://localhost:8099"       # piggyback shell control panel
+PANEL = "http://localhost:8099"  # piggyback shell control panel
 SNMP_PANEL = "http://localhost:8101"  # netsim control panel
 PIDFILE_SHELL = "/var/tmp/cmk-demo-estate-shell.pid"
 PIDFILE_NETSIM = "/var/tmp/cmk-demo-estate-netsim.pid"
@@ -97,9 +98,9 @@ def delivery_for(mode: str) -> str:
     access, so it stays on piggyback via the agent controller/relay."""
     return "datasource" if mode == "self-hosted" else "piggyback"
 
+
 SCALES = {
-    "minimal": {"hosts": "payment-api,db-postgres-01", "snmp": False,
-                "fleet": False},
+    "minimal": {"hosts": "payment-api,db-postgres-01", "snmp": False, "fleet": False},
     "standard": {"hosts": "", "snmp": False, "fleet": False},  # "" = whole roster
     "full": {"hosts": "", "snmp": True, "fleet": False},
     # the researched ~300-host company: full + the steady-green fleet
@@ -222,18 +223,20 @@ def shell_up(args: argparse.Namespace) -> None:
     if _pid_alive(PIDFILE_SHELL):
         print("  shell already running (native)")
         return
-    env = {**os.environ, **shell_env(args),
-           "AGENT_PORT": "6559", "HTTP_PORT": "8099"}
+    env = {**os.environ, **shell_env(args), "AGENT_PORT": "6559", "HTTP_PORT": "8099"}
     if datasource:
         env["AGENT_OUTPUT_DIR"] = AGENT_OUTPUT_DIR
     log = open("/var/tmp/cmk-demo-estate-shell.log", "ab")  # noqa: SIM115
     proc = subprocess.Popen(  # noqa: S603
         [sys.executable, "-u", os.path.join(REPO, "deploy", "piggyback", "serve.py")],
-        env=env, stdout=log, stderr=log, start_new_session=True)
+        env=env,
+        stdout=log,
+        stderr=log,
+        start_new_session=True,
+    )
     with open(PIDFILE_SHELL, "w") as f:
         f.write(str(proc.pid))
-    print(f"  shell started natively (pid {proc.pid}, "
-          "log /var/tmp/cmk-demo-estate-shell.log)")
+    print(f"  shell started natively (pid {proc.pid}, log /var/tmp/cmk-demo-estate-shell.log)")
 
 
 def shell_down(args: argparse.Namespace) -> None:
@@ -244,8 +247,7 @@ def shell_down(args: argparse.Namespace) -> None:
     if args.runtime != "native":
         for engine in COMPOSE_ENGINES:
             if shutil.which(engine):
-                sh([engine, "compose", "down"],
-                   cwd=os.path.join(REPO, "deploy", "piggyback"))
+                sh([engine, "compose", "down"], cwd=os.path.join(REPO, "deploy", "piggyback"))
     _pid_kill(PIDFILE_SHELL, "shell")
 
 
@@ -293,6 +295,7 @@ def _netsim_sig() -> str:
     """A hash of the netsim code, so a change to the SNMP topology/values
     (REPLAY_ROSTER, device classes, the responder) triggers a restart."""
     import hashlib
+
     h = hashlib.sha256()
     for name in ("netsim.py", "snmpserver.py"):
         try:
@@ -312,8 +315,7 @@ def netsim_up(args: argparse.Namespace, site_name: str | None = None) -> None:
     process (--runtime native)."""
     fleet = bool(SCALES[args.scale]["fleet"]) if hasattr(args, "scale") else False
     engine = compose_engine(args.runtime)
-    reused = (_netsim_up_container(engine, fleet, args) if engine
-              else _netsim_up_native(fleet, args))
+    reused = _netsim_up_container(engine, fleet, args) if engine else _netsim_up_native(fleet, args)
     if reused:
         return
 
@@ -323,21 +325,23 @@ def netsim_up(args: argparse.Namespace, site_name: str | None = None) -> None:
             print(f"  netsim started (SNMP responder, panel {SNMP_PANEL}/admin)")
             return
         time.sleep(1)
-    hint = (f"       {engine} logs {NETSIM_CONTAINER}" if engine
-            else f"       last lines: {NETSIM_LOG}")
+    hint = (
+        f"       {engine} logs {NETSIM_CONTAINER}" if engine else f"       last lines: {NETSIM_LOG}"
+    )
     sys.exit(f"ERROR: netsim did not come up\n{hint}")
 
 
-def _netsim_up_container(engine: str, fleet: bool,
-                         args: argparse.Namespace) -> bool:
+def _netsim_up_container(engine: str, fleet: bool, args: argparse.Namespace) -> bool:
     """Run netsim from the SAME image as the gateway (it has snmp/ + walklib),
     port-mapped like any container — one shared SNMP port, community-routed, so
     no --network host. Recreated fresh each up, mirroring the gateway's
     --force-recreate (picks up a rebuilt image / topology change)."""
     if not shutil.which(engine):
         sys.exit(f"ERROR: {engine} not found — use --runtime native")
-    subprocess.run([engine, "rm", "-f", NETSIM_CONTAINER],  # noqa: S603
-                   capture_output=True)
+    subprocess.run(
+        [engine, "rm", "-f", NETSIM_CONTAINER],  # noqa: S603
+        capture_output=True,
+    )
     # Persist counter/incident state to a host bind-mount so a redeploy is
     # invisible (counters stay monotonic — a reset would trip the rate-check
     # staleness cascade, see CLAUDE.md). /var/tmp, NOT the site: keeps no-sudo.
@@ -346,21 +350,43 @@ def _netsim_up_container(engine: str, fleet: bool,
         os.chmod(NETSIM_STATE_DIR, 0o777)  # noqa: S103 (container uid writes here)
     except OSError:
         pass
-    cmd = [engine, "run", "-d", "--name", NETSIM_CONTAINER,
-           "--restart", "unless-stopped",
-           "-p", "127.0.0.1:8101:8101",
-           "-p", f"127.0.0.1:{NETSIM_SNMP_PORT}:{NETSIM_SNMP_PORT}/udp",
-           "-v", f"{NETSIM_STATE_DIR}:/state",
-           "-e", "STATE_FILE=/state/netsim-state.json",
-           "--entrypoint", "python3", GATEWAY_IMAGE,
-           "-u", "snmp/netsim.py", "--transport", "snmp", "--bind", "0.0.0.0",
-           "--http-port", "8101", "--snmp-port", str(NETSIM_SNMP_PORT),
-           "--access-switches", str(args.replicas)]
+    cmd = [
+        engine,
+        "run",
+        "-d",
+        "--name",
+        NETSIM_CONTAINER,
+        "--restart",
+        "unless-stopped",
+        "-p",
+        "127.0.0.1:8101:8101",
+        "-p",
+        f"127.0.0.1:{NETSIM_SNMP_PORT}:{NETSIM_SNMP_PORT}/udp",
+        "-v",
+        f"{NETSIM_STATE_DIR}:/state",
+        "-e",
+        "STATE_FILE=/state/netsim-state.json",
+        "--entrypoint",
+        "python3",
+        GATEWAY_IMAGE,
+        "-u",
+        "snmp/netsim.py",
+        "--transport",
+        "snmp",
+        "--bind",
+        "0.0.0.0",
+        "--http-port",
+        "8101",
+        "--snmp-port",
+        str(NETSIM_SNMP_PORT),
+        "--access-switches",
+        str(args.replicas),
+    ]
     if fleet:
         cmd += ["--fleet", "--walklib", "snmp/walklib"]
     if sh(cmd).returncode != 0:
         sys.exit(f"ERROR: {engine} run {NETSIM_CONTAINER} failed")
-    return False   # always (re)started -> caller waits for readiness
+    return False  # always (re)started -> caller waits for readiness
 
 
 def _netsim_up_native(fleet: bool, args: argparse.Namespace) -> bool:
@@ -371,8 +397,7 @@ def _netsim_up_native(fleet: bool, args: argparse.Namespace) -> bool:
     sig = _netsim_sig()
     running = get_json(SNMP_PANEL + "/")
     if running is not None:
-        running_fleet = any(s.startswith("sw-dc-tor")
-                            for s in running.get("devices", {}))
+        running_fleet = any(s.startswith("sw-dc-tor") for s in running.get("devices", {}))
         force = bool(getattr(args, "force", False))
         try:
             with open(NETSIM_SIGFILE) as f:
@@ -382,22 +407,42 @@ def _netsim_up_native(fleet: bool, args: argparse.Namespace) -> bool:
         if running_fleet == fleet and not force and not stale:
             print("  netsim already running")
             return True
-        print("  restarting netsim (%s)" % ("--force" if force else "scale change"
-              if running_fleet != fleet else "netsim.py changed"))
+        print(
+            "  restarting netsim (%s)"
+            % (
+                "--force"
+                if force
+                else "scale change"
+                if running_fleet != fleet
+                else "netsim.py changed"
+            )
+        )
         netsim_down(args)
         deadline = time.time() + 15
         while time.time() < deadline and get_json(SNMP_PANEL + "/") is not None:
             time.sleep(0.5)
 
-    target = ["--transport", "snmp", "--bind", "127.0.0.1", "--http-port", "8101",
-              "--snmp-port", str(NETSIM_SNMP_PORT),
-              "--access-switches", str(args.replicas)]
+    target = [
+        "--transport",
+        "snmp",
+        "--bind",
+        "127.0.0.1",
+        "--http-port",
+        "8101",
+        "--snmp-port",
+        str(NETSIM_SNMP_PORT),
+        "--access-switches",
+        str(args.replicas),
+    ]
     if fleet:
         target += ["--fleet", "--walklib", os.path.join(REPO, "snmp", "walklib")]
     log = open(NETSIM_LOG, "wb")  # noqa: SIM115  (fresh log per attempt)
     proc = subprocess.Popen(  # noqa: S603
         [sys.executable, "-u", os.path.join(REPO, "snmp", "netsim.py"), *target],
-        stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
     with open(PIDFILE_NETSIM, "w") as f:
         f.write(str(proc.pid))
     with open(NETSIM_SIGFILE, "w") as f:
@@ -411,19 +456,21 @@ def netsim_down(args: argparse.Namespace | None = None) -> None:
     #  1) remove the container (if the engine is available),
     #  2) SIGTERM a native pid (pidfile is written only by the native path),
     #  3) if something still answers the panel, hit /admin/shutdown.
-    engine = compose_engine(args.runtime) if args and hasattr(args, "runtime") \
-        else None
+    engine = compose_engine(args.runtime) if args and hasattr(args, "runtime") else None
     if engine and shutil.which(engine):
         sh([engine, "rm", "-f", NETSIM_CONTAINER])
     _pid_kill(PIDFILE_NETSIM, "netsim")
     if get_json(SNMP_PANEL + "/") is not None:
         try:
             urllib.request.urlopen(  # noqa: S310
-                SNMP_PANEL + "/admin/shutdown", timeout=5).read()
+                SNMP_PANEL + "/admin/shutdown", timeout=5
+            ).read()
             print("  netsim stopped")
         except (urllib.error.URLError, OSError):
-            print(f"  WARN: netsim still up but shutdown failed — "
-                  f"stop it yourself (panel {SNMP_PANEL}/admin)")
+            print(
+                f"  WARN: netsim still up but shutdown failed — "
+                f"stop it yourself (panel {SNMP_PANEL}/admin)"
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -456,23 +503,25 @@ def cmd_up(args: argparse.Namespace) -> None:
     if args.mode == "cloud" and snmp:
         # cloud has no site filesystem to write stored walks into — the SNMP
         # layer simply isn't possible there, so drop it (agent hosts stay)
-        print("  cloud mode: skipping the SNMP layer (no site-filesystem "
-              "access for stored walks)")
+        print("  cloud mode: skipping the SNMP layer (no site-filesystem access for stored walks)")
         snmp = False
-    print(f"== estate up: mode={args.mode} scale={args.scale} "
-          f"replicas={args.replicas} snmp={'on' if snmp else 'off'} "
-          f"runtime={args.runtime}")
+    print(
+        f"== estate up: mode={args.mode} scale={args.scale} "
+        f"replicas={args.replicas} snmp={'on' if snmp else 'off'} "
+        f"runtime={args.runtime}"
+    )
 
     delivery = delivery_for(args.mode)
     print(f"* starting the delivery shell ({delivery})")
     shell_up(args)
     wait_for(PANEL + "/", "the delivery shell")
     info = wait_for_children()  # block until children report state (fresh container)
-    print(f"  shell {info['delivery_host']} carrying "
-          f"{len(info['carried_hosts'])} hosts")
+    print(f"  shell {info['delivery_host']} carrying {len(info['carried_hosts'])} hosts")
     if delivery == "datasource":
-        print(f"  agent files under {AGENT_OUTPUT_DIR} "
-              "(read per host via a 'cat $HOSTNAME$' datasource rule)")
+        print(
+            f"  agent files under {AGENT_OUTPUT_DIR} "
+            "(read per host via a 'cat $HOSTNAME$' datasource rule)"
+        )
 
     if snmp:
         print("* starting the SNMP responder (netsim)")
@@ -480,14 +529,16 @@ def cmd_up(args: argparse.Namespace) -> None:
 
     if args.no_checkmk:
         print("* --no-checkmk: skipping site setup")
-        print(f"\nEstate running. Panels: {PANEL}/admin"
-              + (f" and {SNMP_PANEL}/admin" if snmp else ""))
+        print(
+            f"\nEstate running. Panels: {PANEL}/admin"
+            + (f" and {SNMP_PANEL}/admin" if snmp else "")
+        )
         return
 
     print("* configuring Checkmk (deploy/cmk_setup.py)")
-    cmk_setup.main(cmk_args(args, [
-        "--snmp", "on" if snmp else "off",
-        "--agent-output-dir", AGENT_OUTPUT_DIR]))
+    cmk_setup.main(
+        cmk_args(args, ["--snmp", "on" if snmp else "off", "--agent-output-dir", AGENT_OUTPUT_DIR])
+    )
 
 
 def cmd_down(args: argparse.Namespace) -> None:
@@ -498,8 +549,10 @@ def cmd_down(args: argparse.Namespace) -> None:
             cmk_setup.main(cmk_args(args, ["--remove"]))
         except SystemExit as exc:
             if exc.code not in (None, 0):
-                print(f"  (Checkmk teardown incomplete: {exc.code}) — "
-                      "continuing with process shutdown")
+                print(
+                    f"  (Checkmk teardown incomplete: {exc.code}) — "
+                    "continuing with process shutdown"
+                )
     print("* stopping netsim")
     netsim_down(args)
     print("* stopping the piggyback shell")
@@ -526,8 +579,10 @@ def _status_lines(items: list[tuple[str, str]]) -> None:
             mark = "" if state == "healthy" else "   <== not green"
             print(f"  {name:22} {state or 'n/a'}{mark}")
         return
-    print(f"  {len(items) - len(unhealthy)} healthy"
-          + (f", {len(unhealthy)} NOT green:" if unhealthy else ", all green"))
+    print(
+        f"  {len(items) - len(unhealthy)} healthy"
+        + (f", {len(unhealthy)} NOT green:" if unhealthy else ", all green")
+    )
     for name, state in unhealthy:
         print(f"  {name:22} {state}   <== not green")
 
@@ -535,15 +590,19 @@ def _status_lines(items: list[tuple[str, str]]) -> None:
 def cmd_status(_args: argparse.Namespace) -> None:
     shell = get_json(PANEL + "/")
     if shell:
-        print(f"shell   UP  {shell['delivery_host']} "
-              f"({len(shell['carried_hosts'])} hosts, panel {PANEL}/admin)")
+        print(
+            f"shell   UP  {shell['delivery_host']} "
+            f"({len(shell['carried_hosts'])} hosts, panel {PANEL}/admin)"
+        )
         _status_lines([(h["name"], h.get("state")) for h in shell["carried_hosts"]])
     else:
         print(f"shell   DOWN ({PANEL})")
     net = get_json(SNMP_PANEL + "/")
     if net:
-        print(f"netsim  UP  ({len(net['devices'])} devices, "
-              f"panel {SNMP_PANEL}/admin, walks {net['walks_dir']})")
+        print(
+            f"netsim  UP  ({len(net['devices'])} devices, "
+            f"panel {SNMP_PANEL}/admin, walks {net['walks_dir']})"
+        )
         _status_lines([(s, d.get("state")) for s, d in net["devices"].items()])
     else:
         print(f"netsim  DOWN ({SNMP_PANEL})")
@@ -558,8 +617,7 @@ def cmd_toggle(args: argparse.Namespace) -> None:
     elif host in net["devices"]:
         url = f"{SNMP_PANEL}/admin/{host}/{action}"
     else:
-        known = ([h["name"] for h in shell["carried_hosts"]]
-                 + list(net["devices"]))
+        known = [h["name"] for h in shell["carried_hosts"]] + list(net["devices"])
         sys.exit(f"ERROR: unknown host {host!r} — known: {', '.join(known)}")
     try:
         urllib.request.urlopen(url, timeout=10).read()  # noqa: S310
@@ -570,46 +628,76 @@ def cmd_toggle(args: argparse.Namespace) -> None:
 
 # --------------------------------------------------------------------------- #
 def add_site_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--site", nargs="?", const="auto", metavar="NAME",
-                   help="local dev site (no NAME = newest running v* site)")
+    p.add_argument(
+        "--site",
+        nargs="?",
+        const="auto",
+        metavar="NAME",
+        help="local dev site (no NAME = newest running v* site)",
+    )
     p.add_argument("--site-url", help="site base URL (non-dev sites)")
     p.add_argument("--user", help="site user (with --site-url)")
-    p.add_argument("--secret", default=os.environ.get("CMK_AUTOMATION_SECRET"),
-                   help="user secret (with --site-url)")
-    p.add_argument("--force-foreign", action="store_true",
-                   help="activate even with other users' pending changes")
-    p.add_argument("--no-checkmk", action="store_true",
-                   help="only start/stop the simulators, skip the site setup")
+    p.add_argument(
+        "--secret",
+        default=os.environ.get("CMK_AUTOMATION_SECRET"),
+        help="user secret (with --site-url)",
+    )
+    p.add_argument(
+        "--force-foreign",
+        action="store_true",
+        help="activate even with other users' pending changes",
+    )
+    p.add_argument(
+        "--no-checkmk",
+        action="store_true",
+        help="only start/stop the simulators, skip the site setup",
+    )
 
 
 def main() -> None:
     p = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="\n".join(__doc__.split("\n")[3:]))
+        epilog="\n".join(__doc__.split("\n")[3:]),
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def add_up_args(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("--mode", choices=("self-hosted", "cloud"),
-                            default="self-hosted",
-                            help="self-hosted = full access to the site "
-                                 "filesystem (SNMP layer + datasource files); "
-                                 "cloud = Checkmk Cloud/SaaS, piggyback agent "
-                                 "data only, SNMP layer skipped")
+        parser.add_argument(
+            "--mode",
+            choices=("self-hosted", "cloud"),
+            default="self-hosted",
+            help="self-hosted = full access to the site "
+            "filesystem (SNMP layer + datasource files); "
+            "cloud = Checkmk Cloud/SaaS, piggyback agent "
+            "data only, SNMP layer skipped",
+        )
         parser.add_argument("--scale", choices=sorted(SCALES), default="full")
-        parser.add_argument("--replicas", type=int, default=1, metavar="N",
-                            help="stamp out every replicable host class N times")
-        parser.add_argument("--runtime", choices=("docker", "podman", "native"),
-                            default="docker",
-                            help="how to run the delivery shell: docker/podman "
-                                 "(container via `<engine> compose`) or native "
-                                 "(a plain background process, no engine)")
-        parser.add_argument("--no-snmp", action="store_true",
-                            help="skip the SNMP layer even at --scale full")
-        parser.add_argument("--force", action="store_true",
-                            help="reconfigure Checkmk even if nothing changed "
-                                 "(re-run discovery + activation); by default an "
-                                 "unchanged re-run short-circuits in ~1s")
+        parser.add_argument(
+            "--replicas",
+            type=int,
+            default=1,
+            metavar="N",
+            help="stamp out every replicable host class N times",
+        )
+        parser.add_argument(
+            "--runtime",
+            choices=("docker", "podman", "native"),
+            default="docker",
+            help="how to run the delivery shell: docker/podman "
+            "(container via `<engine> compose`) or native "
+            "(a plain background process, no engine)",
+        )
+        parser.add_argument(
+            "--no-snmp", action="store_true", help="skip the SNMP layer even at --scale full"
+        )
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help="reconfigure Checkmk even if nothing changed "
+            "(re-run discovery + activation); by default an "
+            "unchanged re-run short-circuits in ~1s",
+        )
         add_site_args(parser)
 
     up = sub.add_parser("up", help="start simulators + configure Checkmk")
@@ -617,14 +705,13 @@ def main() -> None:
     up.set_defaults(func=cmd_up)
 
     down = sub.add_parser("down", help="teardown Checkmk objects + stop everything")
-    down.add_argument("--runtime", choices=("docker", "podman", "native"),
-                      default="docker")
+    down.add_argument("--runtime", choices=("docker", "podman", "native"), default="docker")
     add_site_args(down)
     down.set_defaults(func=cmd_down)
 
     replace = sub.add_parser(
-        "replace", aliases=["redeploy"],
-        help="full teardown + fresh deploy (down then up)")
+        "replace", aliases=["redeploy"], help="full teardown + fresh deploy (down then up)"
+    )
     add_up_args(replace)
     replace.set_defaults(func=cmd_replace)
 

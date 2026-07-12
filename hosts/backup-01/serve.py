@@ -16,6 +16,7 @@ Config via env:
   AGENT_VERSION       default 2.5.0-2026.04.03
   STATE_FILE          default /var/tmp/cmk-demo-backup-state.json
 """
+
 from __future__ import annotations
 
 import json
@@ -46,7 +47,7 @@ _LAST_BACKUP_AGE_S: float = 6.5 * 3600  # default; overridden from state file
 #  Verbatim machinery from the dying-disk / app-worker reference.
 #  See CLAUDE.md for why a single sine is wrong.
 # --------------------------------------------------------------------------- #
-_ALL_COUNTERS: dict[str, "Counter"] = {}
+_ALL_COUNTERS: dict[str, Counter] = {}
 
 
 class _Wobble:
@@ -56,9 +57,11 @@ class _Wobble:
         self.noise = 0.0
 
     def step(self, now: float) -> float:
-        harm = (0.60 * math.sin(self.omega * now + self.phase)
-                + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
-                + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5))
+        harm = (
+            0.60 * math.sin(self.omega * now + self.phase)
+            + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
+            + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5)
+        )
         self.noise = max(-1.5, min(1.5, self.noise * 0.9 + random.gauss(0.0, 0.25)))
         return max(-1.0, min(1.0, (harm + 0.45 * self.noise) / 1.8))
 
@@ -67,9 +70,15 @@ _GAUGES: dict[str, _Wobble] = {}
 _GAUGE_LOCK = threading.Lock()
 
 
-def gauge(name: str, base: float, *, amp_abs: float | None = None,
-          amp_frac: float | None = None, phase: float = 0.0,
-          period: float = 1200.0) -> float:
+def gauge(
+    name: str,
+    base: float,
+    *,
+    amp_abs: float | None = None,
+    amp_frac: float | None = None,
+    phase: float = 0.0,
+    period: float = 1200.0,
+) -> float:
     with _GAUGE_LOCK:
         w = _GAUGES.get(name)
         if w is None:
@@ -81,8 +90,14 @@ def gauge(name: str, base: float, *, amp_abs: float | None = None,
 
 
 class Counter:
-    def __init__(self, name: str, phase: float = 0.0, amp: float = 0.30,
-                 period: float = 1200.0, start: float = 0.0) -> None:
+    def __init__(
+        self,
+        name: str,
+        phase: float = 0.0,
+        amp: float = 0.30,
+        period: float = 1200.0,
+        start: float = 0.0,
+    ) -> None:
         self.acc = start
         self.last = time.time()
         self.amp = amp
@@ -118,17 +133,17 @@ C_PGMAJ = Counter("kernel.pgmajfault", phase=5.4, start=_aged(0.1))
 #   sda — 500 GiB NVMe system disk (OS + small working set)
 #   sdb — 4 TiB SATA SSD backup-storage volume (/srv/backup), moderate I/O
 SDA = {
-    "rd_ios":  Counter("sda.rd_ios",  phase=0.0, start=_aged(3)),
+    "rd_ios": Counter("sda.rd_ios", phase=0.0, start=_aged(3)),
     "rd_ticks": Counter("sda.rd_ticks", phase=0.2, start=_aged(2)),
-    "wr_ios":  Counter("sda.wr_ios",  phase=0.4, start=_aged(8)),
+    "wr_ios": Counter("sda.wr_ios", phase=0.4, start=_aged(8)),
     "wr_ticks": Counter("sda.wr_ticks", phase=0.6, start=_aged(5)),
     "io_ticks": Counter("sda.io_ticks", phase=0.8, amp=0.05, start=_aged(6)),
 }
 # sdb carries nightly backup I/O; average across the day is still modest
 SDB = {
-    "rd_ios":  Counter("sdb.rd_ios",  phase=1.0, start=_aged(12)),
+    "rd_ios": Counter("sdb.rd_ios", phase=1.0, start=_aged(12)),
     "rd_ticks": Counter("sdb.rd_ticks", phase=1.2, start=_aged(8)),
-    "wr_ios":  Counter("sdb.wr_ios",  phase=1.4, start=_aged(35)),
+    "wr_ios": Counter("sdb.wr_ios", phase=1.4, start=_aged(35)),
     "wr_ticks": Counter("sdb.wr_ticks", phase=1.6, start=_aged(28)),
     "io_ticks": Counter("sdb.io_ticks", phase=1.8, amp=0.05, start=_aged(32)),
 }
@@ -151,24 +166,66 @@ def _smart_json(name: str, model: str, serial: str, hours: int, temp: int) -> st
         "smart_status": {"passed": True},
         "power_on_time": {"hours": hours},
         "temperature": {"current": temp},
-        "ata_smart_attributes": {"table": [
-            {"id": 5,   "name": "Reallocated_Sector_Ct",    "value": 100, "thresh": 10,
-             "raw": {"value": 0}},
-            {"id": 9,   "name": "Power_On_Hours",           "value": 96,  "thresh": 0,
-             "raw": {"value": hours}},
-            {"id": 12,  "name": "Power_Cycle_Count",        "value": 100, "thresh": 0,
-             "raw": {"value": 18}},
-            {"id": 177, "name": "Wear_Leveling_Count",      "value": 94,  "thresh": 5,
-             "raw": {"value": 92}},
-            {"id": 179, "name": "Used_Rsvd_Blk_Cnt_Tot",   "value": 100, "thresh": 10,
-             "raw": {"value": 0}},
-            {"id": 187, "name": "Reported_Uncorrect",       "value": 100, "thresh": 0,
-             "raw": {"value": 0}},
-            {"id": 197, "name": "Current_Pending_Sector",   "value": 100, "thresh": 0,
-             "raw": {"value": 0}},
-            {"id": 199, "name": "UDMA_CRC_Error_Count",     "value": 200, "thresh": 0,
-             "raw": {"value": 0}},
-        ]},
+        "ata_smart_attributes": {
+            "table": [
+                {
+                    "id": 5,
+                    "name": "Reallocated_Sector_Ct",
+                    "value": 100,
+                    "thresh": 10,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 9,
+                    "name": "Power_On_Hours",
+                    "value": 96,
+                    "thresh": 0,
+                    "raw": {"value": hours},
+                },
+                {
+                    "id": 12,
+                    "name": "Power_Cycle_Count",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 18},
+                },
+                {
+                    "id": 177,
+                    "name": "Wear_Leveling_Count",
+                    "value": 94,
+                    "thresh": 5,
+                    "raw": {"value": 92},
+                },
+                {
+                    "id": 179,
+                    "name": "Used_Rsvd_Blk_Cnt_Tot",
+                    "value": 100,
+                    "thresh": 10,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 187,
+                    "name": "Reported_Uncorrect",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 197,
+                    "name": "Current_Pending_Sector",
+                    "value": 100,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+                {
+                    "id": 199,
+                    "name": "UDMA_CRC_Error_Count",
+                    "value": 200,
+                    "thresh": 0,
+                    "raw": {"value": 0},
+                },
+            ]
+        },
     }
     return json.dumps(doc, separators=(",", ":"))
 
@@ -183,27 +240,29 @@ def filesystem_usage(now: float) -> tuple[int, int]:
     day = 86_400.0
 
     # root: ~10 GiB base + slow log creep (max ~800 MiB before logrotate) + wobble
-    root_size = 41_943_040   # 40 GiB in KiB
-    root_base = 10_485_760   # ~10 GiB
-    root_logs = 819_200 * ((now % day) / day)       # 0..800 MiB daily sawtooth
-    root_growth = min(524_288, uptime * 0.02)        # forever creep, capped
-    root_used = int(root_base + root_logs + root_growth
-                    + gauge("fs.root", 0, amp_abs=40_000, period=1600))
+    root_size = 41_943_040  # 40 GiB in KiB
+    root_base = 10_485_760  # ~10 GiB
+    root_logs = 819_200 * ((now % day) / day)  # 0..800 MiB daily sawtooth
+    root_growth = min(524_288, uptime * 0.02)  # forever creep, capped
+    root_used = int(
+        root_base + root_logs + root_growth + gauge("fs.root", 0, amp_abs=40_000, period=1600)
+    )
 
     # /srv/backup: ~70 % of 4 TiB. Restic prune runs ~2 h after the
     # backup window and reclaims ~5 GiB daily; slow repo growth between prunes.
     # 4 TiB in KiB: 4 * 1024 GiB * 1048576 KiB/GiB = 4096 * 1048576
     bkp_size_kib = 4096 * 1048576  # 4 TiB in KiB
-    bkp_base = int(0.695 * bkp_size_kib)            # ~69.5 % base
+    bkp_base = int(0.695 * bkp_size_kib)  # ~69.5 % base
     # Daily ~5 GiB sawtooth: repo grows between backups (slow), prune reclaims
     daily_period = day
-    prune_reclaim_kib = 5 * 1048576                 # 5 GiB reclaimed per day by prune
+    prune_reclaim_kib = 5 * 1048576  # 5 GiB reclaimed per day by prune
     # Sawtooth: rises from 0 to prune_reclaim over the day, drops at midnight
     bkp_growth_daily = int(prune_reclaim_kib * ((now % daily_period) / daily_period))
     # Long-term forever growth: ~100 MiB/day = ~118 KiB/s ... slow creep
     bkp_forever = min(5 * 1048576, int(uptime * 1.3))
-    bkp_used = int(bkp_base + bkp_growth_daily + bkp_forever
-                   + gauge("fs.bkp", 0, amp_abs=100_000, period=900))
+    bkp_used = int(
+        bkp_base + bkp_growth_daily + bkp_forever + gauge("fs.bkp", 0, amp_abs=100_000, period=900)
+    )
 
     return root_used, bkp_used, root_size, bkp_size_kib
 
@@ -218,8 +277,8 @@ def build_agent_output() -> bytes:
 
     # ---- load: backup host is mostly idle. 15-min load well under 20 (default
     #      WARN for 4 cores). Spikes during nightly window but that's past. ---  #
-    l1 = round(gauge("load1",  0.28, amp_frac=0.30, phase=0.2, period=300), 2)
-    l5 = round(gauge("load5",  0.22, amp_frac=0.16, phase=1.0, period=900), 2)
+    l1 = round(gauge("load1", 0.28, amp_frac=0.30, phase=0.2, period=300), 2)
+    l5 = round(gauge("load5", 0.22, amp_frac=0.16, phase=1.0, period=900), 2)
     l15 = round(gauge("load15", 0.18, amp_frac=0.08, phase=2.0, period=2400), 2)
     # Clamp positive
     l1 = max(0.01, l1)
@@ -229,54 +288,60 @@ def build_agent_output() -> bytes:
     total_procs = 298
 
     # ---- /proc/stat -------------------------------------------------------- #
-    user   = C_USER.sample(20)
+    user = C_USER.sample(20)
     system = C_SYSTEM.sample(8)
-    idle   = C_IDLE.sample(360)
+    idle = C_IDLE.sample(360)
     iowait = C_IOWAIT.sample(4)
 
     # ---- diskstat ---------------------------------------------------------- #
-    sda_rd  = SDA["rd_ios"].sample(3)
+    sda_rd = SDA["rd_ios"].sample(3)
     sda_rdt = SDA["rd_ticks"].sample(2)
-    sda_wr  = SDA["wr_ios"].sample(8)
+    sda_wr = SDA["wr_ios"].sample(8)
     sda_wrt = SDA["wr_ticks"].sample(5)
     sda_iot = SDA["io_ticks"].sample(6)
 
-    sdb_rd  = SDB["rd_ios"].sample(12)
+    sdb_rd = SDB["rd_ios"].sample(12)
     sdb_rdt = SDB["rd_ticks"].sample(8)
-    sdb_wr  = SDB["wr_ios"].sample(35)
+    sdb_wr = SDB["wr_ios"].sample(35)
     sdb_wrt = SDB["wr_ticks"].sample(28)
     sdb_iot = SDB["io_ticks"].sample(32)
 
     rx_bytes = C_RX_B.sample(90_000)
     tx_bytes = C_TX_B.sample(70_000)
-    rx_pkts  = C_RX_P.sample(220)
-    tx_pkts  = C_TX_P.sample(180)
+    rx_pkts = C_RX_P.sample(220)
+    tx_pkts = C_TX_P.sample(180)
 
     # ---- SMART temps (SSD devices, well under 35°C WARN default) ----------- #
     sda_temp = round(gauge("smart.sda.temp", 28, amp_abs=1.0, phase=2.1, period=1100))
     sdb_temp = round(gauge("smart.sdb.temp", 30, amp_abs=1.2, phase=3.4, period=1300))
 
-    sda_smart = _smart_json("/dev/sda", "SAMSUNG MZNLN512HAJQ-000H1",
-                            "S3EVNX0K271481", int(uptime / 3600) + 10200, sda_temp)
-    sdb_smart = _smart_json("/dev/sdb", "Samsung SSD 870 EVO 4TB",
-                            "S62DNX0T908311", int(uptime / 3600) + 8700, sdb_temp)
+    sda_smart = _smart_json(
+        "/dev/sda",
+        "SAMSUNG MZNLN512HAJQ-000H1",
+        "S3EVNX0K271481",
+        int(uptime / 3600) + 10200,
+        sda_temp,
+    )
+    sdb_smart = _smart_json(
+        "/dev/sdb", "Samsung SSD 870 EVO 4TB", "S62DNX0T908311", int(uptime / 3600) + 8700, sdb_temp
+    )
 
     # ---- memory: backup host, ~6 GiB used of 8 GiB. No swap pressure. ----- #
-    mem_total   = 8_388_608    # 8 GiB in KiB
-    swap_total  = 2_097_152    # 2 GiB swap, empty
-    commit_limit = swap_total + mem_total // 2   # kernel default
+    mem_total = 8_388_608  # 8 GiB in KiB
+    swap_total = 2_097_152  # 2 GiB swap, empty
+    commit_limit = swap_total + mem_total // 2  # kernel default
 
     cached = int(gauge("mem.cached", 2_200_000, amp_frac=0.02, phase=0.4, period=1500))
-    buffers   = 180_000
-    sreclaim  = 380_000
+    buffers = 180_000
+    sreclaim = 380_000
     swapcached = 0
-    caches    = cached + buffers + swapcached + sreclaim
-    mem_free  = max(200_000, mem_total - 3_600_000 - caches)
-    swap_free = swap_total   # always empty on a healthy backup host
+    caches = cached + buffers + swapcached + sreclaim
+    mem_free = max(200_000, mem_total - 3_600_000 - caches)
+    swap_free = swap_total  # always empty on a healthy backup host
     committed = int(gauge("mem.committed", 4_100_000, amp_frac=0.01, phase=1.2, period=1700))
 
     shmem = 32_768
-    anon  = max(1_000_000, mem_total - mem_free - caches - 500_000)
+    anon = max(1_000_000, mem_total - mem_free - caches - 500_000)
     anon_lru = anon + shmem
     file_lru = max(0, buffers + cached - shmem)
     mem_available = max(mem_free, mem_free + file_lru + sreclaim)
@@ -284,11 +349,10 @@ def build_agent_output() -> bytes:
     i_anon = anon_lru - a_anon
     a_file = int(file_lru * 0.30)
     i_file = file_lru - a_file
-    slab   = sreclaim + 98_304
+    slab = sreclaim + 98_304
     threads = 186
-    kernel_stack = threads * 16   # 16 KiB per thread
-    dirty  = max(4_096, int(gauge("mem.dirty", 12_288, amp_frac=0.12,
-                                  phase=2.0, period=800)))
+    kernel_stack = threads * 16  # 16 KiB per thread
+    dirty = max(4_096, int(gauge("mem.dirty", 12_288, amp_frac=0.12, phase=2.0, period=800)))
 
     # ---- filesystem usage -------------------------------------------------- #
     root_used, bkp_used, root_size, bkp_size = filesystem_usage(time.time())
@@ -298,18 +362,18 @@ def build_agent_output() -> bytes:
     # ---- last backup age (loaded from state; increases monotonically) ------- #
     last_bkp_age_s = time.time() - START + _LAST_BACKUP_AGE_S
     # Clamp to 6-8 h for a believable "ran last night" story
-    last_bkp_age_s_display = max(6 * 3600, min(8 * 3600,
-                                               _LAST_BACKUP_AGE_S + (time.time() - START) % 3600))
+    last_bkp_age_s_display = max(
+        6 * 3600, min(8 * 3600, _LAST_BACKUP_AGE_S + (time.time() - START) % 3600)
+    )
 
     # ---- cert expiry (dynamically 330 days out) ----------------------------- #
-    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000",
-                            time.gmtime(now + 330 * 86400))
+    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(now + 330 * 86400))
 
     # ---- timesyncd dynamic timestamps -------------------------------------- #
     # sawtooths 0->34min (poll interval), anchored to boot so it's continuous
     # across restarts and independent of push-lagged payload timestamps.
     last_sync = now - int((now - START) % 2048)
-    sync_str  = time.strftime("%a %Y-%m-%d %H:%M:%S UTC", time.gmtime(last_sync))
+    sync_str = time.strftime("%a %Y-%m-%d %H:%M:%S UTC", time.gmtime(last_sync))
 
     lines: list[str] = []
     a = lines.append
@@ -335,34 +399,52 @@ def build_agent_output() -> bytes:
     #  TLS-pretend controller status
     # ----------------------------------------------------------------------- #
     a("<<<cmk_agent_ctl_status:sep(0)>>>")
-    a(json.dumps({
-        "version": AGENT_VERSION, "agent_socket_operational": True,
-        "ip_allowlist": [], "allow_legacy_pull": False,
-        "connections": [{
-            "site_id": "monitoring/prod", "receiver_port": 8000,
-            "uuid": "c38a2b91-4d7e-11ef-9c12-0a7f3e5b8d04",
-            "local": {"connection_mode": "pull-agent", "cert_info": {
-                "issuer": "Site 'prod' local CA",
-                "from": "Tue, 03 Jun 2025 09:12:44 +0000",
-                "to": cert_to}},
-            "remote": "remote_query_disabled"}]}, separators=(",", ":")))
+    a(
+        json.dumps(
+            {
+                "version": AGENT_VERSION,
+                "agent_socket_operational": True,
+                "ip_allowlist": [],
+                "allow_legacy_pull": False,
+                "connections": [
+                    {
+                        "site_id": "monitoring/prod",
+                        "receiver_port": 8000,
+                        "uuid": "c38a2b91-4d7e-11ef-9c12-0a7f3e5b8d04",
+                        "local": {
+                            "connection_mode": "pull-agent",
+                            "cert_info": {
+                                "issuer": "Site 'prod' local CA",
+                                "from": "Tue, 03 Jun 2025 09:12:44 +0000",
+                                "to": cert_to,
+                            },
+                        },
+                        "remote": "remote_query_disabled",
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        )
+    )
 
     a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
     a("pluginsdir /opt/checkmk/agent/default/package/plugins")
     a("localdir /opt/checkmk/agent/default/package/local")
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"'
-      % AGENT_VERSION)
-    a('/opt/checkmk/agent/default/package/plugins/86400/mk_job:CMK_VERSION="%s"'
-      % AGENT_VERSION)
+    a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"' % AGENT_VERSION)
+    a('/opt/checkmk/agent/default/package/plugins/86400/mk_job:CMK_VERSION="%s"' % AGENT_VERSION)
 
     # ----------------------------------------------------------------------- #
     #  df_v2
     # ----------------------------------------------------------------------- #
     a("<<<df_v2>>>")
-    a(f"/dev/sda1 ext4 {root_size} {root_used} {root_size - root_used} "
-      f"{round(root_used / root_size * 100)}% /")
-    a(f"/dev/sdb1 ext4 {bkp_size} {bkp_used} {bkp_size - bkp_used} "
-      f"{round(bkp_used / bkp_size * 100)}% /srv/backup")
+    a(
+        f"/dev/sda1 ext4 {root_size} {root_used} {root_size - root_used} "
+        f"{round(root_used / root_size * 100)}% /"
+    )
+    a(
+        f"/dev/sdb1 ext4 {bkp_size} {bkp_used} {bkp_size - bkp_used} "
+        f"{round(bkp_used / bkp_size * 100)}% /srv/backup"
+    )
     a("[df_inodes_start]")
     a(f"/dev/sda1 ext4 2621440 312814 {2621440 - 312814} 12% /")
     # Backup volume: large files, very few inodes used (~1 %)
@@ -471,11 +553,13 @@ def build_agent_output() -> bytes:
     a(f"[[[{last_sync}]]]")
 
     a("<<<timesyncd_ntpmessage:sep(10)>>>")
-    a("NTPMessage={ Leap=0, Version=4, Mode=4, Stratum=2, Precision=-25, "
-      "RootDelay=8.114ms, RootDispersion=1.009ms, Reference=A297B12C, "
-      f"OriginateTimestamp={sync_str}, ReceiveTimestamp={sync_str}, "
-      f"TransmitTimestamp={sync_str}, DestinationTimestamp={sync_str}, "
-      "Ignored=no, PacketCount=42, Jitter=2.118ms }")
+    a(
+        "NTPMessage={ Leap=0, Version=4, Mode=4, Stratum=2, Precision=-25, "
+        "RootDelay=8.114ms, RootDispersion=1.009ms, Reference=A297B12C, "
+        f"OriginateTimestamp={sync_str}, ReceiveTimestamp={sync_str}, "
+        f"TransmitTimestamp={sync_str}, DestinationTimestamp={sync_str}, "
+        "Ignored=no, PacketCount=42, Jitter=2.118ms }"
+    )
     a("Timezone=UTC")
 
     # ----------------------------------------------------------------------- #
@@ -499,21 +583,26 @@ def build_agent_output() -> bytes:
     # ----------------------------------------------------------------------- #
     a("<<<diskstat>>>")
     a(str(now))
-    a(f"8 0 sda {sda_rd} 0 {sda_rd * 16} {sda_rdt} "
-      f"{sda_wr} 0 {sda_wr * 24} {sda_wrt} 0 {sda_iot} {sda_iot * 2} 0 0 0 0")
-    a(f"8 16 sdb {sdb_rd} 0 {sdb_rd * 32} {sdb_rdt} "
-      f"{sdb_wr} 0 {sdb_wr * 48} {sdb_wrt} 0 {sdb_iot} {sdb_iot * 2} 0 0 0 0")
+    a(
+        f"8 0 sda {sda_rd} 0 {sda_rd * 16} {sda_rdt} "
+        f"{sda_wr} 0 {sda_wr * 24} {sda_wrt} 0 {sda_iot} {sda_iot * 2} 0 0 0 0"
+    )
+    a(
+        f"8 16 sdb {sdb_rd} 0 {sdb_rd * 32} {sdb_rdt} "
+        f"{sdb_wr} 0 {sdb_wr * 48} {sdb_wrt} 0 {sdb_iot} {sdb_iot * 2} 0 0 0 0"
+    )
 
     # ----------------------------------------------------------------------- #
     #  lnx_if (both variants — see CLAUDE.md)
     # ----------------------------------------------------------------------- #
     a("<<<lnx_if>>>")
     a("[start_iplink]")
-    a("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN "
-      "group default qlen 1000")
+    a("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000")
     a("    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00")
-    a("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel "
-      "state UP group default qlen 1000")
+    a(
+        "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel "
+        "state UP group default qlen 1000"
+    )
     a("    link/ether 02:42:ac:11:00:3b brd ff:ff:ff:ff:ff:ff")
     a("[end_iplink]")
     a("<<<lnx_if:sep(58)>>>")
@@ -549,70 +638,201 @@ def build_agent_output() -> bytes:
     a("[processes]")
     a("[header] CGROUP USER VSZ RSS TIME ELAPSED PID COMMAND")
     for cgs, usr, vsz, rss, cputime, elapsed, pid, cmd in (
-        ("init.scope",
-         "root", 168_000, 12_800, "00:00:14", "12-00:08:21", 1,
-         "/sbin/init"),
-        ("system.slice/systemd-journald.service",
-         "root", 58_300, 19_400, "00:00:52", "12-00:07:54", 401,
-         "/usr/lib/systemd/systemd-journald"),
-        ("system.slice/systemd-udevd.service",
-         "root", 25_900, 7_900, "00:00:01", "12-00:07:53", 438,
-         "/usr/lib/systemd/systemd-udevd"),
-        ("system.slice/systemd-resolved.service",
-         "systemd-resolve", 26_600, 13_100, "00:00:28", "12-00:07:52", 489,
-         "/usr/lib/systemd/systemd-resolved"),
-        ("system.slice/systemd-timesyncd.service",
-         "systemd-timesync", 91_000, 7_600, "00:00:08", "12-00:07:51", 503,
-         "/usr/lib/systemd/systemd-timesyncd"),
-        ("system.slice/dbus.service",
-         "messagebus", 10_200, 5_100, "00:00:11", "12-00:07:51", 515,
-         "@dbus-daemon --system --address=systemd:"),
-        ("system.slice/rsyslog.service",
-         "syslog", 222_400, 6_700, "00:00:22", "12-00:07:50", 612,
-         "/usr/sbin/rsyslogd -n -iNONE"),
-        ("system.slice/ssh.service",
-         "root", 15_400, 9_000, "00:00:01", "12-00:07:48", 690,
-         "sshd: /usr/sbin/sshd -D [listener]"),
-        ("system.slice/cron.service",
-         "root", 11_500, 2_500, "00:00:01", "12-00:07:47", 705,
-         "/usr/sbin/cron -f -P"),
-        ("system.slice/smartmontools.service",
-         "root", 12_012, 5_904, "00:00:00", "12-00:07:45", 820,
-         "/usr/sbin/smartd -n"),
+        ("init.scope", "root", 168_000, 12_800, "00:00:14", "12-00:08:21", 1, "/sbin/init"),
+        (
+            "system.slice/systemd-journald.service",
+            "root",
+            58_300,
+            19_400,
+            "00:00:52",
+            "12-00:07:54",
+            401,
+            "/usr/lib/systemd/systemd-journald",
+        ),
+        (
+            "system.slice/systemd-udevd.service",
+            "root",
+            25_900,
+            7_900,
+            "00:00:01",
+            "12-00:07:53",
+            438,
+            "/usr/lib/systemd/systemd-udevd",
+        ),
+        (
+            "system.slice/systemd-resolved.service",
+            "systemd-resolve",
+            26_600,
+            13_100,
+            "00:00:28",
+            "12-00:07:52",
+            489,
+            "/usr/lib/systemd/systemd-resolved",
+        ),
+        (
+            "system.slice/systemd-timesyncd.service",
+            "systemd-timesync",
+            91_000,
+            7_600,
+            "00:00:08",
+            "12-00:07:51",
+            503,
+            "/usr/lib/systemd/systemd-timesyncd",
+        ),
+        (
+            "system.slice/dbus.service",
+            "messagebus",
+            10_200,
+            5_100,
+            "00:00:11",
+            "12-00:07:51",
+            515,
+            "@dbus-daemon --system --address=systemd:",
+        ),
+        (
+            "system.slice/rsyslog.service",
+            "syslog",
+            222_400,
+            6_700,
+            "00:00:22",
+            "12-00:07:50",
+            612,
+            "/usr/sbin/rsyslogd -n -iNONE",
+        ),
+        (
+            "system.slice/ssh.service",
+            "root",
+            15_400,
+            9_000,
+            "00:00:01",
+            "12-00:07:48",
+            690,
+            "sshd: /usr/sbin/sshd -D [listener]",
+        ),
+        (
+            "system.slice/cron.service",
+            "root",
+            11_500,
+            2_500,
+            "00:00:01",
+            "12-00:07:47",
+            705,
+            "/usr/sbin/cron -f -P",
+        ),
+        (
+            "system.slice/smartmontools.service",
+            "root",
+            12_012,
+            5_904,
+            "00:00:00",
+            "12-00:07:45",
+            820,
+            "/usr/sbin/smartd -n",
+        ),
         # restic-backup.timer triggers the job (currently idle; last run ~6 h ago)
         # The systemd-timer daemon itself doesn't stay resident — the oneshot service
         # ran and exited. We show the timer process waiting for next trigger.
-        ("system.slice/atd.service",
-         "daemon", 9_800, 2_200, "00:00:00", "12-00:07:43", 834,
-         "/usr/sbin/atd -f"),
-        ("system.slice/multipathd.service",
-         "root", 41_200, 15_400, "00:00:04", "12-00:07:42", 850,
-         "/sbin/multipathd -d -s"),
-        ("system.slice/networkd-dispatcher.service",
-         "root", 31_500, 11_200, "00:00:00", "12-00:07:41", 890,
-         "/usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers"),
-        ("system.slice/polkit.service",
-         "root", 24_200, 9_800, "00:00:02", "12-00:07:40", 910,
-         "/usr/lib/polkit-1/polkitd --no-debug"),
-        ("system.slice/systemd-logind.service",
-         "root", 30_800, 9_100, "00:00:03", "12-00:07:40", 930,
-         "/usr/lib/systemd/systemd-logind"),
-        ("system.slice/systemd-networkd.service",
-         "root", 27_400, 9_600, "00:00:12", "12-00:07:39", 960,
-         "/usr/lib/systemd/systemd-networkd"),
-        ("system.slice/udisks2.service",
-         "root", 32_600, 12_800, "00:00:01", "12-00:07:38", 980,
-         "/usr/lib/udisks2/udisksd"),
-        ("system.slice/unattended-upgrades.service",
-         "root", 68_000, 22_400, "00:00:00", "12-00:07:37", 1002,
-         "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal"),
+        (
+            "system.slice/atd.service",
+            "daemon",
+            9_800,
+            2_200,
+            "00:00:00",
+            "12-00:07:43",
+            834,
+            "/usr/sbin/atd -f",
+        ),
+        (
+            "system.slice/multipathd.service",
+            "root",
+            41_200,
+            15_400,
+            "00:00:04",
+            "12-00:07:42",
+            850,
+            "/sbin/multipathd -d -s",
+        ),
+        (
+            "system.slice/networkd-dispatcher.service",
+            "root",
+            31_500,
+            11_200,
+            "00:00:00",
+            "12-00:07:41",
+            890,
+            "/usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers",
+        ),
+        (
+            "system.slice/polkit.service",
+            "root",
+            24_200,
+            9_800,
+            "00:00:02",
+            "12-00:07:40",
+            910,
+            "/usr/lib/polkit-1/polkitd --no-debug",
+        ),
+        (
+            "system.slice/systemd-logind.service",
+            "root",
+            30_800,
+            9_100,
+            "00:00:03",
+            "12-00:07:40",
+            930,
+            "/usr/lib/systemd/systemd-logind",
+        ),
+        (
+            "system.slice/systemd-networkd.service",
+            "root",
+            27_400,
+            9_600,
+            "00:00:12",
+            "12-00:07:39",
+            960,
+            "/usr/lib/systemd/systemd-networkd",
+        ),
+        (
+            "system.slice/udisks2.service",
+            "root",
+            32_600,
+            12_800,
+            "00:00:01",
+            "12-00:07:38",
+            980,
+            "/usr/lib/udisks2/udisksd",
+        ),
+        (
+            "system.slice/unattended-upgrades.service",
+            "root",
+            68_000,
+            22_400,
+            "00:00:00",
+            "12-00:07:37",
+            1002,
+            "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal",
+        ),
         # two SSH session placeholders (ops checking backup status)
-        ("user.slice/user-0.slice/session-1.scope",
-         "root", 15_600, 9_200, "00:00:00", "00:02:14", 8210,
-         "sshd: root@pts/0"),
-        ("user.slice/user-0.slice/session-1.scope",
-         "root", 7_800, 4_100, "00:00:00", "00:02:14", 8211,
-         "-bash"),
+        (
+            "user.slice/user-0.slice/session-1.scope",
+            "root",
+            15_600,
+            9_200,
+            "00:00:00",
+            "00:02:14",
+            8210,
+            "sshd: root@pts/0",
+        ),
+        (
+            "user.slice/user-0.slice/session-1.scope",
+            "root",
+            7_800,
+            4_100,
+            "00:00:00",
+            "00:02:14",
+            8211,
+            "-bash",
+        ),
     ):
         a(f"0::/{cgs} {usr} {vsz} {rss} {cputime} {elapsed} {pid} {cmd}")
 
@@ -624,39 +844,59 @@ def build_agent_output() -> bytes:
     a("<<<systemd_units>>>")
     units = [
         # The two backup oneshots — ran and exited successfully last night
-        ("restic-backup.service",    "active",   "exited",  "Restic nightly backup to offsite repo"),
-        ("restic-prune.service",     "active",   "exited",  "Restic repository prune and compact"),
+        ("restic-backup.service", "active", "exited", "Restic nightly backup to offsite repo"),
+        ("restic-prune.service", "active", "exited", "Restic repository prune and compact"),
         # Timers
-        ("restic-backup.timer",      "active",   "waiting", "Timer: nightly restic backup"),
-        ("restic-prune.timer",       "active",   "waiting", "Timer: nightly restic prune"),
+        ("restic-backup.timer", "active", "waiting", "Timer: nightly restic backup"),
+        ("restic-prune.timer", "active", "waiting", "Timer: nightly restic prune"),
         # Standard Ubuntu 24.04 services
-        ("ssh.service",              "active",   "running", "OpenBSD Secure Shell server"),
-        ("cron.service",             "active",   "running", "Regular background program processing daemon"),
-        ("atd.service",              "active",   "running", "Deferred execution scheduler"),
-        ("dbus.service",             "active",   "running", "D-Bus System Message Bus"),
-        ("multipathd.service",       "active",   "running", "Device-Mapper Multipath Device Controller"),
-        ("networkd-dispatcher.service", "active", "running", "Dispatcher daemon for systemd-networkd"),
-        ("polkit.service",           "active",   "running", "Authorization Manager"),
-        ("rsyslog.service",          "active",   "running", "System Logging Service"),
-        ("smartmontools.service",    "active",   "running", "Self Monitoring and Reporting Technology (SMART) Daemon"),
-        ("systemd-journald.service", "active",   "running", "Journal Service"),
-        ("systemd-logind.service",   "active",   "running", "User Login Management"),
-        ("systemd-networkd.service", "active",   "running", "Network Configuration"),
-        ("systemd-resolved.service", "active",   "running", "Network Name Resolution"),
-        ("systemd-timesyncd.service","active",   "running", "Network Time Synchronization"),
-        ("systemd-udevd.service",    "active",   "running", "Rule-based Manager for Device Events and Files"),
-        ("udisks2.service",          "active",   "running", "Disk Manager"),
-        ("unattended-upgrades.service", "active","running", "Unattended Upgrades Shutdown"),
-        ("user@0.service",           "active",   "running", "User Manager for UID 0"),
-        ("getty@tty1.service",       "active",   "running", "Getty on tty1"),
+        ("ssh.service", "active", "running", "OpenBSD Secure Shell server"),
+        ("cron.service", "active", "running", "Regular background program processing daemon"),
+        ("atd.service", "active", "running", "Deferred execution scheduler"),
+        ("dbus.service", "active", "running", "D-Bus System Message Bus"),
+        ("multipathd.service", "active", "running", "Device-Mapper Multipath Device Controller"),
+        (
+            "networkd-dispatcher.service",
+            "active",
+            "running",
+            "Dispatcher daemon for systemd-networkd",
+        ),
+        ("polkit.service", "active", "running", "Authorization Manager"),
+        ("rsyslog.service", "active", "running", "System Logging Service"),
+        (
+            "smartmontools.service",
+            "active",
+            "running",
+            "Self Monitoring and Reporting Technology (SMART) Daemon",
+        ),
+        ("systemd-journald.service", "active", "running", "Journal Service"),
+        ("systemd-logind.service", "active", "running", "User Login Management"),
+        ("systemd-networkd.service", "active", "running", "Network Configuration"),
+        ("systemd-resolved.service", "active", "running", "Network Name Resolution"),
+        ("systemd-timesyncd.service", "active", "running", "Network Time Synchronization"),
+        (
+            "systemd-udevd.service",
+            "active",
+            "running",
+            "Rule-based Manager for Device Events and Files",
+        ),
+        ("udisks2.service", "active", "running", "Disk Manager"),
+        ("unattended-upgrades.service", "active", "running", "Unattended Upgrades Shutdown"),
+        ("user@0.service", "active", "running", "User Manager for UID 0"),
+        ("getty@tty1.service", "active", "running", "Getty on tty1"),
         # Oneshots / exited
-        ("apparmor.service",         "active",   "exited",  "Load AppArmor profiles"),
-        ("blk-availability.service", "active",   "exited",  "Availability of block devices"),
-        ("console-setup.service",    "active",   "exited",  "Set console font and keymap"),
-        ("finalrd.service",          "active",   "exited",  "Create final runtime dir for shutdown pivot root"),
-        ("keyboard-setup.service",   "active",   "exited",  "Set the console keyboard layout"),
-        ("lvm2-monitor.service",     "active",   "exited",  "Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling"),
-        ("setvtrgb.service",         "active",   "exited",  "Set console scheme"),
+        ("apparmor.service", "active", "exited", "Load AppArmor profiles"),
+        ("blk-availability.service", "active", "exited", "Availability of block devices"),
+        ("console-setup.service", "active", "exited", "Set console font and keymap"),
+        ("finalrd.service", "active", "exited", "Create final runtime dir for shutdown pivot root"),
+        ("keyboard-setup.service", "active", "exited", "Set the console keyboard layout"),
+        (
+            "lvm2-monitor.service",
+            "active",
+            "exited",
+            "Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling",
+        ),
+        ("setvtrgb.service", "active", "exited", "Set console scheme"),
         ("systemd-user-sessions.service", "active", "exited", "Permit User Sessions"),
     ]
     a("[list-unit-files]")
@@ -693,7 +933,7 @@ def build_agent_output() -> bytes:
     a("avg_mem_kbytes 0")
 
     # restic-prune: ran ~30 min after the backup, took ~8 min, exited 0
-    prune_start = bkp_start + 50 * 60   # prune triggered 50 min after backup start
+    prune_start = bkp_start + 50 * 60  # prune triggered 50 min after backup start
     a("==> restic-prune <==")
     a(f"start_time {prune_start}")
     a("exit_code 0")
@@ -846,31 +1086,39 @@ class HttpHandler(BaseHTTPRequestHandler):
         if path == "/admin":
             return self._send_html(_admin_page())
         if path == "/admin/meta":
-            return self._send_json({
+            return self._send_json(
+                {
+                    "state": "healthy",
+                    "in_state_for_s": round(time.time() - START, 1),
+                    "action_to_state": {},
+                    "states": {
+                        "healthy": {
+                            "label": "HEALTHY",
+                            "color": "#2e7d32",
+                            "tagline": "Steady-green background host — backups always finish OK. "
+                            "No incident and no toggle.",
+                            "effects": [
+                                "restic backup job runs nightly, last run exit 0 — green",
+                                "Both drives healthy (SMART raw attrs at 0), calm I/O, "
+                                "filesystems well within levels",
+                                "CPU / memory / network wobble naturally within green",
+                                "No state to change — this host never alerts",
+                            ],
+                        }
+                    },
+                }
+            )
+        return self._send_json(
+            {
+                "host": HOSTNAME,
+                "role": "restic backup host",
                 "state": "healthy",
-                "in_state_for_s": round(time.time() - START, 1),
-                "action_to_state": {},
-                "states": {"healthy": {
-                    "label": "HEALTHY", "color": "#2e7d32",
-                    "tagline": "Steady-green background host — backups always finish OK. "
-                               "No incident and no toggle.",
-                    "effects": [
-                        "restic backup job runs nightly, last run exit 0 — green",
-                        "Both drives healthy (SMART raw attrs at 0), calm I/O, "
-                        "filesystems well within levels",
-                        "CPU / memory / network wobble naturally within green",
-                        "No state to change — this host never alerts",
-                    ]}},
-            })
-        return self._send_json({
-            "host": HOSTNAME,
-            "role": "restic backup host",
-            "state": "healthy",
-            "uptime_s": int(time.time() - START) + UPTIME_OFFSET,
-            "last_backup_age_h": round(_LAST_BACKUP_AGE_S / 3600, 2),
-            "last_backup_exit_code": 0,
-            "ui": "/admin",
-        })
+                "uptime_s": int(time.time() - START) + UPTIME_OFFSET,
+                "last_backup_age_h": round(_LAST_BACKUP_AGE_S / 3600, 2),
+                "last_backup_exit_code": 0,
+                "ui": "/admin",
+            }
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -879,7 +1127,7 @@ class HttpHandler(BaseHTTPRequestHandler):
 def main() -> None:
     load_state()
     agent = AgentServer(("0.0.0.0", AGENT_PORT), AgentHandler)  # nosec B104
-    http  = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), HttpHandler)  # nosec B104
+    http = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), HttpHandler)  # nosec B104
     threading.Thread(target=agent.serve_forever, daemon=True).start()
     print(f"[boot] host={HOSTNAME!r}  agent=tcp/{AGENT_PORT}  http=tcp/{HTTP_PORT}")
     print(f"[boot] status UI: http://localhost:{HTTP_PORT}/admin")

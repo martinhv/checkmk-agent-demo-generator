@@ -31,6 +31,7 @@ Config via env:
   STATE_FILE      counter persistence (default /var/tmp/cmk-demo-fleet-state.json)
   FLEET_CLASSES   comma list of class prefixes to serve (default: all)
 """
+
 from __future__ import annotations
 
 import json
@@ -63,9 +64,11 @@ class _Wobble:
         self.noise = 0.0
 
     def step(self, now: float) -> float:
-        harm = (0.60 * math.sin(self.omega * now + self.phase)
-                + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
-                + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5))
+        harm = (
+            0.60 * math.sin(self.omega * now + self.phase)
+            + 0.28 * math.sin(self.omega * 2.7 * now + self.phase * 1.7)
+            + 0.18 * math.sin(self.omega * 0.41 * now + self.phase * 0.5)
+        )
         self.noise = max(-1.5, min(1.5, self.noise * 0.9 + random.gauss(0.0, 0.25)))
         return max(-1.0, min(1.0, (harm + 0.45 * self.noise) / 1.8))
 
@@ -74,9 +77,15 @@ _GAUGES: dict[str, _Wobble] = {}
 _GAUGE_LOCK = threading.Lock()
 
 
-def gauge(name: str, base: float, *, amp_abs: float | None = None,
-          amp_frac: float | None = None, phase: float = 0.0,
-          period: float = 1200.0) -> float:
+def gauge(
+    name: str,
+    base: float,
+    *,
+    amp_abs: float | None = None,
+    amp_frac: float | None = None,
+    phase: float = 0.0,
+    period: float = 1200.0,
+) -> float:
     with _GAUGE_LOCK:
         w = _GAUGES.get(name)
         if w is None:
@@ -87,12 +96,18 @@ def gauge(name: str, base: float, *, amp_abs: float | None = None,
     return base * (1.0 + (amp_frac or 0.0) * d)
 
 
-_ALL_COUNTERS: dict[str, "Counter"] = {}
+_ALL_COUNTERS: dict[str, Counter] = {}
 
 
 class Counter:
-    def __init__(self, name: str, phase: float = 0.0, amp: float = 0.30,
-                 period: float = 1200.0, start: float = 0.0) -> None:
+    def __init__(
+        self,
+        name: str,
+        phase: float = 0.0,
+        amp: float = 0.30,
+        period: float = 1200.0,
+        start: float = 0.0,
+    ) -> None:
         self.acc = start
         self.last = time.time()
         self.amp = amp
@@ -117,77 +132,188 @@ def _ctl_status_json(uuid: str) -> str:
     """Pretend TLS registration (allow_legacy_pull false + a pull connection
     with a live cert ~330 days out) — see CLAUDE.md '_check_transport'."""
     now = int(time.time())
-    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000",
-                            time.gmtime(now + 330 * 86400))
-    return json.dumps({
-        "version": AGENT_VERSION, "agent_socket_operational": True,
-        "ip_allowlist": [], "allow_legacy_pull": False,
-        "connections": [{
-            "site_id": "monitoring/prod", "receiver_port": 8000,
-            "uuid": uuid,
-            "local": {"connection_mode": "pull-agent", "cert_info": {
-                "issuer": "Site 'prod' local CA",
-                "from": "Tue, 03 Jun 2025 09:12:44 +0000", "to": cert_to}},
-            "remote": "remote_query_disabled"}]}, separators=(",", ":"))
+    cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(now + 330 * 86400))
+    return json.dumps(
+        {
+            "version": AGENT_VERSION,
+            "agent_socket_operational": True,
+            "ip_allowlist": [],
+            "allow_legacy_pull": False,
+            "connections": [
+                {
+                    "site_id": "monitoring/prod",
+                    "receiver_port": 8000,
+                    "uuid": uuid,
+                    "local": {
+                        "connection_mode": "pull-agent",
+                        "cert_info": {
+                            "issuer": "Site 'prod' local CA",
+                            "from": "Tue, 03 Jun 2025 09:12:44 +0000",
+                            "to": cert_to,
+                        },
+                    },
+                    "remote": "remote_query_disabled",
+                }
+            ],
+        },
+        separators=(",", ":"),
+    )
 
 
 def _smart_json(dev: str, model: str, serial: str, hours: int, temp: int) -> str:
-    return json.dumps({
-        "device": {"name": dev, "type": "sat", "protocol": "ATA"},
-        "model_name": model, "serial_number": serial,
-        "smart_status": {"passed": True},
-        "power_on_time": {"hours": hours},
-        "temperature": {"current": temp},
-        "ata_smart_attributes": {"table": [
-            {"id": 5, "name": "Reallocated_Sector_Ct", "value": 100,
-             "thresh": 10, "raw": {"value": 0}},
-            {"id": 12, "name": "Power_Cycle_Count", "value": 100,
-             "thresh": 0, "raw": {"value": 14}},
-            {"id": 187, "name": "Reported_Uncorrect", "value": 100,
-             "thresh": 0, "raw": {"value": 0}},
-            {"id": 197, "name": "Current_Pending_Sector", "value": 100,
-             "thresh": 0, "raw": {"value": 0}},
-            {"id": 199, "name": "UDMA_CRC_Error_Count", "value": 200,
-             "thresh": 0, "raw": {"value": 0}},
-            {"id": 177, "name": "Wear_Leveling_Count", "value": 96,
-             "thresh": 5, "raw": {"value": 88}},
-            {"id": 179, "name": "Used_Rsvd_Blk_Cnt_Tot", "value": 100,
-             "thresh": 10, "raw": {"value": 0}},
-        ]},
-    }, separators=(",", ":"))
+    return json.dumps(
+        {
+            "device": {"name": dev, "type": "sat", "protocol": "ATA"},
+            "model_name": model,
+            "serial_number": serial,
+            "smart_status": {"passed": True},
+            "power_on_time": {"hours": hours},
+            "temperature": {"current": temp},
+            "ata_smart_attributes": {
+                "table": [
+                    {
+                        "id": 5,
+                        "name": "Reallocated_Sector_Ct",
+                        "value": 100,
+                        "thresh": 10,
+                        "raw": {"value": 0},
+                    },
+                    {
+                        "id": 12,
+                        "name": "Power_Cycle_Count",
+                        "value": 100,
+                        "thresh": 0,
+                        "raw": {"value": 14},
+                    },
+                    {
+                        "id": 187,
+                        "name": "Reported_Uncorrect",
+                        "value": 100,
+                        "thresh": 0,
+                        "raw": {"value": 0},
+                    },
+                    {
+                        "id": 197,
+                        "name": "Current_Pending_Sector",
+                        "value": 100,
+                        "thresh": 0,
+                        "raw": {"value": 0},
+                    },
+                    {
+                        "id": 199,
+                        "name": "UDMA_CRC_Error_Count",
+                        "value": 200,
+                        "thresh": 0,
+                        "raw": {"value": 0},
+                    },
+                    {
+                        "id": 177,
+                        "name": "Wear_Leveling_Count",
+                        "value": 96,
+                        "thresh": 5,
+                        "raw": {"value": 88},
+                    },
+                    {
+                        "id": 179,
+                        "name": "Used_Rsvd_Blk_Cnt_Tot",
+                        "value": 100,
+                        "thresh": 10,
+                        "raw": {"value": 0},
+                    },
+                ]
+            },
+        },
+        separators=(",", ":"),
+    )
 
 
 # Base OS daemons every Ubuntu box runs (ps_lnx rows; role procs are appended).
 _LNX_BASE_PROCS = [
     ("init.scope", "root", 168_000, 12_800, 1, "/sbin/init"),
-    ("system.slice/systemd-journald.service", "root", 59_100, 18_600, 401,
-     "/usr/lib/systemd/systemd-journald"),
-    ("system.slice/systemd-udevd.service", "root", 25_900, 7_800, 437,
-     "/usr/lib/systemd/systemd-udevd"),
-    ("system.slice/systemd-resolved.service", "systemd-resolve", 26_600, 13_000,
-     488, "/usr/lib/systemd/systemd-resolved"),
-    ("system.slice/systemd-timesyncd.service", "systemd-timesync", 91_200, 7_500,
-     502, "/usr/lib/systemd/systemd-timesyncd"),
-    ("system.slice/systemd-networkd.service", "systemd-network", 22_100, 8_400,
-     495, "/usr/lib/systemd/systemd-networkd"),
-    ("system.slice/systemd-logind.service", "root", 18_400, 8_100, 509,
-     "/usr/lib/systemd/systemd-logind"),
-    ("system.slice/dbus.service", "messagebus", 10_200, 5_000, 514,
-     "@dbus-daemon --system --address=systemd:"),
-    ("system.slice/rsyslog.service", "syslog", 222_400, 6_600, 611,
-     "/usr/sbin/rsyslogd -n -iNONE"),
-    ("system.slice/ssh.service", "root", 15_400, 8_900, 689,
-     "sshd: /usr/sbin/sshd -D [listener]"),
-    ("system.slice/cron.service", "root", 11_500, 2_400, 704,
-     "/usr/sbin/cron -f -P"),
-    ("system.slice/irqbalance.service", "root", 20_600, 4_100, 610,
-     "/usr/sbin/irqbalance --foreground"),
-    ("system.slice/polkit.service", "root", 236_400, 9_200, 617,
-     "/usr/lib/polkit-1/polkitd --no-debug"),
-    ("system.slice/snapd.service", "root", 1_248_000, 34_500, 655,
-     "/usr/lib/snapd/snapd"),
-    ("system.slice/unattended-upgrades.service", "root", 108_000, 21_000, 720,
-     "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal"),
+    (
+        "system.slice/systemd-journald.service",
+        "root",
+        59_100,
+        18_600,
+        401,
+        "/usr/lib/systemd/systemd-journald",
+    ),
+    (
+        "system.slice/systemd-udevd.service",
+        "root",
+        25_900,
+        7_800,
+        437,
+        "/usr/lib/systemd/systemd-udevd",
+    ),
+    (
+        "system.slice/systemd-resolved.service",
+        "systemd-resolve",
+        26_600,
+        13_000,
+        488,
+        "/usr/lib/systemd/systemd-resolved",
+    ),
+    (
+        "system.slice/systemd-timesyncd.service",
+        "systemd-timesync",
+        91_200,
+        7_500,
+        502,
+        "/usr/lib/systemd/systemd-timesyncd",
+    ),
+    (
+        "system.slice/systemd-networkd.service",
+        "systemd-network",
+        22_100,
+        8_400,
+        495,
+        "/usr/lib/systemd/systemd-networkd",
+    ),
+    (
+        "system.slice/systemd-logind.service",
+        "root",
+        18_400,
+        8_100,
+        509,
+        "/usr/lib/systemd/systemd-logind",
+    ),
+    (
+        "system.slice/dbus.service",
+        "messagebus",
+        10_200,
+        5_000,
+        514,
+        "@dbus-daemon --system --address=systemd:",
+    ),
+    ("system.slice/rsyslog.service", "syslog", 222_400, 6_600, 611, "/usr/sbin/rsyslogd -n -iNONE"),
+    ("system.slice/ssh.service", "root", 15_400, 8_900, 689, "sshd: /usr/sbin/sshd -D [listener]"),
+    ("system.slice/cron.service", "root", 11_500, 2_400, 704, "/usr/sbin/cron -f -P"),
+    (
+        "system.slice/irqbalance.service",
+        "root",
+        20_600,
+        4_100,
+        610,
+        "/usr/sbin/irqbalance --foreground",
+    ),
+    (
+        "system.slice/polkit.service",
+        "root",
+        236_400,
+        9_200,
+        617,
+        "/usr/lib/polkit-1/polkitd --no-debug",
+    ),
+    ("system.slice/snapd.service", "root", 1_248_000, 34_500, 655, "/usr/lib/snapd/snapd"),
+    (
+        "system.slice/unattended-upgrades.service",
+        "root",
+        108_000,
+        21_000,
+        720,
+        "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal",
+    ),
 ]
 
 # Base systemd units (all green; ~29 like a real Ubuntu 24.04 server).
@@ -207,7 +333,12 @@ _LNX_BASE_UNITS = [
     ("systemd-networkd.service", "active", "running", "Network Configuration"),
     ("systemd-resolved.service", "active", "running", "Network Name Resolution"),
     ("systemd-timesyncd.service", "active", "running", "Network Time Synchronization"),
-    ("systemd-udevd.service", "active", "running", "Rule-based Manager for Device Events and Files"),
+    (
+        "systemd-udevd.service",
+        "active",
+        "running",
+        "Rule-based Manager for Device Events and Files",
+    ),
     ("udisks2.service", "active", "running", "Disk Manager"),
     ("unattended-upgrades.service", "active", "running", "Unattended Upgrades Shutdown"),
     ("user@1000.service", "active", "running", "User Manager for UID 1000"),
@@ -216,7 +347,12 @@ _LNX_BASE_UNITS = [
     ("console-setup.service", "active", "exited", "Set console font and keymap"),
     ("finalrd.service", "active", "exited", "Create final runtime dir for shutdown pivot root"),
     ("keyboard-setup.service", "active", "exited", "Set the console keyboard layout"),
-    ("lvm2-monitor.service", "active", "exited", "Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling"),
+    (
+        "lvm2-monitor.service",
+        "active",
+        "exited",
+        "Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling",
+    ),
     ("setvtrgb.service", "active", "exited", "Set console scheme"),
     ("snapd.seeded.service", "active", "exited", "Wait until snapd is fully seeded"),
     ("systemd-user-sessions.service", "active", "exited", "Permit User Sessions"),
@@ -268,9 +404,12 @@ _WIN_BASE_PROCS = [
 ]
 
 _DISK_MODELS = [
-    "Samsung SSD 870 EVO 500GB", "Samsung SSD 883 DCT 960GB",
-    "INTEL SSDSC2KB480G8", "Micron 5300 MTFDDAK480TDS",
-    "WDC WDS500G1R0A-68A4W0", "KINGSTON SEDC500M480G",
+    "Samsung SSD 870 EVO 500GB",
+    "Samsung SSD 883 DCT 960GB",
+    "INTEL SSDSC2KB480G8",
+    "Micron 5300 MTFDDAK480TDS",
+    "WDC WDS500G1R0A-68A4W0",
+    "KINGSTON SEDC500M480G",
 ]
 
 
@@ -284,22 +423,21 @@ def _uuid(rnd: random.Random) -> str:
 
 
 def _serial(rnd: random.Random, prefix: str = "S5") -> str:
-    return prefix + "".join(rnd.choice("ABCDEFGHJKLMNPQRSTUVWXYZ0123456789")
-                            for _ in range(12))
+    return prefix + "".join(rnd.choice("ABCDEFGHJKLMNPQRSTUVWXYZ0123456789") for _ in range(12))
 
 
 # --------------------------------------------------------------------------- #
 #  Linux fleet host
 # --------------------------------------------------------------------------- #
 class LinuxHost:
-    def __init__(self, short: str, spec: dict, guests: list["Host"] | None = None) -> None:
+    def __init__(self, short: str, spec: dict, guests: list[Host] | None = None) -> None:
         self.short = short
         self.spec = spec
         self.os = "linux"
         # upstream network device (short name), assigned by expand_roster():
         # the hypervisor for a VM, an access switch for physical iron.
         self.net_parent: str | None = None
-        self.guests = guests or []          # kvm hypervisors: their VMs
+        self.guests = guests or []  # kvm hypervisors: their VMs
         rnd = random.Random(f"{short}:fleet-v1")
         lo, hi = spec.get("uptime_days", (15, 120))
         self.uptime_offset = rnd.uniform(lo, hi) * 86400
@@ -308,7 +446,7 @@ class LinuxHost:
         self.mac = _mac(rnd)
         self.uuid = _uuid(rnd)
         self.ncpu = spec.get("ncpu", 4)
-        self.mem_total = spec.get("mem_mb", 8192) * 1024      # kB
+        self.mem_total = spec.get("mem_mb", 8192) * 1024  # kB
         self.load1 = spec.get("load1", 0.3) * self.jit
         rx, tx = spec.get("net_mbs", (1.0, 1.0))
         self.rx_bps = rx * 1e6 * self.jit
@@ -320,8 +458,9 @@ class LinuxHost:
         # filesystems: "/" always; extra mounts ride a second disk (sdb)
         self.extra_fs = []
         for mount, gib, used in spec.get("fs", []):
-            self.extra_fs.append((mount, gib * 1_048_576,
-                                  min(0.72, used + rnd.uniform(-0.04, 0.04))))
+            self.extra_fs.append(
+                (mount, gib * 1_048_576, min(0.72, used + rnd.uniform(-0.04, 0.04)))
+            )
         self.data_serial = _serial(rnd, "S6")
         self.root_kb = spec.get("root_gb", 40) * 1_048_576
         self.root_used_frac = rnd.uniform(0.26, 0.38)
@@ -332,31 +471,42 @@ class LinuxHost:
         total_ticks = self.ncpu * 100.0
         util = max(0.02, min(0.80, self.load1 / self.ncpu * 0.75))
         c = lambda n, r, ph=0.0, amp=0.30: Counter(  # noqa: E731
-            f"{short}.{n}", phase=self.phase + ph, amp=amp,
-            start=r * self.uptime_offset)
+            f"{short}.{n}", phase=self.phase + ph, amp=amp, start=r * self.uptime_offset
+        )
         self.c_user = c("cpu.user", total_ticks * util * 0.72, 0.3)
         self.c_system = c("cpu.system", total_ticks * util * 0.22, 1.1)
         self.c_iowait = c("cpu.iowait", total_ticks * 0.015, 3.0)
         self.r_user = total_ticks * util * 0.72
         self.r_system = total_ticks * util * 0.22
         self.r_iowait = total_ticks * 0.015
-        self.r_idle = max(5.0, total_ticks - self.r_user - self.r_system
-                          - self.r_iowait)
+        self.r_idle = max(5.0, total_ticks - self.r_user - self.r_system - self.r_iowait)
         self.c_idle = c("cpu.idle", self.r_idle, 2.4, 0.02)
         self.c_ctxt = c("kernel.ctxt", 900 * self.ncpu, 4.0)
         self.c_proc = c("kernel.processes", 4, 4.7)
         self.c_pgmaj = c("kernel.pgmajfault", 0.2, 5.4, 0.25)
         # disk io: modest system-disk activity, busier data disk if present
-        self.sda = {k: c(f"sda.{k}", r, ph, amp) for k, r, ph, amp in (
-            ("rd_ios", 3, 0.0, 0.3), ("rd_ticks", 2, 0.2, 0.3),
-            ("wr_ios", 14, 0.4, 0.3), ("wr_ticks", 9, 0.6, 0.3),
-            ("io_ticks", 11, 0.8, 0.05))}
+        self.sda = {
+            k: c(f"sda.{k}", r, ph, amp)
+            for k, r, ph, amp in (
+                ("rd_ios", 3, 0.0, 0.3),
+                ("rd_ticks", 2, 0.2, 0.3),
+                ("wr_ios", 14, 0.4, 0.3),
+                ("wr_ticks", 9, 0.6, 0.3),
+                ("io_ticks", 11, 0.8, 0.05),
+            )
+        }
         self.sdb = None
         if self.extra_fs:
-            self.sdb = {k: c(f"sdb.{k}", r, ph, amp) for k, r, ph, amp in (
-                ("rd_ios", 22, 1.0, 0.3), ("rd_ticks", 14, 1.2, 0.3),
-                ("wr_ios", 35, 1.4, 0.3), ("wr_ticks", 22, 1.6, 0.3),
-                ("io_ticks", 48, 1.8, 0.05))}
+            self.sdb = {
+                k: c(f"sdb.{k}", r, ph, amp)
+                for k, r, ph, amp in (
+                    ("rd_ios", 22, 1.0, 0.3),
+                    ("rd_ticks", 14, 1.2, 0.3),
+                    ("wr_ios", 35, 1.4, 0.3),
+                    ("wr_ticks", 22, 1.6, 0.3),
+                    ("io_ticks", 48, 1.8, 0.05),
+                )
+            }
         self.c_rx_b = c("net.rx_bytes", self.rx_bps, 1.6)
         self.c_tx_b = c("net.tx_bytes", self.tx_bps, 2.3)
         self.c_rx_p = c("net.rx_pkts", self.rx_bps / 900, 3.0)
@@ -376,14 +526,19 @@ class LinuxHost:
             rows.append((f"system.slice/{unit}", user, vsz, rss, pid, cmd))
             pid += 3
         for g in self.guests:
-            mem_kb = g.mem_total if hasattr(g, "mem_total") else \
-                g.spec.get("mem_mb", 8192) * 1024
-            rows.append((
-                "machine.slice/machine-qemu.scope", "libvirt-qemu",
-                mem_kb + 2_400_000, int(mem_kb * 0.82), pid,
-                f"/usr/bin/qemu-system-x86_64 -name guest={g.short},"
-                f"debug-threads=on -machine pc-q35-8.2 -m "
-                f"{g.spec.get('mem_mb', 8192)}"))
+            mem_kb = g.mem_total if hasattr(g, "mem_total") else g.spec.get("mem_mb", 8192) * 1024
+            rows.append(
+                (
+                    "machine.slice/machine-qemu.scope",
+                    "libvirt-qemu",
+                    mem_kb + 2_400_000,
+                    int(mem_kb * 0.82),
+                    pid,
+                    f"/usr/bin/qemu-system-x86_64 -name guest={g.short},"
+                    f"debug-threads=on -machine pc-q35-8.2 -m "
+                    f"{g.spec.get('mem_mb', 8192)}",
+                )
+            )
             pid += 7
         return rows
 
@@ -400,16 +555,33 @@ class LinuxHost:
             anon_base = min(anon_base, int(mt * 0.85))
         else:
             anon_base = int(mt * self.anon_f)
-        anon = int(gauge(f"{s}.mem.anon", anon_base, amp_frac=0.03,
-                         phase=self.phase + 1.5, period=1400))
-        cached = int(gauge(f"{s}.mem.cached", mt * self.cached_f, amp_frac=0.03,
-                           phase=self.phase + 0.4, period=1500))
-        shmem = int(gauge(f"{s}.mem.shmem", mt * self.shmem_f, amp_frac=0.02,
-                          phase=self.phase + 0.8, period=1600))
-        buffers = int(gauge(f"{s}.mem.buffers", mt * 0.02, amp_frac=0.04,
-                            phase=self.phase + 1.2, period=1100))
-        sreclaim = int(gauge(f"{s}.mem.srec", mt * 0.03, amp_frac=0.03,
-                             phase=self.phase + 2.0, period=1300))
+        anon = int(
+            gauge(f"{s}.mem.anon", anon_base, amp_frac=0.03, phase=self.phase + 1.5, period=1400)
+        )
+        cached = int(
+            gauge(
+                f"{s}.mem.cached",
+                mt * self.cached_f,
+                amp_frac=0.03,
+                phase=self.phase + 0.4,
+                period=1500,
+            )
+        )
+        shmem = int(
+            gauge(
+                f"{s}.mem.shmem",
+                mt * self.shmem_f,
+                amp_frac=0.02,
+                phase=self.phase + 0.8,
+                period=1600,
+            )
+        )
+        buffers = int(
+            gauge(f"{s}.mem.buffers", mt * 0.02, amp_frac=0.04, phase=self.phase + 1.2, period=1100)
+        )
+        sreclaim = int(
+            gauge(f"{s}.mem.srec", mt * 0.03, amp_frac=0.03, phase=self.phase + 2.0, period=1300)
+        )
         caches = cached + buffers + sreclaim
         mem_free = max(int(mt * 0.03), mt - anon - shmem - caches)
         anon_lru = anon + shmem
@@ -418,35 +590,54 @@ class LinuxHost:
         a_anon = int(anon_lru * 0.62)
         a_file = int(file_lru * 0.38)
         sunreclaim = int(mt * 0.008)
-        threads = 220 + 30 * len(self.spec.get("procs", [])) \
-            + 40 * len(self.guests)
-        dirty = max(4_096, int(gauge(f"{s}.mem.dirty", mt * 0.001,
-                                     amp_frac=0.20, phase=self.phase + 2.2,
-                                     period=900)))
+        threads = 220 + 30 * len(self.spec.get("procs", [])) + 40 * len(self.guests)
+        dirty = max(
+            4_096,
+            int(
+                gauge(
+                    f"{s}.mem.dirty", mt * 0.001, amp_frac=0.20, phase=self.phase + 2.2, period=900
+                )
+            ),
+        )
         committed = int(min(anon * 1.8, mt * 0.48))
 
         # ---- load ------------------------------------------------------------
-        l1 = max(0.01, round(self.load1 * gauge(f"{s}.load1", 1.0, amp_frac=0.30,
-                                                phase=self.phase + 0.2,
-                                                period=300), 2))
-        l5 = max(0.01, round(self.load1 * 0.92 * gauge(
-            f"{s}.load5", 1.0, amp_frac=0.18, phase=self.phase + 1.1,
-            period=900), 2))
-        l15 = max(0.01, round(self.load1 * 0.85 * gauge(
-            f"{s}.load15", 1.0, amp_frac=0.10, phase=self.phase + 2.1,
-            period=2400), 2))
+        l1 = max(
+            0.01,
+            round(
+                self.load1
+                * gauge(f"{s}.load1", 1.0, amp_frac=0.30, phase=self.phase + 0.2, period=300),
+                2,
+            ),
+        )
+        l5 = max(
+            0.01,
+            round(
+                self.load1
+                * 0.92
+                * gauge(f"{s}.load5", 1.0, amp_frac=0.18, phase=self.phase + 1.1, period=900),
+                2,
+            ),
+        )
+        l15 = max(
+            0.01,
+            round(
+                self.load1
+                * 0.85
+                * gauge(f"{s}.load15", 1.0, amp_frac=0.10, phase=self.phase + 2.1, period=2400),
+                2,
+            ),
+        )
 
         user = self.c_user.sample(self.r_user)
         system = self.c_system.sample(self.r_system)
         idle = self.c_idle.sample(self.r_idle)
         iowait = self.c_iowait.sample(self.r_iowait)
 
-        sda = {k: c.sample(r) for (k, c), r in zip(
-            self.sda.items(), (3, 2, 14, 9, 11))}
+        sda = {k: c.sample(r) for (k, c), r in zip(self.sda.items(), (3, 2, 14, 9, 11))}
         sdb = None
         if self.sdb:
-            sdb = {k: c.sample(r) for (k, c), r in zip(
-                self.sdb.items(), (22, 14, 35, 22, 48))}
+            sdb = {k: c.sample(r) for (k, c), r in zip(self.sdb.items(), (22, 14, 35, 22, 48))}
 
         rx_b = self.c_rx_b.sample(self.rx_bps)
         tx_b = self.c_tx_b.sample(self.tx_bps)
@@ -455,10 +646,11 @@ class LinuxHost:
 
         # ---- filesystems: slow creep + daily logrotate saw, well under 80 % --
         day = 86_400.0
-        root_used = int(self.root_kb * self.root_used_frac
-                        + min(self.root_kb * 0.04, uptime * 0.03)
-                        + gauge(f"{s}.fs.root", 0, amp_abs=65_536, period=1800,
-                                phase=self.phase))
+        root_used = int(
+            self.root_kb * self.root_used_frac
+            + min(self.root_kb * 0.04, uptime * 0.03)
+            + gauge(f"{s}.fs.root", 0, amp_abs=65_536, period=1800, phase=self.phase)
+        )
 
         lines: list[str] = []
         a = lines.append
@@ -483,20 +675,29 @@ class LinuxHost:
         a("<<<checkmk_agent_plugins_lnx:sep(0)>>>")
         a("pluginsdir /opt/checkmk/agent/default/package/plugins")
         a("localdir /opt/checkmk/agent/default/package/local")
-        a('/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"'
-          % AGENT_VERSION)
+        a(
+            '/opt/checkmk/agent/default/package/plugins/86400/mk_apt:CMK_VERSION="%s"'
+            % AGENT_VERSION
+        )
 
         # ---- df + mounts -----------------------------------------------------
         a("<<<df_v2>>>")
-        a(f"/dev/sda1 ext4 {self.root_kb} {root_used} {self.root_kb - root_used} "
-          f"{round(root_used / self.root_kb * 100)}% /")
+        a(
+            f"/dev/sda1 ext4 {self.root_kb} {root_used} {self.root_kb - root_used} "
+            f"{round(root_used / self.root_kb * 100)}% /"
+        )
         for n, (mount, size_kb, used_frac) in enumerate(self.extra_fs, start=1):
-            used = int(size_kb * used_frac
-                       + size_kb * 0.012 * ((nowf % day) / day)   # daily saw
-                       + gauge(f"{s}.fs.{mount}", 0, amp_abs=size_kb * 0.002,
-                               period=1600, phase=self.phase + n))
-            a(f"/dev/sdb{n} ext4 {size_kb} {used} {size_kb - used} "
-              f"{round(used / size_kb * 100)}% {mount}")
+            used = int(
+                size_kb * used_frac
+                + size_kb * 0.012 * ((nowf % day) / day)  # daily saw
+                + gauge(
+                    f"{s}.fs.{mount}", 0, amp_abs=size_kb * 0.002, period=1600, phase=self.phase + n
+                )
+            )
+            a(
+                f"/dev/sdb{n} ext4 {size_kb} {used} {size_kb - used} "
+                f"{round(used / size_kb * 100)}% {mount}"
+            )
         a("[df_inodes_start]")
         a(f"/dev/sda1 ext4 2621440 214380 {2621440 - 214380} 8% /")
         for n, (mount, size_kb, _) in enumerate(self.extra_fs, start=1):
@@ -572,19 +773,22 @@ class LinuxHost:
         # ---- cpu / uptime ----------------------------------------------------
         a("<<<cpu>>>")
         nproc = 180 + 12 * len(self.spec.get("procs", [])) + 3 * len(self.guests)
-        a(f"{l1} {l5} {l15} 2/{nproc} {28000 + self.c_proc.sample(4) % 9999} "
-          f"{self.ncpu}")
+        a(f"{l1} {l5} {l15} 2/{nproc} {28000 + self.c_proc.sample(4) % 9999} {self.ncpu}")
         a("<<<uptime>>>")
-        a(f"{uptime}.00 {int(uptime * (self.ncpu * 0.85)) }.00")
+        a(f"{uptime}.00 {int(uptime * (self.ncpu * 0.85))}.00")
 
         # ---- timesyncd (dynamic — both timestamps vs wall clock) -------------
         last_sync = now - int((nowf - START) % 2048)
-        sync_str = time.strftime("%a %Y-%m-%d %H:%M:%S UTC",
-                                 time.gmtime(last_sync))
-        offset_us = int(gauge(f"{s}.ntp.offset", 0, amp_abs=1200,
-                              phase=self.phase + 1.3, period=600))
-        jitter_ms = max(0.1, round(gauge(f"{s}.ntp.jitter", 1.8, amp_abs=0.6,
-                                         phase=self.phase + 0.7, period=700), 3))
+        sync_str = time.strftime("%a %Y-%m-%d %H:%M:%S UTC", time.gmtime(last_sync))
+        offset_us = int(
+            gauge(f"{s}.ntp.offset", 0, amp_abs=1200, phase=self.phase + 1.3, period=600)
+        )
+        jitter_ms = max(
+            0.1,
+            round(
+                gauge(f"{s}.ntp.jitter", 1.8, amp_abs=0.6, phase=self.phase + 0.7, period=700), 3
+            ),
+        )
         a("<<<timesyncd>>>")
         a("       Server: 10.10.0.21 (ntp-01.corp.meridian-retail.com)")
         a("Poll interval: 34min 8s (min: 32s; max 34min 8s)")
@@ -601,11 +805,13 @@ class LinuxHost:
         a("    Frequency: +9.204ppm")
         a(f"[[[{last_sync}]]]")
         a("<<<timesyncd_ntpmessage:sep(10)>>>")
-        a("NTPMessage={ Leap=0, Version=4, Mode=4, Stratum=3, Precision=-25, "
-          "RootDelay=2.104ms, RootDispersion=0.847ms, Reference=0A0A0015, "
-          f"OriginateTimestamp={sync_str}, ReceiveTimestamp={sync_str}, "
-          f"TransmitTimestamp={sync_str}, DestinationTimestamp={sync_str}, "
-          "Ignored=no, PacketCount=61, Jitter=0.984ms }")
+        a(
+            "NTPMessage={ Leap=0, Version=4, Mode=4, Stratum=3, Precision=-25, "
+            "RootDelay=2.104ms, RootDispersion=0.847ms, Reference=0A0A0015, "
+            f"OriginateTimestamp={sync_str}, ReceiveTimestamp={sync_str}, "
+            f"TransmitTimestamp={sync_str}, DestinationTimestamp={sync_str}, "
+            "Ignored=no, PacketCount=61, Jitter=0.984ms }"
+        )
         a("Timezone=UTC")
 
         a("<<<apt:sep(0)>>>")
@@ -621,23 +827,31 @@ class LinuxHost:
 
         a("<<<diskstat>>>")
         a(str(now))
-        a(f"8 0 sda {sda['rd_ios']} 0 {sda['rd_ios'] * 16} {sda['rd_ticks']} "
-          f"{sda['wr_ios']} 0 {sda['wr_ios'] * 32} {sda['wr_ticks']} 0 "
-          f"{sda['io_ticks']} {sda['io_ticks'] * 2} 0 0 0 0")
+        a(
+            f"8 0 sda {sda['rd_ios']} 0 {sda['rd_ios'] * 16} {sda['rd_ticks']} "
+            f"{sda['wr_ios']} 0 {sda['wr_ios'] * 32} {sda['wr_ticks']} 0 "
+            f"{sda['io_ticks']} {sda['io_ticks'] * 2} 0 0 0 0"
+        )
         if sdb:
-            a(f"8 16 sdb {sdb['rd_ios']} 0 {sdb['rd_ios'] * 24} "
-              f"{sdb['rd_ticks']} {sdb['wr_ios']} 0 {sdb['wr_ios'] * 48} "
-              f"{sdb['wr_ticks']} 0 {sdb['io_ticks']} {sdb['io_ticks'] * 2} "
-              "0 0 0 0")
+            a(
+                f"8 16 sdb {sdb['rd_ios']} 0 {sdb['rd_ios'] * 24} "
+                f"{sdb['rd_ticks']} {sdb['wr_ios']} 0 {sdb['wr_ios'] * 48} "
+                f"{sdb['wr_ticks']} 0 {sdb['io_ticks']} {sdb['io_ticks'] * 2} "
+                "0 0 0 0"
+            )
 
         # ---- lnx_if (both variants) ------------------------------------------
         a("<<<lnx_if>>>")
         a("[start_iplink]")
-        a("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN "
-          "group default qlen 1000")
+        a(
+            "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN "
+            "group default qlen 1000"
+        )
         a("    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00")
-        a("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel "
-          "state UP group default qlen 1000")
+        a(
+            "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel "
+            "state UP group default qlen 1000"
+        )
         a(f"    link/ether {self.mac} brd ff:ff:ff:ff:ff:ff")
         a("[end_iplink]")
         a("<<<lnx_if:sep(58)>>>")
@@ -651,10 +865,12 @@ class LinuxHost:
 
         # ---- tcp -------------------------------------------------------------
         estab_base = 18 + (self.rx_bps + self.tx_bps) / 250_000
-        estab = round(gauge(f"{s}.tcp.estab", estab_base, amp_frac=0.2,
-                            phase=self.phase + 0.9, period=700))
-        tw = round(gauge(f"{s}.tcp.tw", estab_base * 0.5, amp_frac=0.3,
-                         phase=self.phase + 2.4, period=500))
+        estab = round(
+            gauge(f"{s}.tcp.estab", estab_base, amp_frac=0.2, phase=self.phase + 0.9, period=700)
+        )
+        tw = round(
+            gauge(f"{s}.tcp.tw", estab_base * 0.5, amp_frac=0.3, phase=self.phase + 2.4, period=500)
+        )
         a("<<<tcp_conn_stats>>>")
         a(f"01 {max(4, estab)}")
         a(f"02 {random.randint(0, 2)}")
@@ -662,17 +878,32 @@ class LinuxHost:
         a("0A 9")
 
         # ---- SMART -----------------------------------------------------------
-        temp = round(gauge(f"{s}.smart.sda", 27.0, amp_abs=1.3,
-                           phase=self.phase + 2.1, period=1100))
+        temp = round(
+            gauge(f"{s}.smart.sda", 27.0, amp_abs=1.3, phase=self.phase + 2.1, period=1100)
+        )
         a("<<<smart_posix_all:sep(0)>>>")
-        a(_smart_json("/dev/sda", self.disk_model, self.disk_serial,
-                      self.disk_hours + int(uptime / 3600), temp))
+        a(
+            _smart_json(
+                "/dev/sda",
+                self.disk_model,
+                self.disk_serial,
+                self.disk_hours + int(uptime / 3600),
+                temp,
+            )
+        )
         if self.extra_fs:
-            temp2 = round(gauge(f"{s}.smart.sdb", 29.0, amp_abs=1.3,
-                                phase=self.phase + 3.3, period=1300))
-            a(_smart_json("/dev/sdb", "Samsung SSD 883 DCT 1.92TB",
-                          self.data_serial,
-                          self.disk_hours + int(uptime / 3600), temp2))
+            temp2 = round(
+                gauge(f"{s}.smart.sdb", 29.0, amp_abs=1.3, phase=self.phase + 3.3, period=1300)
+            )
+            a(
+                _smart_json(
+                    "/dev/sdb",
+                    "Samsung SSD 883 DCT 1.92TB",
+                    self.data_serial,
+                    self.disk_hours + int(uptime / 3600),
+                    temp2,
+                )
+            )
 
         # ---- ps ---------------------------------------------------------------
         up_days = uptime // 86400
@@ -683,13 +914,11 @@ class LinuxHost:
         a("[processes]")
         a("[header] CGROUP USER VSZ RSS TIME ELAPSED PID COMMAND")
         for cg, usr, vsz, rss, pid, cmd in self._procs():
-            a(f"0::/{cg} {usr} {vsz} {rss} 00:00:{pid % 50 + 2:02d} {elapsed} "
-              f"{pid} {cmd}")
+            a(f"0::/{cg} {usr} {vsz} {rss} 00:00:{pid % 50 + 2:02d} {elapsed} {pid} {cmd}")
 
         # ---- systemd units ----------------------------------------------------
         a("<<<systemd_units>>>")
-        units = [(n, "active", "running", d)
-                 for n, d in self.spec.get("units", [])]
+        units = [(n, "active", "running", d) for n, d in self.spec.get("units", [])]
         units += _LNX_BASE_UNITS
         a("[list-unit-files]")
         for name, _act, _sub, _descr in units:
@@ -720,8 +949,7 @@ class WindowsHost:
         self.ncpu = spec.get("ncpu", 4)
         self.mem_total = spec.get("mem_mb", 16384) * 1024
         self.c_kb = spec.get("c_gb", 120) * 1_048_576
-        self.c_used_frac = min(0.72, spec.get("c_used", 0.45)
-                               + rnd.uniform(-0.04, 0.04))
+        self.c_used_frac = min(0.72, spec.get("c_used", 0.45) + rnd.uniform(-0.04, 0.04))
         self.d_drive = spec.get("d_drive")
         if self.d_drive:
             gb, used = self.d_drive
@@ -770,9 +998,18 @@ class WindowsHost:
         a(_ctl_status_json(self.uuid))
 
         a("<<<wmi_cpuload:sep(124)>>>")
-        qlen = max(0, round(gauge(f"{s}.cpu.qlen", self.ncpu * 0.25,
-                                  amp_abs=1.2, phase=self.phase + 0.3,
-                                  period=420)))
+        qlen = max(
+            0,
+            round(
+                gauge(
+                    f"{s}.cpu.qlen",
+                    self.ncpu * 0.25,
+                    amp_abs=1.2,
+                    phase=self.phase + 0.3,
+                    period=420,
+                )
+            ),
+        )
         a("[system_perf]")
         a("Name|ProcessorQueueLength|Timestamp_PerfTime|Frequency_PerfTime|WMIStatus")
         a(f"|{qlen}|{int(uptime * 10_000_000)}|10000000|OK")
@@ -785,12 +1022,19 @@ class WindowsHost:
 
         a("<<<mem>>>")
         mt = self.mem_total
-        mem_free = int(gauge(f"{s}.mem.free", mt * 0.46, amp_frac=0.04,
-                             phase=self.phase + 0.6, period=1500))
+        mem_free = int(
+            gauge(f"{s}.mem.free", mt * 0.46, amp_frac=0.04, phase=self.phase + 0.6, period=1500)
+        )
         page_total = int(mt * 1.45)
-        page_free = int(gauge(f"{s}.page.free", page_total * 0.74,
-                              amp_frac=0.02, phase=self.phase + 1.4,
-                              period=1700))
+        page_free = int(
+            gauge(
+                f"{s}.page.free",
+                page_total * 0.74,
+                amp_frac=0.02,
+                phase=self.phase + 1.4,
+                period=1700,
+            )
+        )
         a(f"MemTotal:      {mt} kB")
         a(f"MemFree:       {mem_free} kB")
         a(f"SwapTotal:     {int(mt * 0.45)} kB")
@@ -802,34 +1046,59 @@ class WindowsHost:
 
         # ---- drives (steady; slow creep + wobble, well under 80/90) ----------
         a("<<<df:sep(9)>>>")
-        c_used = int(self.c_kb * self.c_used_frac
-                     + min(self.c_kb * 0.02, uptime * 0.02)
-                     + gauge(f"{s}.c.used", 0, amp_abs=90_000, period=1500,
-                             phase=self.phase))
-        a(TAB.join(["C:\\", "NTFS", str(self.c_kb), str(c_used),
+        c_used = int(
+            self.c_kb * self.c_used_frac
+            + min(self.c_kb * 0.02, uptime * 0.02)
+            + gauge(f"{s}.c.used", 0, amp_abs=90_000, period=1500, phase=self.phase)
+        )
+        a(
+            TAB.join(
+                [
+                    "C:\\",
+                    "NTFS",
+                    str(self.c_kb),
+                    str(c_used),
                     str(self.c_kb - c_used),
-                    f"{round(c_used / self.c_kb * 100)}%", "C:\\"]))
+                    f"{round(c_used / self.c_kb * 100)}%",
+                    "C:\\",
+                ]
+            )
+        )
         if self.d_drive:
-            d_used = int(self.d_kb * self.d_used_frac
-                         + gauge(f"{s}.d.used", 0, amp_abs=400_000,
-                                 period=1800, phase=self.phase + 1))
-            a(TAB.join(["D:\\", "NTFS", str(self.d_kb), str(d_used),
+            d_used = int(
+                self.d_kb * self.d_used_frac
+                + gauge(f"{s}.d.used", 0, amp_abs=400_000, period=1800, phase=self.phase + 1)
+            )
+            a(
+                TAB.join(
+                    [
+                        "D:\\",
+                        "NTFS",
+                        str(self.d_kb),
+                        str(d_used),
                         str(self.d_kb - d_used),
-                        f"{round(d_used / self.d_kb * 100)}%", "D:\\"]))
+                        f"{round(d_used / self.d_kb * 100)}%",
+                        "D:\\",
+                    ]
+                )
+            )
 
         # ---- services ---------------------------------------------------------
         a("<<<services>>>")
-        for name, status, descr in (list(self.spec.get("services", []))
-                                    + _WIN_BASE_SERVICES):
+        for name, status, descr in list(self.spec.get("services", [])) + _WIN_BASE_SERVICES:
             a(f"{name} {status} {descr}")
 
         a("<<<checkmk_agent_plugins_win:sep(0)>>>")
         a("pluginsdir C:\\ProgramData\\checkmk\\agent\\plugins")
         a("localdir C:\\ProgramData\\checkmk\\agent\\local")
-        a('C:\\ProgramData\\checkmk\\agent\\plugins\\cmk_update_agent.checkmk.py:CMK_VERSION = "%s"'
-          % AGENT_VERSION)
-        a('C:\\ProgramData\\checkmk\\agent\\plugins\\mk_inventory.vbs:CMK_VERSION = "%s"'
-          % AGENT_VERSION)
+        a(
+            'C:\\ProgramData\\checkmk\\agent\\plugins\\cmk_update_agent.checkmk.py:CMK_VERSION = "%s"'
+            % AGENT_VERSION
+        )
+        a(
+            'C:\\ProgramData\\checkmk\\agent\\plugins\\mk_inventory.vbs:CMK_VERSION = "%s"'
+            % AGENT_VERSION
+        )
 
         a("<<<ps:sep(9)>>>")
         procs = list(_WIN_BASE_PROCS)
@@ -838,8 +1107,10 @@ class WindowsHost:
             procs.append((usr, vsz, ws, pid, 16, exe))
             pid += 4
         for usr, vsz, ws, ppid, threads, name in procs:
-            a(f"({usr},{vsz},{ws},0,{ppid},{threads * 2},{ppid * 156250},"
-              f"{ppid * 312500},{threads * 30},{threads},{uptime}){TAB}{name}")
+            a(
+                f"({usr},{vsz},{ws},0,{ppid},{threads * 2},{ppid * 156250},"
+                f"{ppid * 312500},{threads * 30},{threads},{uptime}){TAB}{name}"
+            )
 
         a("<<<systemtime>>>")
         a(str(now))
@@ -862,14 +1133,14 @@ WH_SWITCH = {"wh1": "wh1-sw-01", "wh2": "wh2-sw-01"}
 
 
 def expand_roster() -> dict[str, LinuxHost | WindowsHost]:
-    wanted = {p.strip() for p in
-              os.environ.get("FLEET_CLASSES", "").split(",") if p.strip()} or None
-    classes = [c for c in profiles.all_classes()
-               if wanted is None or c["prefix"] in wanted]
+    wanted = {
+        p.strip() for p in os.environ.get("FLEET_CLASSES", "").split(",") if p.strip()
+    } or None
+    classes = [c for c in profiles.all_classes() if wanted is None or c["prefix"] in wanted]
 
     hosts: dict[str, LinuxHost | WindowsHost] = {}
     vms_by_site: dict[str, list] = {}
-    hv_specs: list[tuple[str, dict, str]] = []   # (short, cls, site)
+    hv_specs: list[tuple[str, dict, str]] = []  # (short, cls, site)
 
     for cls in classes:
         first = cls.get("first", 1)
@@ -877,10 +1148,9 @@ def expand_roster() -> dict[str, LinuxHost | WindowsHost]:
         for n in range(first, first + cls["count"]):
             short = f"{cls['prefix']}-{n:02d}"
             if cls.get("hypervisor"):
-                hv_specs.append((short, cls, site))   # built after VM assignment
+                hv_specs.append((short, cls, site))  # built after VM assignment
                 continue
-            host = (LinuxHost(short, cls) if cls["os"] == "linux"
-                    else WindowsHost(short, cls))
+            host = LinuxHost(short, cls) if cls["os"] == "linux" else WindowsHost(short, cls)
             hosts[short] = host
             if cls.get("vm", True):
                 vms_by_site.setdefault(site, []).append(host)
@@ -967,8 +1237,7 @@ def load_state() -> None:
         if name in saved:
             c.acc, c.last = saved[name]
             restored += 1
-    print(f"[state] restored {restored}/{len(_ALL_COUNTERS)} counters, "
-          "uptime continuous")
+    print(f"[state] restored {restored}/{len(_ALL_COUNTERS)} counters, uptime continuous")
 
 
 def state_saver() -> None:
@@ -989,7 +1258,7 @@ class HttpHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.partition("?")[0].rstrip("/") or "/"
         if path.startswith("/agent/"):
-            short = path[len("/agent/"):]
+            short = path[len("/agent/") :]
             host = HOSTS.get(short)
             if host is None:
                 self.send_response(404)
@@ -1002,16 +1271,24 @@ class HttpHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
-        body = json.dumps({
-            "fleet": [{
-                "name": h.short, "fqdn": h.fqdn, "os": h.os,
-                "role": h.spec.get("role", "infrastructure"),
-                "descr": h.spec.get("descr", ""),
-                "parent": h.net_parent,
-                "site": h.spec.get("site", "dc"),
-            } for h in HOSTS.values()],
-            "count": len(HOSTS),
-        }, indent=2).encode()
+        body = json.dumps(
+            {
+                "fleet": [
+                    {
+                        "name": h.short,
+                        "fqdn": h.fqdn,
+                        "os": h.os,
+                        "role": h.spec.get("role", "infrastructure"),
+                        "descr": h.spec.get("descr", ""),
+                        "parent": h.net_parent,
+                        "site": h.spec.get("site", "dc"),
+                    }
+                    for h in HOSTS.values()
+                ],
+                "count": len(HOSTS),
+            },
+            indent=2,
+        ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -1024,8 +1301,7 @@ def main() -> None:
     threading.Thread(target=state_saver, daemon=True).start()
     lin = sum(1 for h in HOSTS.values() if h.os == "linux")
     win = len(HOSTS) - lin
-    print(f"[boot] fleet: {len(HOSTS)} hosts ({lin} linux, {win} windows) "
-          f"on http/{HTTP_PORT}")
+    print(f"[boot] fleet: {len(HOSTS)} hosts ({lin} linux, {win} windows) on http/{HTTP_PORT}")
     http = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), HttpHandler)  # nosec B104
     try:
         http.serve_forever()
