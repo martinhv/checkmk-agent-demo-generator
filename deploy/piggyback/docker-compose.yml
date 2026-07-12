@@ -13,6 +13,9 @@ services:
     build:
       context: ../..
       dockerfile: deploy/piggyback/Dockerfile
+    # fixed tag so estate.py can run netsim (the SNMP responder) from the SAME
+    # image as a sibling container (it has snmp/netsim.py + walklib baked in)
+    image: cmk-demo-estate:latest
     container_name: cmk-demo-gateway
     restart: unless-stopped
     ports:

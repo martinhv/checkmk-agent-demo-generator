@@ -120,7 +120,11 @@ import urllib.request
 #   v11: live SNMP transport — netsim answers SNMP on a UDP port per device
 #        (no stored walks, no sudo); SNMP devices get a loopback ipaddress +
 #        ip-v4-only and a folder community/port rule instead of usewalk.
-SCHEMA_VERSION = 11
+#   v12: one shared SNMP port routed by community — SNMP hosts share
+#        ipaddress 127.0.0.1 and carry a unique per-host community attribute
+#        (the device name); only a folder port rule remains. Lets netsim run
+#        as a normal port-mapped container like the gateway.
+SCHEMA_VERSION = 12
 
 # Host label on the delivery shell holding the last-activated estate
 # fingerprint. Lives on the site (survives across `estate.py up` runs) and is
@@ -447,7 +451,7 @@ def ensure_host(api: CmkApi, name: str, folder: str, attributes: dict) -> None:
     current = (existing.get("extensions") or {}).get("attributes") or {}
     fix = {k: attributes[k]
            for k in ("parents", "tag_agent", "tag_piggyback",
-                     "tag_address_family", "ipaddress")
+                     "tag_address_family", "ipaddress", "snmp_community")
            if k in attributes and current.get(k) != attributes[k]}
     if fix:
         status, payload, _ = api.request(
@@ -568,40 +572,37 @@ def ensure_usewalk_rule(api: CmkApi, fqdns: list[str]) -> None:
     print(f"  created usewalk rule ({len(wanted)} devices)")
 
 
-def ensure_snmp_access_rules(api: CmkApi, root_ident: str,
-                             community: str, port: int) -> None:
-    """Live-SNMP transport: one community rule + one port rule on the estate
-    ROOT folder (inherited by the Network subfolders). Folder-scoped like the
-    datasource rule — only the SNMP devices consult them; agent hosts ignore
-    SNMP settings. Idempotent by folder+marker; replaced if the value drifts."""
+def ensure_snmp_port_rule(api: CmkApi, root_ident: str, port: int) -> None:
+    """Live-SNMP transport: one `snmp_ports` rule on the estate ROOT folder for
+    the shared responder port (inherited by the Network subfolders; agent hosts
+    ignore it). The community is per-host (device name), so there is NO shared
+    community rule. Idempotent by folder+marker; replaced if the port drifts."""
     root_segs = _folder_segs(root_ident)
-    for ruleset, desc, value in (
-            ("snmp_communities", SNMP_COMMUNITY_RULE_DESCRIPTION, community),
-            ("snmp_ports", SNMP_PORT_RULE_DESCRIPTION, port)):
-        want = repr(value)
-        found = None
-        for rule, _hosts in _marked_rules(api, ruleset, desc):
-            if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
-                found = rule
-                break
-        if found is not None:
-            if found["extensions"].get("value_raw") == want:
-                print(f"  SNMP {ruleset} rule exists")
-                continue
-            api.request("DELETE", f"/objects/rule/{found['id']}", etag="*")
-            print(f"  removed stale SNMP {ruleset} rule")
-        status, payload, _ = api.request(
-            "POST", "/domain-types/rule/collections/all",
-            body={
-                "ruleset": ruleset,
-                "folder": root_ident,
-                "properties": {"description": desc, "disabled": False},
-                "value_raw": want,
-                "conditions": {},
-            })
-        if status != 200:
-            api_error(f"creating the {ruleset} rule", status, payload)
-        print(f"  created SNMP {ruleset} rule ({value!r})")
+    want = repr(port)
+    found = None
+    for rule, _hosts in _marked_rules(api, "snmp_ports", SNMP_PORT_RULE_DESCRIPTION):
+        if _folder_segs(rule.get("extensions", {}).get("folder", "")) == root_segs:
+            found = rule
+            break
+    if found is not None:
+        if found["extensions"].get("value_raw") == want:
+            print("  SNMP port rule exists")
+            return
+        api.request("DELETE", f"/objects/rule/{found['id']}", etag="*")
+        print("  removed stale SNMP port rule")
+    status, payload, _ = api.request(
+        "POST", "/domain-types/rule/collections/all",
+        body={
+            "ruleset": "snmp_ports",
+            "folder": root_ident,
+            "properties": {"description": SNMP_PORT_RULE_DESCRIPTION,
+                           "disabled": False},
+            "value_raw": want,
+            "conditions": {},
+        })
+    if status != 200:
+        api_error("creating the snmp_ports rule", status, payload)
+    print(f"  created SNMP port rule ({port})")
 
 
 def _datasource_command(agent_output_dir: str) -> str:
@@ -680,6 +681,8 @@ def delete_residual_current_rule(api: CmkApi, root_ident: str) -> None:
 
 
 def delete_snmp_access_rules(api: CmkApi, root_ident: str) -> None:
+    # snmp_ports is what we create now (community is per-host); snmp_communities
+    # is only present from an older (v11) deploy — clean it up too if found.
     root_segs = _folder_segs(root_ident)
     for ruleset, desc in (("snmp_communities", SNMP_COMMUNITY_RULE_DESCRIPTION),
                           ("snmp_ports", SNMP_PORT_RULE_DESCRIPTION)):
@@ -724,8 +727,10 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace,
     sw-core-01 tops the parent topology, everything else (and, in setup(),
     every server) hangs off it. Sorted into the Network/* subfolders via
     leaf_for(). Two transports (from the netsim panel):
-      snmp  — netsim answers SNMP live on a UDP port per device IP; hosts get
-              that ipaddress + a folder-wide community/port rule (no sudo).
+      snmp  — netsim answers on ONE shared UDP port; every host shares
+              ipaddress 127.0.0.1 but gets a UNIQUE community (the device name)
+              that routes the poll — a per-host attribute, plus one folder rule
+              for the shared port.
       walk  — legacy stored walks; hosts are no-IP and a usewalk rule points
               the StoredWalk backend at the site's snmpwalks dir.
     Returns the device FQDNs."""
@@ -760,10 +765,14 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace,
             "tag_agent": "no-agent",
         }
         if live:
-            # live SNMP: the host is polled at its loopback IP on the shared
-            # port (folder rule below); it needs a real address family.
-            attrs["ipaddress"] = dev.get("ip") or "127.0.0.1"
+            # live SNMP: all devices share the loopback IP + port; the UNIQUE
+            # community (device name) routes netsim to the right device. The
+            # community is a per-host attribute (overrides any rule); "tag_snmp_ds
+            # first" is required for it to take, which we set right here.
+            attrs["ipaddress"] = "127.0.0.1"
             attrs["tag_address_family"] = "ip-v4-only"
+            attrs["snmp_community"] = {"type": "v1_v2_community",
+                                       "community": dev.get("community") or short}
         else:
             attrs["tag_address_family"] = "no-ip"   # StoredWalk substitutes .1
         parent_fqdn = fqdn_of.get(dev.get("parent") or "") or core_fqdn
@@ -774,9 +783,7 @@ def setup_snmp(api: CmkApi, args: argparse.Namespace,
         ensure_host(api, dev["fqdn"], leaf_for(role), attrs)
         fqdns.append(dev["fqdn"])
     if live:
-        ensure_snmp_access_rules(api, root_ident,
-                                 info.get("snmp_community") or "public",
-                                 int(info.get("snmp_port") or 161))
+        ensure_snmp_port_rule(api, root_ident, int(info.get("snmp_port") or 161))
     else:
         ensure_usewalk_rule(api, fqdns)
     return fqdns

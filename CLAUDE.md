@@ -166,12 +166,17 @@ the fingerprint fast-path skips the update).
 ### SNMP transport: answer live, don't write walks into the site (no sudo)
 
 netsim's default `--transport snmp` (`snmp/snmpserver.py`) answers SNMP v2c
-LIVE: each device binds `127.0.0.<n>:1161` (the whole 127.0.0.0/8 routes to
-loopback, so any address binds with no root and no `ip addr add`), and Checkmk
-polls it like a real device. This needs NO site filesystem and NO sudo — the
-whole reason it exists (the legacy `--transport walk` wrote stored-walk files
-into the site-owned `var/check_mk/snmpwalks`, which meant being the site user).
-Key points:
+LIVE on ONE UDP port (`127.0.0.1:1161`), routing to a device by its UNIQUE
+community string (= the device short name): the responder reads the community
+and picks that device's table. Checkmk polls the single `127.0.0.1:1161` with
+a per-host community, no per-device IPs. This needs NO site filesystem and NO
+sudo — the whole reason it exists (the legacy `--transport walk` wrote
+stored-walk files into the site-owned `var/check_mk/snmpwalks`, which meant
+being the site user). Key points:
+- **One port, community-routed** — so netsim ports-maps into a NORMAL
+  container like the gateway (`-p 127.0.0.1:1161:1161/udp`), no `--network
+  host` (which an IP-per-device scheme would have forced). Worker-thread pool
+  on the shared socket so concurrent bulk-discovery walks still interleave.
 - **stdlib-only SNMP** — a compact BER codec + GET/GETNEXT/GETBULK. NO type
   table: every value is served as OCTET STRING, because Checkmk's SNMP layer
   hands check plugins the STRINGIFIED value and an OCTET STRING "12345"
@@ -179,11 +184,19 @@ Key points:
   uppercase-hex) are emitted as raw bytes so Checkmk renders them back to hex.
   Self-test: `python3 snmp/snmpserver.py --selftest` (validated end to end —
   Checkmk discovers if64/CPU/mem/power/UPS services, all green).
-- **cmk_setup wiring**: live-SNMP hosts get `ipaddress` (the loopback IP from
-  the panel) + `ip-v4-only`, plus ONE folder-wide community rule + port rule
-  (`snmp_communities` / `snmp_ports`) instead of a `usewalk_hosts` rule.
-- **estate.py** runs netsim as the caller (background process, `PIDFILE_NETSIM`,
-  `/admin/shutdown`) — no sudo, no docker-as-site-uid, no /var/tmp copy.
+- **cmk_setup wiring**: every live-SNMP host shares `ipaddress` `127.0.0.1` +
+  `ip-v4-only` and carries a per-host `snmp_community` attribute (the device
+  name — overrides any rule; needs `tag_snmp_ds` set, which we do), plus ONE
+  folder `snmp_ports` rule for the shared port. NO shared community rule, NO
+  `usewalk_hosts` rule.
+- **estate.py** runs netsim in the SAME runtime as the gateway: a container
+  from the gateway image (`GATEWAY_IMAGE`, sibling `NETSIM_CONTAINER`) for
+  docker/podman, or a plain process for `--runtime native`. No sudo, no
+  docker-as-site-uid, no /var/tmp copy.
+- **In-place table refresh** — build each device's table once, then patch only
+  the ~2-4 % dynamic OIDs (counters/uptime/cpu) each poll (`Table.patch` +
+  `ReplayDevice.dynamic_rows`); a full rebuild was ~50 ms / ~7 MB per big
+  device per poll (see the perf note in `snmpserver.py`).
 - Cloud/SaaS still can't use SNMP: the responder is on loopback, unreachable
   from a remote Checkmk server (a reachability limit now, not a filesystem one).
 
@@ -272,7 +285,7 @@ netsim restart for pure value changes.
 
 ## Deploying the estate to a site (`estate.py` + `deploy/cmk_setup.py`)
 
-`estate.py` is the one-command entry (`up`/`down`/`replace`/`status`/`break|degrade|heal`). It runs the delivery shell (`deploy/piggyback/serve.py`, which spawns every `hosts/*/serve.py` as an internal TCP child + a combined `/admin` panel on :8099), optionally the SNMP responder (`snmp/netsim.py`, :8101 panel; answers live SNMP on 127.0.0.0/8:1161, no sudo), then delegates all Checkmk REST wiring to `deploy/cmk_setup.py` (folder tree → hosts → rules → BI pack → discovery → activation; `--remove` tears down). Everything is stdlib + REST (urllib, no redirect-following so async runs can be polled).
+`estate.py` is the one-command entry (`up`/`down`/`replace`/`status`/`break|degrade|heal`). It runs the delivery shell (`deploy/piggyback/serve.py`, which spawns every `hosts/*/serve.py` as an internal TCP child + a combined `/admin` panel on :8099), optionally the SNMP responder (`snmp/netsim.py`, :8101 panel; answers live SNMP on 127.0.0.1:1161 routed by community, sibling container or native, no sudo), then delegates all Checkmk REST wiring to `deploy/cmk_setup.py` (folder tree → hosts → rules → BI pack → discovery → activation; `--remove` tears down). Everything is stdlib + REST (urllib, no redirect-following so async runs can be polled).
 
 ### Deployment modes (`--mode`, default self-hosted)
 

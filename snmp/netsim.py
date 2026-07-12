@@ -4,11 +4,12 @@
 Where the server hosts fake a Checkmk *agent* over TCP, network gear is
 monitored via SNMP. Two transports (--transport, default snmp):
 
-  snmp  — answer SNMP v2c LIVE on a UDP port per device (snmp/snmpserver.py):
-          each device binds 127.0.0.<n>:<port> (the whole 127.0.0.0/8 routes
-          to loopback, so no root and no added addresses), Checkmk polls it
-          like a real device. NO site filesystem, NO sudo. The default, and
-          what estate.py uses.
+  snmp  — answer SNMP v2c LIVE on ONE UDP port (snmp/snmpserver.py), routing
+          to a device by its UNIQUE community string (= the device short name);
+          Checkmk polls 127.0.0.1:<port> with a per-host community. NO site
+          filesystem, NO sudo — and one port means netsim ports-maps into a
+          normal container like the gateway (no --network host). The default,
+          and what estate.py uses.
   walk  — legacy: write a stored-walk file per device into the site's
           `var/check_mk/snmpwalks/<host>` (the `usewalk_hosts` ruleset /
           StoredWalk backend). Needs to run AS THE SITE USER (-> sudo), which
@@ -36,12 +37,12 @@ the core (applied by deploy/cmk_setup.py when the SNMP layer is deployed).
 
 Usual invocation (no privileges needed):
 
-    python3 netsim.py                          # live SNMP on 127.0.0.0/8:1161
+    python3 netsim.py                          # live SNMP on 127.0.0.1:1161
     python3 netsim.py --transport walk --site heute   # legacy stored walks
 
 Then bootstrap Checkmk once with the estate tool (`../estate.py up`) or
-`deploy/cmk_setup.py` directly (folder + hosts + community/port rule +
-discovery + activation, stdlib-only). Normally you don't run this file by
+`deploy/cmk_setup.py` directly (folder + hosts with per-host community + one
+port rule + discovery + activation, stdlib-only). Normally you don't run this by
 hand at all — estate.py starts and stops it.
 
 Control plane: http://localhost:8101/admin (combined panel for all devices),
@@ -340,7 +341,6 @@ class Device:
     incident = False
     role: str = "network"            # folder-taxonomy key (deploy/cmk_setup.py)
     parent: str | None = "sw-core-01"  # short name of the upstream device
-    ip: str | None = None            # loopback IP the SNMP responder binds (snmp transport)
     tagline_effects: dict[str, list[str]] = {}
 
     def __init__(self) -> None:
@@ -1151,7 +1151,6 @@ def load_state() -> None:
 WALKS_DIR = ""
 TRANSPORT = "walk"           # set to "snmp" by _main_snmp
 SNMP_PORT: int | None = None
-SNMP_COMMUNITY: str | None = None
 
 
 def write_walks() -> None:
@@ -1385,11 +1384,12 @@ class HttpHandler(BaseHTTPRequestHandler):
                 "role": d.role,
                 "parent": d.parent,
                 "location": d.location,
-                "ip": d.ip,
+                # live SNMP: all devices share one ip:port; the community
+                # (= the device short name) is what routes a poll to a device
+                "community": d.short if TRANSPORT == "snmp" else None,
             } for d in DEVICES},
             "transport": TRANSPORT,
             "snmp_port": SNMP_PORT,
-            "snmp_community": SNMP_COMMUNITY,
             "walks_dir": WALKS_DIR,
             "render_interval_s": RENDER_INTERVAL,
             "toggles": [f"/admin/{d.short}/{a}" for d in DEVICES if d.incident
@@ -1429,75 +1429,61 @@ def assemble_devices(args: argparse.Namespace) -> list:
     return devs
 
 
-def loopback_ip(index: int) -> str:
-    """A distinct, deterministic 127.0.0.0/8 address per device. The whole /8
-    routes to loopback on Linux, so any 127.x.y.z binds with no root and no
-    added addresses. Start at 127.0.0.2 (leave .1 for everything else)."""
-    n = 2 + index                       # 2..~65k, plenty for the estate
-    return f"127.0.{(n >> 8) & 0xFF}.{n & 0xFF}"
-
-
-# per-device rendered-table cache: a Checkmk walk fires HUNDREDS of GETBULKs in
-# a burst; cache the built Table long enough that the whole walk reuses one
-# snapshot (no mid-walk rebuild stalls) yet well under the ~60s check interval
-# so consecutive polls still see advanced counters. Big replay devices (17k
-# OIDs) make the build cost real — this keeps it to once per walk per device.
-_TABLE_CACHE: dict[str, list] = {}   # short -> [built_or_refreshed_ts, Table]
+# per-device rendered-table cache (keyed by community == device short name): a
+# Checkmk walk fires HUNDREDS of GETBULKs in a burst; cache the built Table long
+# enough that the whole walk reuses one snapshot (no mid-walk rebuild stalls)
+# yet well under the ~60s check interval so consecutive polls still see advanced
+# counters. Big replay devices (17k OIDs) make the build cost real — this keeps
+# it to once per walk per device.
+_TABLE_CACHE: dict[str, list] = {}   # community -> [built_or_refreshed_ts, Table]
 _TABLE_TTL = 15.0
 
 
 def _main_snmp(args: argparse.Namespace) -> None:
-    """Serve SNMP live on a UDP port per device — no site filesystem, no sudo."""
-    global DEVICES, SNMP_PORT, SNMP_COMMUNITY, TRANSPORT
+    """Serve SNMP live on ONE UDP port, routing to a device by its (unique)
+    community string — so a single port ports-maps into a normal container
+    (like the gateway), no --network host for per-device IPs. No sudo, no site
+    filesystem. The community IS the device's short name."""
+    global DEVICES, SNMP_PORT, TRANSPORT
     from snmpserver import SnmpServer, Table   # local: walk mode needn't import
 
     TRANSPORT = "snmp"
-    SNMP_PORT, SNMP_COMMUNITY = args.snmp_port, args.snmp_community
+    SNMP_PORT = args.snmp_port
     DEVICES = assemble_devices(args)
-    by_short = {d.short: d for d in DEVICES}
-    for i, dev in enumerate(sorted(DEVICES, key=lambda d: d.short)):
-        dev.ip = loopback_ip(i)
+    by_comm = {d.short: d for d in DEVICES}    # community == device short name
     load_state()
 
-    def table_for(short: str):
-        # Compile each device's table ONCE (sorted OIDs + all values, from the
-        # full walk — uniform for synthetic and replay devices) and then, once
-        # the TTL lapses, refresh only the DYNAMIC OIDs in place. The OID set
-        # is stable and ~96 % of a replay device's values never change, so a
-        # from-scratch rebuild every poll wastes CPU and churns ~MBs; patching
-        # touches ~2-4 %. The cache entry is [ts, table] (mutable) so refresh
-        # keeps the same table object (no realloc, no double-buffering).
+    def table_for(community: str):
+        # Route by community; unknown -> None (dropped). Compile each device's
+        # table ONCE (full walk) and, once the TTL lapses, refresh only the
+        # DYNAMIC OIDs in place (~2-4 % of a replay device) — the OID set is
+        # stable and ~96 % of values never change, so a from-scratch rebuild
+        # every poll would waste CPU and churn MBs. [ts, table] is mutable so
+        # the refresh keeps the same table object (no realloc, no double-buffer).
+        dev = by_comm.get(community)
+        if dev is None:
+            return None
         now = time.time()
-        dev = by_short[short]
-        hit = _TABLE_CACHE.get(short)
+        hit = _TABLE_CACHE.get(community)
         if hit is None:
             rows = [(oid, val) for oid, _, val in
                     (ln.partition(" ") for ln in dev.walk(now).splitlines()) if oid]
-            _TABLE_CACHE[short] = [now, Table(rows)]
-            return _TABLE_CACHE[short][1]
+            _TABLE_CACHE[community] = [now, Table(rows)]
+            return _TABLE_CACHE[community][1]
         if now - hit[0] >= _TABLE_TTL:
             hit[1].patch(dev.dynamic_rows(now))
             hit[0] = now
         return hit[1]
 
-    server = SnmpServer(SNMP_PORT, SNMP_COMMUNITY, table_for)
-    try:
-        for dev in DEVICES:
-            server.bind(dev.short, dev.ip)
-    except OSError as exc:
-        sys.exit(f"cannot bind SNMP responder on :{SNMP_PORT} ({exc})")
+    server = SnmpServer(args.bind, SNMP_PORT, table_for)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     threading.Thread(target=_state_persist_loop, daemon=True).start()
     if AUTO_BREAK_AFTER_MIN > 0:
         threading.Thread(target=auto_break_watchdog, daemon=True).start()
 
     http = ThreadingHTTPServer(("0.0.0.0", args.http_port), HttpHandler)  # nosec B104
-    print(f"[boot] transport: SNMP v2c on 127.0.0.0/8 :{SNMP_PORT} "
-          f"(community {SNMP_COMMUNITY!r})")
-    if len(DEVICES) <= 8:
-        print(f"[boot] devices: " + ", ".join(f"{d.short}@{d.ip}" for d in DEVICES))
-    else:
-        print(f"[boot] devices: {len(DEVICES)} on 127.0.0.2..{DEVICES and loopback_ip(len(DEVICES) - 1)}")
+    print(f"[boot] transport: SNMP v2c on {args.bind}:{SNMP_PORT} "
+          f"({len(DEVICES)} devices, routed by community = device name)")
     print(f"[boot] control: http://localhost:{args.http_port}/admin")
     print("[boot] IMPORTANT: run service discovery in Checkmk while HEALTHY.")
     try:
@@ -1546,7 +1532,8 @@ def main() -> None:
                         help="render one set of walks and exit (no daemon)")
     parser.add_argument("--transport", choices=("snmp", "walk"),
                         default=os.environ.get("NETSIM_TRANSPORT", "snmp"),
-                        help="snmp = answer SNMP live on a UDP port per device "
+                        help="snmp = answer SNMP live on one port, routed by "
+                             "community "
                              "(no site filesystem, no sudo); walk = write "
                              "stored-walk files into the site (legacy, needs "
                              "the site user)")
@@ -1554,9 +1541,10 @@ def main() -> None:
                         default=int(os.environ.get("NETSIM_SNMP_PORT", "1161")),
                         help="UDP port the SNMP responder listens on (per "
                              "device IP); a non-privileged port needs no root")
-    parser.add_argument("--snmp-community",
-                        default=os.environ.get("NETSIM_SNMP_COMMUNITY", "public"),
-                        help="accepted SNMP v2c community")
+    parser.add_argument("--bind",
+                        default=os.environ.get("NETSIM_BIND", "127.0.0.1"),
+                        help="address the SNMP responder binds (127.0.0.1 as a "
+                             "host process; 0.0.0.0 in a port-mapped container)")
     args = parser.parse_args()
 
     if args.transport == "snmp" and not args.once:

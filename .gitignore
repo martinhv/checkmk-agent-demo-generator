@@ -9,3 +9,8 @@ __pycache__/
 *.tar.bz2
 *.zip
 __pycache__/
+
+# SNMP stored-walk output files (netsim --transport walk / --once, if pointed
+# at the repo root). The default live-SNMP transport writes none; these are
+# generated artifacts named <device>.<ESTATE_DOMAIN>, never source.
+/*.corp.meridian-retail.com

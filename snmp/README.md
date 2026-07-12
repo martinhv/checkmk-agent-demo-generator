@@ -2,16 +2,17 @@
 
 Fake **network equipment** for the Meridian Retail demo estate. Where the
 server hosts fake a Checkmk *agent* over TCP, network gear is monitored via
-SNMP — and `netsim.py` **answers SNMP v2c live**: each device binds
-`127.0.0.<n>:1161` (the whole 127.0.0.0/8 routes to loopback, so any address
-binds with no root and no `ip addr add`), and Checkmk polls it like a real
-device. No site filesystem, **no sudo**. The SNMP server itself is
-`snmpserver.py` — a stdlib-only BER codec + GET/GETNEXT/GETBULK responder
-(`--selftest` validates it); it serves every value as an OCTET STRING, which
-Checkmk stringifies exactly like the "real" type, so no per-OID type table is
-needed. A daemon that re-renders each device on demand with advancing
-counters produces **live traffic graphs**, real rate checks, and stageable
-incidents.
+SNMP — and `netsim.py` **answers SNMP v2c live** on ONE UDP port
+(`127.0.0.1:1161`), routing to a device by its **unique community string**
+(the device short name); Checkmk polls the single address with a per-host
+community. One port means netsim ports-maps into a normal container like the
+gateway (no `--network host`). No site filesystem, **no sudo**. The SNMP
+server itself is `snmpserver.py` — a stdlib-only BER codec +
+GET/GETNEXT/GETBULK responder (`--selftest` validates it); it serves every
+value as an OCTET STRING, which Checkmk stringifies exactly like the "real"
+type, so no per-OID type table is needed. A daemon that re-renders each device
+on demand with advancing counters produces **live traffic graphs**, real rate
+checks, and stageable incidents.
 
 `netsim.py` is a stdlib-only daemon with monotonic counters (`Counter`) and
 autocorrelated gauges (`gauge`), exactly the physics of the agent hosts (see
@@ -24,9 +25,10 @@ A **legacy `--transport walk`** still writes stored-walk files into the site's
 it — but that path needs the site user (sudo), which is exactly what the live
 default avoids.
 
-The Checkmk side (hosts as SNMP v2 / no-agent with a loopback `ipaddress` +
-a folder-wide community/port rule, plus discovery + activation) is done by
-**`../deploy/cmk_setup.py`**, which `../estate.py` drives for you.
+The Checkmk side (hosts as SNMP v2 / no-agent sharing `ipaddress` 127.0.0.1,
+each with a per-host `snmp_community` = its device name + one folder port
+rule, plus discovery + activation) is done by **`../deploy/cmk_setup.py`**,
+which `../estate.py` drives for you.
 
 ## The replay fleet (`--fleet`, company scale)
 
@@ -72,9 +74,10 @@ Services per device (all from real Checkmk SNMP plugins, no rules needed):
 
 # 1. start the SNMP responder — runs as you, no sudo, no site access
 python3 snmp/netsim.py                             # foreground; or use &
-#    (answers SNMP live on 127.0.0.0/8:1161; --selftest checks snmpserver.py)
+#    (answers SNMP live on 127.0.0.1:1161, routed by community; --selftest
+#     checks snmpserver.py)
 
-# 2. bootstrap Checkmk (hosts + community/port rule + discovery + activate)
+# 2. bootstrap Checkmk (hosts + per-host community + port rule + discovery)
 deploy/cmk_setup.py --site heute
 
 # 3. drive the incidents

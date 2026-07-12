@@ -53,7 +53,7 @@ control panels: **:8099/admin** (servers), **:8101/admin** (network).
 | `deploy/` | deployment machinery: `cmk_setup.py` (REST-API site setup/teardown engine, also usable standalone) and `piggyback/` (ONE container that runs every agent host and delivers them as piggyback — agent :6559) |
 | `hosts/` | the agent-based simulators, one dir per host (`serve.py` + Dockerfile + README with the demo choreography) — each still runs standalone via its own `docker compose` |
 | `fleet/` | the company-scale server bulk: `profiles.py` (declarative roster, ~170 Linux/Windows hosts on 12 KVM hypervisors) + `serve.py` (ONE process synthesizing every agent output) |
-| `snmp/` | the SNMP simulator: `netsim.py` answers SNMP v2c **live** on a UDP port per device (127.0.0.0/8:1161 — stdlib responder `snmpserver.py`, no sudo, no stored-walk files); real if64/cisco/apc plugins, live graphs. `walklib/` holds ~24 anonymized real device walks (made by `curate_walks.py`) that netsim replays as ~110 estate devices |
+| `snmp/` | the SNMP simulator: `netsim.py` answers SNMP v2c **live** on one UDP port (127.0.0.1:1161), routing to a device by its unique community (stdlib responder `snmpserver.py`, no sudo, no stored-walk files); real if64/cisco/apc plugins, live graphs. `walklib/` holds ~24 anonymized real device walks (made by `curate_walks.py`) that netsim replays as ~110 estate devices |
 | `CLAUDE.md` | the engineering knowledge base (see below) |
 | `FLEET.md` | the company story, host roster, topology, port map |
 

@@ -251,6 +251,23 @@ class Table:
         return self.oids[i] if i < len(self.oids) else None
 
 
+def peek_community(data: bytes) -> str | None:
+    """Extract the v2c community from a request without handling it — the
+    responder routes to a device by community (one shared UDP port, a unique
+    community per host), so it must read the community before picking a table."""
+    try:
+        _, body, _ = _read_tlv(data, 0)
+        vtag, vbody, pos = _read_tlv(body, 0)
+        if vtag != T_INT or dec_int(vbody) != 1:
+            return None
+        ctag, cbody, _ = _read_tlv(body, pos)
+        if ctag != T_OCTETSTR:
+            return None
+        return cbody.decode("latin1")
+    except BERError:
+        return None
+
+
 def handle_message(data: bytes, table: Table,
                    community: str | None = None) -> bytes | None:
     """Parse a v2c request and return the encoded response (or None to drop)."""
@@ -310,47 +327,53 @@ def _next_vb(table: Table, oid: tuple[int, ...]) -> VarBind:
 
 
 # --------------------------------------------------------------------------- #
-#  UDP server — one socket per device IP, a single selectors loop
+#  UDP server — ONE socket, devices distinguished by community string
 # --------------------------------------------------------------------------- #
 class SnmpServer:
-    """Binds `ip:port` per device; `table_for(short)` returns a current
-    `Table` for that device (the caller builds + caches it — a device's OID
-    space is stable within a poll, so it need not be rebuilt per packet)."""
+    """Answers SNMP on a single `bind:port`. Every device has a unique v2c
+    community, so one shared port serves them all — the responder reads the
+    community and routes: `table_for(community)` returns that device's current
+    `Table` (built + cached by the caller) or None for an unknown community.
 
-    def __init__(self, port: int, community: str | None,
-                 table_for: "Callable[[str], Table]") -> None:
+    A single port means netsim ports-maps into a normal container like the
+    delivery gateway (no --network host for ~120 loopback IPs). A pool of
+    worker threads reads the shared socket (the kernel hands each datagram to
+    one), so concurrent bulk-discovery walks still interleave."""
+
+    def __init__(self, bind: str, port: int,
+                 table_for: "Callable[[str], Table | None]",
+                 workers: int = 16) -> None:
+        self.bind = bind
         self.port = port
-        self.community = community
         self.table_for = table_for
-        self._socks: list[tuple[socket.socket, str]] = []
-
-    def bind(self, short: str, ip: str) -> None:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind((ip, self.port))
-        self._socks.append((s, short))
+        self.workers = workers
+        self.sock: socket.socket | None = None
 
     def serve_forever(self) -> None:
-        # One thread per device socket. A Checkmk bulk discovery walks many
-        # devices at once; a single loop would serialize their (large) walks
-        # and the SNMP fetches would time out. Per-socket threads are cheap
-        # (idle on a blocking recvfrom) and let concurrent walks interleave.
-        threads = [threading.Thread(target=self._serve, args=(s, short),
-                                    daemon=True)
-                   for s, short in self._socks]
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((self.bind, self.port))
+        self.sock = s
+        threads = [threading.Thread(target=self._serve, daemon=True)
+                   for _ in range(self.workers)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
 
-    def _serve(self, sock: socket.socket, short: str) -> None:
+    def _serve(self) -> None:
+        sock = self.sock
         while True:
             try:
                 data, addr = sock.recvfrom(65535)
             except OSError:
                 return
             try:
-                reply = handle_message(data, self.table_for(short), self.community)
+                community = peek_community(data)
+                table = self.table_for(community) if community else None
+                if table is None:
+                    continue           # unknown community -> silently drop
+                reply = handle_message(data, table, community=None)
             except Exception:
                 continue
             if reply is not None:

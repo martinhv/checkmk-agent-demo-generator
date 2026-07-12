@@ -55,15 +55,16 @@ Moving parts (all stdlib, see the directories):
   deploy/piggyback/   ONE container (docker or podman; or --runtime native:
                       one process) runs every agent host's serve.py and
                       delivers them as piggyback — agent :6559, panel :8099
-  snmp/netsim.py      answers SNMP live on a UDP port per device (127.0.0.0/8
-                      :1161) — panel :8101. Runs as the caller: no site
-                      filesystem, no sudo
+  snmp/netsim.py      answers SNMP live on ONE UDP port (127.0.0.1:1161),
+                      routing to a device by its community — panel :8101. Runs
+                      in the same runtime as the gateway (container or native),
+                      no site filesystem, no sudo
   deploy/cmk_setup.py the REST-API engine (folder, hosts, rules, BI,
                       discovery, activation, teardown) — also usable alone
 
 Requirements: docker or podman compose (unless --runtime native) and a running
 Checkmk site. The SNMP layer needs the site to reach the responder on
-127.0.0.0/8, so it applies to a LOCAL site (self-hosted), not remote/SaaS.
+127.0.0.1:1161, so it applies to a LOCAL site (self-hosted), not remote/SaaS.
 """
 from __future__ import annotations
 
@@ -107,9 +108,10 @@ SCALES = {
     "company": {"hosts": "", "snmp": True, "fleet": True},
 }
 
-# UDP port the netsim SNMP responder listens on (per device IP on 127.0.0.0/8);
-# non-privileged so it needs no root. cmk_setup reads the actual value from the
-# netsim panel and writes the matching per-folder SNMP-port rule.
+# UDP port the netsim SNMP responder listens on (a single shared port on
+# 127.0.0.1; devices are told apart by community). Non-privileged so it needs no
+# root. cmk_setup reads the value from the netsim panel and writes the matching
+# per-folder SNMP-port rule.
 NETSIM_SNMP_PORT = 1161
 
 
@@ -275,9 +277,16 @@ def _pid_kill(pidfile: str, what: str) -> None:
 #  SNMP responder (netsim answers SNMP live; runs as the caller, no sudo)
 # --------------------------------------------------------------------------- #
 NETSIM_LOG = "/var/tmp/cmk-demo-estate-netsim.log"
-# hash of the netsim code as launched, so `up` restarts it when the topology
-# or responder changes (see _netsim_sig / netsim_up)
+# hash of the netsim code as launched, so a native `up` restarts it when the
+# topology or responder changes (see _netsim_sig / _netsim_up_native)
 NETSIM_SIGFILE = "/var/tmp/cmk-demo-netsim.sig"
+# in container runtimes netsim runs from the gateway image (it has snmp/ +
+# walklib baked in) as a sibling container — one shared, community-routed port
+GATEWAY_IMAGE = "cmk-demo-estate:latest"
+NETSIM_CONTAINER = "cmk-demo-netsim"
+# host bind-mount for the netsim container's state file (counter continuity
+# across redeploys); /var/tmp, not the site — no sudo
+NETSIM_STATE_DIR = "/var/tmp/cmk-demo-netsim-state"
 
 
 def _netsim_sig() -> str:
@@ -295,21 +304,73 @@ def _netsim_sig() -> str:
 
 
 def netsim_up(args: argparse.Namespace, site_name: str | None = None) -> None:
-    """Run netsim as the LIVE SNMP responder — as the caller, no sudo, no site
-    filesystem: it answers SNMP on a UDP port per device on 127.0.0.0/8 and
-    Checkmk polls it directly (cmk_setup wires the ipaddress + community/port
-    rule from the panel). netsim reads snmp/walklib straight from the repo."""
-    fleet = SCALES[args.scale]["fleet"] if hasattr(args, "scale") else False
-    netsim = os.path.join(REPO, "snmp", "netsim.py")
+    """Start netsim as the LIVE SNMP responder — no sudo, no site filesystem.
+    It answers SNMP on ONE UDP port, routing to a device by its (unique)
+    community; Checkmk polls 127.0.0.1:<port> and cmk_setup wires each host's
+    ipaddress + community from the panel. Runs in the SAME runtime as the
+    gateway: a container (docker/podman) reusing the gateway image, or a plain
+    process (--runtime native)."""
+    fleet = bool(SCALES[args.scale]["fleet"]) if hasattr(args, "scale") else False
+    engine = compose_engine(args.runtime)
+    reused = (_netsim_up_container(engine, fleet, args) if engine
+              else _netsim_up_native(fleet, args))
+    if reused:
+        return
+
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        if get_json(SNMP_PANEL + "/") is not None:
+            print(f"  netsim started (SNMP responder, panel {SNMP_PANEL}/admin)")
+            return
+        time.sleep(1)
+    hint = (f"       {engine} logs {NETSIM_CONTAINER}" if engine
+            else f"       last lines: {NETSIM_LOG}")
+    sys.exit(f"ERROR: netsim did not come up\n{hint}")
+
+
+def _netsim_up_container(engine: str, fleet: bool,
+                         args: argparse.Namespace) -> bool:
+    """Run netsim from the SAME image as the gateway (it has snmp/ + walklib),
+    port-mapped like any container — one shared SNMP port, community-routed, so
+    no --network host. Recreated fresh each up, mirroring the gateway's
+    --force-recreate (picks up a rebuilt image / topology change)."""
+    if not shutil.which(engine):
+        sys.exit(f"ERROR: {engine} not found — use --runtime native")
+    subprocess.run([engine, "rm", "-f", NETSIM_CONTAINER],  # noqa: S603
+                   capture_output=True)
+    # Persist counter/incident state to a host bind-mount so a redeploy is
+    # invisible (counters stay monotonic — a reset would trip the rate-check
+    # staleness cascade, see CLAUDE.md). /var/tmp, NOT the site: keeps no-sudo.
+    os.makedirs(NETSIM_STATE_DIR, exist_ok=True)
+    try:
+        os.chmod(NETSIM_STATE_DIR, 0o777)  # noqa: S103 (container uid writes here)
+    except OSError:
+        pass
+    cmd = [engine, "run", "-d", "--name", NETSIM_CONTAINER,
+           "--restart", "unless-stopped",
+           "-p", "127.0.0.1:8101:8101",
+           "-p", f"127.0.0.1:{NETSIM_SNMP_PORT}:{NETSIM_SNMP_PORT}/udp",
+           "-v", f"{NETSIM_STATE_DIR}:/state",
+           "-e", "STATE_FILE=/state/netsim-state.json",
+           "--entrypoint", "python3", GATEWAY_IMAGE,
+           "-u", "snmp/netsim.py", "--transport", "snmp", "--bind", "0.0.0.0",
+           "--http-port", "8101", "--snmp-port", str(NETSIM_SNMP_PORT),
+           "--access-switches", str(args.replicas)]
+    if fleet:
+        cmd += ["--fleet", "--walklib", "snmp/walklib"]
+    if sh(cmd).returncode != 0:
+        sys.exit(f"ERROR: {engine} run {NETSIM_CONTAINER} failed")
+    return False   # always (re)started -> caller waits for readiness
+
+
+def _netsim_up_native(fleet: bool, args: argparse.Namespace) -> bool:
+    """Plain background process. Reuse a running one unless --force, a scale
+    change, or a netsim code change (a stale responder would serve old data and
+    the fingerprint fast-path would then skip the update). Returns True if the
+    running responder was reused (caller skips the readiness wait)."""
     sig = _netsim_sig()
     running = get_json(SNMP_PANEL + "/")
     if running is not None:
-        # Reuse the running netsim only if it still reflects the current config;
-        # restart on --force, a fleet/scale change ("sw-dc-tor-*" is fleet-only,
-        # revealing the running fleet state), or a netsim code change (else a
-        # stale netsim keeps serving old data and cmk_setup's fingerprint
-        # fast-path skips the update). Agent-host parents already refresh every
-        # up (the shell is rebuilt); this closes the same gap for SNMP.
         running_fleet = any(s.startswith("sw-dc-tor")
                             for s in running.get("devices", {}))
         force = bool(getattr(args, "force", False))
@@ -320,50 +381,41 @@ def netsim_up(args: argparse.Namespace, site_name: str | None = None) -> None:
             stale = True
         if running_fleet == fleet and not force and not stale:
             print("  netsim already running")
-            return
-        why = ("--force" if force else "scale change"
-               if running_fleet != fleet else "netsim.py changed")
-        print(f"  restarting netsim ({why})")
-        netsim_down()
+            return True
+        print("  restarting netsim (%s)" % ("--force" if force else "scale change"
+              if running_fleet != fleet else "netsim.py changed"))
+        netsim_down(args)
         deadline = time.time() + 15
         while time.time() < deadline and get_json(SNMP_PANEL + "/") is not None:
             time.sleep(0.5)
-        if get_json(SNMP_PANEL + "/") is not None:
-            sys.exit(f"ERROR: could not stop the stale netsim — stop it by hand "
-                     f"and re-run:\n       curl {SNMP_PANEL}/admin/shutdown")
 
-    target = ["--transport", "snmp", "--http-port", "8101",
+    target = ["--transport", "snmp", "--bind", "127.0.0.1", "--http-port", "8101",
               "--snmp-port", str(NETSIM_SNMP_PORT),
               "--access-switches", str(args.replicas)]
     if fleet:
         target += ["--fleet", "--walklib", os.path.join(REPO, "snmp", "walklib")]
     log = open(NETSIM_LOG, "wb")  # noqa: SIM115  (fresh log per attempt)
     proc = subprocess.Popen(  # noqa: S603
-        [sys.executable, "-u", netsim, *target],
+        [sys.executable, "-u", os.path.join(REPO, "snmp", "netsim.py"), *target],
         stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     with open(PIDFILE_NETSIM, "w") as f:
         f.write(str(proc.pid))
     with open(NETSIM_SIGFILE, "w") as f:
         f.write(sig)
-
-    deadline = time.time() + 90
-    while time.time() < deadline:
-        if get_json(SNMP_PANEL + "/") is not None:
-            print(f"  netsim started (SNMP responder, panel {SNMP_PANEL}/admin)")
-            return
-        time.sleep(1)
-    try:
-        with open(NETSIM_LOG) as f:
-            tail = "".join(f.readlines()[-8:])
-    except OSError:
-        tail = "(no log)"
-    sys.exit(f"ERROR: netsim did not come up — last log lines "
-             f"({NETSIM_LOG}):\n{tail}")
+    return False
 
 
-def netsim_down() -> None:
-    # SIGTERM the tracked pid; also hit the control panel's shutdown endpoint
-    # (belt-and-braces, and it still works if the pidfile was lost)
+def netsim_down(args: argparse.Namespace | None = None) -> None:
+    # Stop netsim in EITHER form — robust across a runtime switch (e.g. a native
+    # responder still holding the ports when we bring up the container one):
+    #  1) remove the container (if the engine is available),
+    #  2) SIGTERM a native pid (pidfile is written only by the native path),
+    #  3) if something still answers the panel, hit /admin/shutdown.
+    engine = compose_engine(args.runtime) if args and hasattr(args, "runtime") \
+        else None
+    if engine and shutil.which(engine):
+        sh([engine, "rm", "-f", NETSIM_CONTAINER])
+    _pid_kill(PIDFILE_NETSIM, "netsim")
     if get_json(SNMP_PANEL + "/") is not None:
         try:
             urllib.request.urlopen(  # noqa: S310
@@ -372,7 +424,6 @@ def netsim_down() -> None:
         except (urllib.error.URLError, OSError):
             print(f"  WARN: netsim still up but shutdown failed — "
                   f"stop it yourself (panel {SNMP_PANEL}/admin)")
-    _pid_kill(PIDFILE_NETSIM, "netsim")
 
 
 # --------------------------------------------------------------------------- #
@@ -450,7 +501,7 @@ def cmd_down(args: argparse.Namespace) -> None:
                 print(f"  (Checkmk teardown incomplete: {exc.code}) — "
                       "continuing with process shutdown")
     print("* stopping netsim")
-    netsim_down()
+    netsim_down(args)
     print("* stopping the piggyback shell")
     shell_down(args)
     print("Done.")
