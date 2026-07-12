@@ -69,7 +69,11 @@ DOMAIN = os.environ.get("ESTATE_DOMAIN", "corp.meridian-retail.com")
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8101"))
 RENDER_INTERVAL = float(os.environ.get("RENDER_INTERVAL", "30"))
 AUTO_BREAK_AFTER_MIN = float(os.environ.get("AUTO_BREAK_AFTER_MIN", "20"))
-STATE_FILE = os.environ.get("STATE_FILE", "/var/tmp/cmk-demo-netsim-state.json")
+# per-uid so a run as one user never collides with a state file another user
+# left in sticky /var/tmp (the live SNMP transport runs as the caller, not the
+# site user — a shared path would EPERM on os.replace every save)
+STATE_FILE = os.environ.get(
+    "STATE_FILE", f"/var/tmp/cmk-demo-netsim-state-{os.getuid()}.json")
 
 START = time.time()
 
@@ -1432,13 +1436,20 @@ def _main_snmp(args: argparse.Namespace) -> None:
     load_state()
 
     def table_for(short: str):
+        # Build from walk() — uniform for synthetic AND replay devices (the
+        # latter render only via walk(), not rows()). Cache the built Table
+        # (not just the rows) so a discovery burst of many GETBULKs on one
+        # device reuses the sorted/encoded table instead of rebuilding it.
         now = time.time()
         hit = _TABLE_CACHE.get(short)
         if hit and now - hit[0] < _TABLE_TTL:
             return hit[1]
-        rows = by_short[short].rows(now)
-        _TABLE_CACHE[short] = (now, rows)
-        return rows
+        rows = [(oid, val) for oid, _, val in
+                (line.partition(" ") for line in by_short[short].walk(now).splitlines())
+                if oid]
+        table = Table(rows)
+        _TABLE_CACHE[short] = (now, table)
+        return table
 
     server = SnmpServer(SNMP_PORT, SNMP_COMMUNITY, table_for)
     try:

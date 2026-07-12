@@ -302,10 +302,12 @@ def _next_vb(table: Table, oid: tuple[int, ...]) -> VarBind:
 #  UDP server — one socket per device IP, a single selectors loop
 # --------------------------------------------------------------------------- #
 class SnmpServer:
-    """Binds `ip:port` per device; `table_for(short)` returns fresh rows."""
+    """Binds `ip:port` per device; `table_for(short)` returns a current
+    `Table` for that device (the caller builds + caches it — a device's OID
+    space is stable within a poll, so it need not be rebuilt per packet)."""
 
     def __init__(self, port: int, community: str | None,
-                 table_for: Callable[[str], list[tuple[str, str]]]) -> None:
+                 table_for: "Callable[[str], Table]") -> None:
         self.port = port
         self.community = community
         self.table_for = table_for
@@ -331,8 +333,7 @@ class SnmpServer:
         except OSError:
             return
         try:
-            table = Table(self.table_for(short))
-            reply = handle_message(data, table, self.community)
+            reply = handle_message(data, self.table_for(short), self.community)
         except (BERError, Exception):
             return
         if reply is not None:
