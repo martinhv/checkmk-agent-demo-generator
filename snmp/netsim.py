@@ -367,6 +367,12 @@ class Device:
     def walk(self, now: float) -> str:
         return render_walk(self.rows(now))
 
+    def dynamic_rows(self, now: float) -> list[tuple[str, str]]:
+        """OIDs to refresh in a cached SNMP table. The synthetic devices
+        re-render everything and are small (<=~600 OIDs), so refresh them
+        fully; ReplayDevice overrides this to return only its changing OIDs."""
+        return self.rows(now)
+
     def status_extras(self) -> list[str]:
         return []
 
@@ -904,6 +910,31 @@ class ReplayDevice(Device):
             self._counters[key] = c
         return c
 
+    # kinds whose value moves between polls — everything else (incl. sysname/
+    # syslocation and all the recorded static lines) is fixed for an instance
+    _DYNAMIC_KINDS = frozenset({"uptime", "hrcpu", "apcdate", "ctr32", "ctr64"})
+
+    def _slot_value(self, seg: tuple, elapsed: float, now: float,
+                    sampled: dict) -> str:
+        kind, oid, key, rec = seg
+        if kind == "sysname":
+            return self.fqdn
+        if kind == "syslocation":
+            return self.location
+        if kind == "uptime":
+            return str(int(rec + elapsed * 100) % U32)
+        if kind == "hrcpu":
+            v = gauge(f"{self.short}.hrcpu.{key}", rec, amp_abs=3.0,
+                      phase=self.phase, period=900)
+            return str(max(1, min(97, int(round(v)))))
+        if kind == "apcdate":
+            return time.strftime("%m/%d/%Y", time.localtime(now - 37 * 86400))
+        # ctr32 / ctr64
+        if key not in sampled:
+            rate = self.model.rates.get(key, 0.0) * self.rate_jit
+            sampled[key] = self._counter(key, rec).sample(rate)
+        return str(sampled[key] % U32 if kind == "ctr32" else sampled[key])
+
     def walk(self, now: float) -> str:
         elapsed = now - START + self.uptime_extra
         sampled: dict[str, int] = {}
@@ -911,29 +942,19 @@ class ReplayDevice(Device):
         for seg in self.model.segments:
             if isinstance(seg, str):
                 parts.append(seg)
-                continue
-            kind, oid, key, rec = seg
-            if kind == "sysname":
-                parts.append(f"{oid} {self.fqdn}\n")
-            elif kind == "syslocation":
-                parts.append(f"{oid} {self.location}\n")
-            elif kind == "uptime":
-                parts.append(f"{oid} {int(rec + elapsed * 100) % U32}\n")
-            elif kind == "hrcpu":
-                v = gauge(f"{self.short}.hrcpu.{key}", rec, amp_abs=3.0,
-                          phase=self.phase, period=900)
-                parts.append(f"{oid} {max(1, min(97, int(round(v))))}\n")
-            elif kind == "apcdate":
-                diag = time.strftime("%m/%d/%Y",
-                                     time.localtime(now - 37 * 86400))
-                parts.append(f"{oid} {diag}\n")
-            else:  # ctr32 / ctr64
-                if key not in sampled:
-                    rate = self.model.rates.get(key, 0.0) * self.rate_jit
-                    sampled[key] = self._counter(key, rec).sample(rate)
-                v = sampled[key] % U32 if kind == "ctr32" else sampled[key]
-                parts.append(f"{oid} {v}\n")
+            else:
+                parts.append(f"{seg[1]} {self._slot_value(seg, elapsed, now, sampled)}\n")
         return "".join(parts)
+
+    def dynamic_rows(self, now: float) -> list[tuple[str, str]]:
+        """Only the OIDs whose value changes between polls (counters, uptime,
+        cpu, apc date) — ~2-4 % of the walk. Lets the responder refresh a
+        cached table in place instead of rebuilding all ~17k OIDs each poll."""
+        elapsed = now - START + self.uptime_extra
+        sampled: dict[str, int] = {}
+        return [(seg[1], self._slot_value(seg, elapsed, now, sampled))
+                for seg in self.model.segments
+                if not isinstance(seg, str) and seg[0] in self._DYNAMIC_KINDS]
 
     def rows(self, now: float) -> list[tuple[str, str]]:  # pragma: no cover
         raise NotImplementedError("ReplayDevice renders via walk()")
@@ -1421,7 +1442,7 @@ def loopback_ip(index: int) -> str:
 # snapshot (no mid-walk rebuild stalls) yet well under the ~60s check interval
 # so consecutive polls still see advanced counters. Big replay devices (17k
 # OIDs) make the build cost real — this keeps it to once per walk per device.
-_TABLE_CACHE: dict[str, tuple[float, object]] = {}
+_TABLE_CACHE: dict[str, list] = {}   # short -> [built_or_refreshed_ts, Table]
 _TABLE_TTL = 15.0
 
 
@@ -1439,20 +1460,25 @@ def _main_snmp(args: argparse.Namespace) -> None:
     load_state()
 
     def table_for(short: str):
-        # Build from walk() — uniform for synthetic AND replay devices (the
-        # latter render only via walk(), not rows()). Cache the built Table
-        # (not just the rows) so a discovery burst of many GETBULKs on one
-        # device reuses the sorted/encoded table instead of rebuilding it.
+        # Compile each device's table ONCE (sorted OIDs + all values, from the
+        # full walk — uniform for synthetic and replay devices) and then, once
+        # the TTL lapses, refresh only the DYNAMIC OIDs in place. The OID set
+        # is stable and ~96 % of a replay device's values never change, so a
+        # from-scratch rebuild every poll wastes CPU and churns ~MBs; patching
+        # touches ~2-4 %. The cache entry is [ts, table] (mutable) so refresh
+        # keeps the same table object (no realloc, no double-buffering).
         now = time.time()
+        dev = by_short[short]
         hit = _TABLE_CACHE.get(short)
-        if hit and now - hit[0] < _TABLE_TTL:
-            return hit[1]
-        rows = [(oid, val) for oid, _, val in
-                (line.partition(" ") for line in by_short[short].walk(now).splitlines())
-                if oid]
-        table = Table(rows)
-        _TABLE_CACHE[short] = (now, table)
-        return table
+        if hit is None:
+            rows = [(oid, val) for oid, _, val in
+                    (ln.partition(" ") for ln in dev.walk(now).splitlines()) if oid]
+            _TABLE_CACHE[short] = [now, Table(rows)]
+            return _TABLE_CACHE[short][1]
+        if now - hit[0] >= _TABLE_TTL:
+            hit[1].patch(dev.dynamic_rows(now))
+            hit[0] = now
+        return hit[1]
 
     server = SnmpServer(SNMP_PORT, SNMP_COMMUNITY, table_for)
     try:

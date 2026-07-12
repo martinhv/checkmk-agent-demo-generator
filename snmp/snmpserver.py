@@ -21,6 +21,7 @@ Self-test: `python3 snmpserver.py --selftest` (no external tools needed).
 """
 from __future__ import annotations
 
+import bisect
 import re
 import socket
 import threading
@@ -221,7 +222,12 @@ def _parse_varbinds(body: bytes) -> list[tuple[int, ...]]:
 
 class Table:
     """A device's current OID space: sorted (oid_tuple, value_tlv) pairs, with
-    fast lexicographic 'next' lookup for GETNEXT/GETBULK."""
+    fast lexicographic 'next' lookup for GETNEXT/GETBULK.
+
+    Built once from the full walk, then refreshed in place with patch(): a
+    replayed device's OID SET never changes and ~96% of its values are static
+    (only counters/uptime move), so re-parsing/encoding/sorting all 17k OIDs
+    every poll is wasted work. patch() re-encodes just the dynamic rows."""
 
     def __init__(self, rows: list[tuple[str, str]]) -> None:
         pairs = {}
@@ -230,12 +236,17 @@ class Table:
         self.oids = sorted(pairs)
         self.value = pairs
 
+    def patch(self, rows: list[tuple[str, str]]) -> None:
+        """Overwrite the values of the given (already-present) OIDs in place.
+        The sorted OID list is untouched (the set is stable)."""
+        for oid_s, val_s in rows:
+            self.value[parse_oid(oid_s)] = enc_octetstr(encode_value(val_s))
+
     def get(self, oid: tuple[int, ...]) -> bytes | None:
         return self.value.get(oid)
 
     def next(self, oid: tuple[int, ...]) -> tuple[int, ...] | None:
         # first stored OID strictly greater than `oid` (lexicographic)
-        import bisect
         i = bisect.bisect_right(self.oids, oid)
         return self.oids[i] if i < len(self.oids) else None
 
