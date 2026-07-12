@@ -1,6 +1,8 @@
 """Smoke tests — prove the modules import and the core paths run. Real unit
 tests can grow from here (drop --cov-fail-under into pyproject once they do)."""
 
+# tests exercise snmpserver internals (_selftest, _tlv, ...) by design
+# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import subprocess

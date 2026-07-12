@@ -434,7 +434,7 @@ def _selftest() -> None:
         pdu = enc_int(7) + enc_int(n1) + enc_int(n2) + _tlv(T_SEQ, vbl)
         return _tlv(T_SEQ, enc_int(1) + enc_octetstr(community) + _tlv(pdu_tag, pdu))
 
-    def resp_varbinds(reply: bytes | None):
+    def resp_varbinds(reply: bytes | None) -> list[tuple[tuple[int, ...], int, bytes]]:
         assert reply is not None  # test requests always get a response
         _, body, _ = _read_tlv(reply, 0)
         _, _, p = _read_tlv(body, 0)

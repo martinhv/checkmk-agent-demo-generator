@@ -904,6 +904,10 @@ class ReplayModel:
             cls._cache[name] = cls(name, os.path.join(walklib, f"{name}.walk"))
         return cls._cache[name]
 
+    @classmethod
+    def loaded_count(cls) -> int:
+        return len(cls._cache)
+
     def __init__(self, name: str, path: str) -> None:
         self.name = name
         # segments: static text blocks interleaved with dynamic slots
@@ -1614,7 +1618,7 @@ def assemble_devices(args: argparse.Namespace) -> list[Device]:
         devs += replay
         print(
             f"[boot] replay fleet: {len(replay)} devices from "
-            f"{len(ReplayModel._cache)} walk models ({args.walklib})"
+            f"{ReplayModel.loaded_count()} walk models ({args.walklib})"
         )
     if args.devices.strip():
         wanted = {d.strip() for d in args.devices.split(",") if d.strip()}

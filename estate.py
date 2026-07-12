@@ -79,7 +79,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, TypedDict
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(REPO, "deploy"))
@@ -101,7 +101,13 @@ def delivery_for(mode: str) -> str:
     return "datasource" if mode == "self-hosted" else "piggyback"
 
 
-SCALES = {
+class _Scale(TypedDict):
+    hosts: str
+    snmp: bool
+    fleet: bool
+
+
+SCALES: dict[str, _Scale] = {
     "minimal": {"hosts": "payment-api,db-postgres-01", "snmp": False, "fleet": False},
     "standard": {"hosts": "", "snmp": False, "fleet": False},  # "" = whole roster
     "full": {"hosts": "", "snmp": True, "fleet": False},
@@ -141,7 +147,7 @@ def wait_for(url: str, what: str, timeout: float = 90.0):
     sys.exit(f"ERROR: {what} did not come up within {timeout:g}s ({url})")
 
 
-def wait_for_children(timeout: float = 60.0):
+def wait_for_children(timeout: float = 60.0) -> dict[str, Any]:
     """The panel binds its HTTP port as soon as the shell starts, but each
     carried host is an internal TCP child that needs a moment to produce its
     first state. cmk_setup.setup() dies if any child still has no state, so
@@ -149,7 +155,7 @@ def wait_for_children(timeout: float = 60.0):
     surface the precise 'not up yet' message). Matters most when the container
     was just (re)created — e.g. every podman `up`, which force-recreates."""
     deadline = time.time() + timeout
-    info = {}
+    info: dict[str, Any] = {}
     while time.time() < deadline:
         info = get_json(PANEL + "/") or {}
         hosts = info.get("carried_hosts") or []

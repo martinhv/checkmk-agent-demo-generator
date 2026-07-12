@@ -472,9 +472,12 @@ class LinuxHost:
         # cpu tick split from the load (util = busy fraction of all cores)
         total_ticks = self.ncpu * 100.0
         util = max(0.02, min(0.80, self.load1 / self.ncpu * 0.75))
-        c = lambda n, r, ph=0.0, amp=0.30: Counter(  # noqa: E731
-            f"{short}.{n}", phase=self.phase + ph, amp=amp, start=r * self.uptime_offset
-        )
+
+        def c(n: str, r: float, ph: float = 0.0, amp: float = 0.30) -> Counter:
+            return Counter(
+                f"{short}.{n}", phase=self.phase + ph, amp=amp, start=r * self.uptime_offset
+            )
+
         self.c_user = c("cpu.user", total_ticks * util * 0.72, 0.3)
         self.c_system = c("cpu.system", total_ticks * util * 0.22, 1.1)
         self.c_iowait = c("cpu.iowait", total_ticks * 0.015, 3.0)
