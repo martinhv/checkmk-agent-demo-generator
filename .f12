@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Bootstrap the development environment: create the uv-managed venv with all dev
+# tools (ruff, basedpyright, pytest, prek) and register the git pre-commit hook.
+# Unlike hop's .f12 there is nothing to install on PATH — the estate runs in
+# place via ./estate.py; this only sets up the toolchain.
+set -euo pipefail
+
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+uv sync                       # .venv + dev-group tools, pinned by uv.lock
+uv run prek install           # run the four checks on every git commit
+
+echo
+echo "Dev environment ready. Run all checks any time:"
+echo "    uv run prek run --all-files"

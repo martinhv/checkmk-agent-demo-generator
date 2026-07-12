@@ -1,6 +1,13 @@
 __pycache__/
 *.pyc
 
+# dev toolchain (uv venv + tool caches)
+.venv/
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+
 # Build/packaging artifacts — never commit archives
 *.tar
 *.tar.gz

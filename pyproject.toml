@@ -1,0 +1,112 @@
+# Dev-tooling only. This project ships stdlib-only runtime code (estate.py +
+# deploy/ snmp/ fleet/ hosts/ are run in place, not installed), so there are NO
+# runtime dependencies and the project itself is not a package — uv just manages
+# the dev toolchain (ruff, basedpyright, pytest, prek). Mirrors ~/git/hop.
+
+[project]
+name = "checkmk-agent-demo-generator"
+version = "0.1.0"
+description = "Fake Checkmk agent/SNMP hosts for building demo estates."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = []
+dependencies = []                      # runtime is stdlib-only, by design
+
+[tool.uv]
+package = false                        # scripts, not an installable package
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.39.9",
+    "prek>=0.4.8",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.15.20",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+asyncio_mode = "auto"
+# Kill anything that hangs (the responder/panel tests bind sockets); dump the
+# offending test's stack instead of blocking the run.
+timeout = 60
+# Coverage is measured but NOT gated yet — add --cov-fail-under=NN once there
+# are real tests (mirrors hop, which enforces 75%).
+addopts = "--cov --cov-report=term-missing:skip-covered"
+
+[tool.coverage.run]
+source = ["snmp", "deploy", "fleet"]   # estate.py + hosts/ are exercised e2e, not unit-tested
+branch = true
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "\\.\\.\\.$",
+]
+
+[tool.basedpyright]
+# hop runs "strict"; this stdlib codebase isn't annotated yet, so start at
+# "standard" (green today) and tighten to "strict" as annotations land.
+typeCheckingMode = "standard"
+pythonVersion = "3.12"
+# The code runs with these dirs on sys.path (estate.py inserts deploy/, netsim
+# imports snmpserver, fleet/serve imports profiles) — mirror that so imports
+# resolve statically instead of tripping reportMissingImports.
+extraPaths = ["snmp", "deploy", "fleet"]
+# Strict-ready backlog: these loose-typing findings (Optional handling, arg/
+# return types, http.server override signatures, missing generics) exist across
+# the not-yet-annotated code. Keep them VISIBLE as warnings — basedpyright
+# still exits 0, so the gate is green — and promote each back to "error" (then
+# eventually typeCheckingMode = "strict") as the code gets annotated.
+reportGeneralTypeIssues = "warning"
+reportIncompatibleMethodOverride = "warning"
+reportArgumentType = "warning"
+reportOptionalMemberAccess = "warning"
+reportAssignmentType = "warning"
+reportOptionalSubscript = "warning"
+reportReturnType = "warning"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "C4",  # flake8-comprehensions
+]
+# Cleanup backlog: hop's full ruleset is selected above, but these fire across
+# the existing not-yet-cleaned code. Ignored so the gate is green today; delete
+# entries and fix as you touch the code (`ruff check --statistics` shows counts).
+ignore = [
+    "E501",   # long lines — mostly the dense explanatory comments/strings
+    "C408",   # dict(a=1) calls — the fleet/profiles.py device dicts read better so
+    "UP031",  # %-formatting not yet converted to f-strings
+    "F841",   # assigned-but-unused locals
+    "SIM105", # try/except/pass not yet contextlib.suppress
+    "SIM108", # if/else not yet ternary
+    "B007",   # unused loop var not renamed to _
+    "B905",   # zip() without explicit strict=
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
