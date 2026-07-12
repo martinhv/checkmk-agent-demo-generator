@@ -341,7 +341,7 @@ def _apply_subs(text: str, subs: list[tuple[str, str]]) -> str:
     for pattern, repl in subs:
         if "{h}" in repl:
 
-            def _r(m: re.Match[str], repl=repl) -> str:
+            def _r(m: re.Match[str], repl: str = repl) -> str:
                 h = int(hashlib.sha256(m.group(0).encode()).hexdigest(), 16) % 90 + 10
                 return repl.replace("{h}", str(h))
 

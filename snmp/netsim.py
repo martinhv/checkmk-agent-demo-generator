@@ -1505,7 +1505,7 @@ def _steady_section(steady: list[Device]) -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "netsim-ctl/1.0"
 
-    def log_message(self, format: str, *args) -> None:
+    def log_message(self, format: str, *args: object) -> None:
         print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict[str, Any]) -> None:

@@ -68,6 +68,7 @@ reportUnusedExpression = "error"
 reportUnusedVariable = "error"
 reportUnusedFunction = "error"
 reportMissingTypeArgument = "error"  # bare generics (dict/list/Popen/...) fully typed
+reportMissingParameterType = "error"  # every function parameter annotated
 # The code runs with these dirs on sys.path (estate.py inserts deploy/, netsim
 # imports snmpserver, fleet/serve imports profiles) — mirror that so imports
 # resolve statically instead of tripping reportMissingImports.

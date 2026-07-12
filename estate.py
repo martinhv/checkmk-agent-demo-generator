@@ -79,6 +79,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from typing import Any
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(REPO, "deploy"))
@@ -117,7 +118,7 @@ SCALES = {
 NETSIM_SNMP_PORT = 1161
 
 
-def sh(cmd: list[str], **kw) -> subprocess.CompletedProcess[bytes]:
+def sh(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[bytes]:
     print(f"  $ {' '.join(cmd)}")
     return subprocess.run(cmd, check=False, **kw)  # noqa: S603
 

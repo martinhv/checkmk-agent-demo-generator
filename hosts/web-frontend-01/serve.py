@@ -916,7 +916,7 @@ def _admin_page() -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "web-frontend-demo/1.0"
 
-    def log_message(self, format: str, *args) -> None:
+    def log_message(self, format: str, *args: object) -> None:
         print(f"[http] {self.address_string()} {format % args}")
 
     def _send_json(self, body: dict[str, Any]) -> None:

@@ -427,12 +427,15 @@ def _selftest() -> None:
     ]
     table = Table(rows)
 
-    def build(pdu_tag, oids, n1=0, n2=0, community=b"public"):
+    def build(
+        pdu_tag: int, oids: list[str], n1: int = 0, n2: int = 0, community: bytes = b"public"
+    ):
         vbl = b"".join(_tlv(T_SEQ, enc_oid(parse_oid(o)) + enc_null()) for o in oids)
         pdu = enc_int(7) + enc_int(n1) + enc_int(n2) + _tlv(T_SEQ, vbl)
         return _tlv(T_SEQ, enc_int(1) + enc_octetstr(community) + _tlv(pdu_tag, pdu))
 
-    def resp_varbinds(reply):
+    def resp_varbinds(reply: bytes | None):
+        assert reply is not None  # test requests always get a response
         _, body, _ = _read_tlv(reply, 0)
         _, _, p = _read_tlv(body, 0)
         _, _, p = _read_tlv(body, p)

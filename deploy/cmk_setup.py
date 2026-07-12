@@ -285,7 +285,7 @@ BI_TIERS = [
 #  Tiny REST client (urllib, no redirect-following so we can poll async runs)
 # --------------------------------------------------------------------------- #
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):  # noqa: ANN002, ANN003
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
         return None
 
 
@@ -337,7 +337,7 @@ def die(msg: str) -> NoReturn:
     sys.exit(1)
 
 
-def api_error(what: str, status: int, payload) -> None:
+def api_error(what: str, status: int, payload: object) -> None:
     detail = ""
     if isinstance(payload, dict):
         detail = ": " + "; ".join(str(payload[k]) for k in ("title", "detail") if payload.get(k))

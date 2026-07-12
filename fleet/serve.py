@@ -1256,7 +1256,7 @@ def state_saver() -> None:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "fleet/1.0"
 
-    def log_message(self, format: str, *args) -> None:
+    def log_message(self, format: str, *args: object) -> None:
         pass  # 200 hosts x polls — keep the log quiet
 
     def do_GET(self) -> None:  # noqa: N802

@@ -1562,7 +1562,7 @@ def _admin_page() -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "db-demo-ctl/1.0"
 
-    def log_message(self, format: str, *args) -> None:  # quieter logs
+    def log_message(self, format: str, *args: object) -> None:  # quieter logs
         print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict[str, Any]) -> None:

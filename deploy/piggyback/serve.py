@@ -716,7 +716,7 @@ def _fleet_section(fleet: list[FleetHost]) -> str:
 class HttpHandler(BaseHTTPRequestHandler):
     server_version = "pb-delivery-ctl/1.0"
 
-    def log_message(self, format: str, *args) -> None:
+    def log_message(self, format: str, *args: object) -> None:
         print(f"[http] {self.address_string()} {format % args}")
 
     def _send(self, code: int, body: dict[str, Any]) -> None:
@@ -783,7 +783,7 @@ def main() -> None:
 
     # native (non-docker) runs: SIGTERM must reap the children too, not just ^C
     # — install BEFORE spawning so a kill during startup can't leak them
-    def _sigterm(signum, frame):  # noqa: ARG001
+    def _sigterm(signum: int, frame: object) -> None:  # noqa: ARG001
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, _sigterm)
