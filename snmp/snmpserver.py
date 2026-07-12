@@ -22,8 +22,8 @@ Self-test: `python3 snmpserver.py --selftest` (no external tools needed).
 from __future__ import annotations
 
 import re
-import selectors
 import socket
+import threading
 from typing import Callable
 
 # --------------------------------------------------------------------------- #
@@ -311,36 +311,42 @@ class SnmpServer:
         self.port = port
         self.community = community
         self.table_for = table_for
-        self.sel = selectors.DefaultSelector()
-        self._socks: list[socket.socket] = []
+        self._socks: list[tuple[socket.socket, str]] = []
 
     def bind(self, short: str, ip: str) -> None:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((ip, self.port))
-        s.setblocking(False)
-        self.sel.register(s, selectors.EVENT_READ, short)
-        self._socks.append(s)
+        self._socks.append((s, short))
 
     def serve_forever(self) -> None:
-        while True:
-            for key, _ in self.sel.select(timeout=None):
-                self._handle(key.fileobj, key.data)
+        # One thread per device socket. A Checkmk bulk discovery walks many
+        # devices at once; a single loop would serialize their (large) walks
+        # and the SNMP fetches would time out. Per-socket threads are cheap
+        # (idle on a blocking recvfrom) and let concurrent walks interleave.
+        threads = [threading.Thread(target=self._serve, args=(s, short),
+                                    daemon=True)
+                   for s, short in self._socks]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
-    def _handle(self, sock: socket.socket, short: str) -> None:
-        try:
-            data, addr = sock.recvfrom(65535)
-        except OSError:
-            return
-        try:
-            reply = handle_message(data, self.table_for(short), self.community)
-        except (BERError, Exception):
-            return
-        if reply is not None:
+    def _serve(self, sock: socket.socket, short: str) -> None:
+        while True:
             try:
-                sock.sendto(reply, addr)
+                data, addr = sock.recvfrom(65535)
             except OSError:
-                pass
+                return
+            try:
+                reply = handle_message(data, self.table_for(short), self.community)
+            except Exception:
+                continue
+            if reply is not None:
+                try:
+                    sock.sendto(reply, addr)
+                except OSError:
+                    pass
 
 
 # --------------------------------------------------------------------------- #

@@ -1416,10 +1416,13 @@ def loopback_ip(index: int) -> str:
     return f"127.0.{(n >> 8) & 0xFF}.{n & 0xFF}"
 
 
-# per-device rendered-table cache: a Checkmk walk fires many GETBULKs in a
-# burst; caching briefly keeps that burst internally consistent AND cheap
+# per-device rendered-table cache: a Checkmk walk fires HUNDREDS of GETBULKs in
+# a burst; cache the built Table long enough that the whole walk reuses one
+# snapshot (no mid-walk rebuild stalls) yet well under the ~60s check interval
+# so consecutive polls still see advanced counters. Big replay devices (17k
+# OIDs) make the build cost real — this keeps it to once per walk per device.
 _TABLE_CACHE: dict[str, tuple[float, object]] = {}
-_TABLE_TTL = 2.0
+_TABLE_TTL = 15.0
 
 
 def _main_snmp(args: argparse.Namespace) -> None:
