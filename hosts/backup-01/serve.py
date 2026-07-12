@@ -809,7 +809,8 @@ def build_agent_output() -> bytes:
             "00:00:00",
             "12-00:07:37",
             1002,
-            "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal",
+            "/usr/bin/python3 /usr/share/unattended-upgrades/"
+            "unattended-upgrade-shutdown --wait-for-signal",
         ),
         # two SSH session placeholders (ops checking backup status)
         (

@@ -62,7 +62,11 @@ exclude_lines = [
 # every param/return + the untyped JSON dicts, a larger effort left for later.
 typeCheckingMode = "standard"
 pythonVersion = "3.12"
-reportUnusedExpression = "error"   # caught a real dead-code line; keep it hard
+# dead-code rules pulled forward from "strict" (fixed + kept hard); the rest of
+# strict is the annotation-coverage backlog (reportUnknown*/reportMissing*).
+reportUnusedExpression = "error"
+reportUnusedVariable = "error"
+reportUnusedFunction = "error"
 # The code runs with these dirs on sys.path (estate.py inserts deploy/, netsim
 # imports snmpserver, fleet/serve imports profiles) — mirror that so imports
 # resolve statically instead of tripping reportMissingImports.
@@ -83,12 +87,6 @@ select = [
     "SIM", # flake8-simplify
     "C4",  # flake8-comprehensions
 ]
-# Intentional (not a backlog): this is a data generator — modules embed long
-# agent-section / SNMP-walk / HTML-panel literals and aligned help text where a
-# hard 100-col wrap hurts readability and risks corrupting the emitted data.
-# Everything else in the ruleset above is enforced.
-ignore = ["E501"]
-
 [tool.ruff.lint.per-file-ignores]
 # tests deliberately import repo modules after a sys.path insert
 "tests/*" = ["E402"]

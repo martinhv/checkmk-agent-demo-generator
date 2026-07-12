@@ -26,7 +26,8 @@ creeping up from client retries, tx throughput collapsed.
 Stdlib only -> the container is plain python:slim, no pip install.
 
 Config via env:
-  CMK_HOSTNAME    host name baked into the agent output   (default: payment-api.corp.meridian-retail.com)
+  CMK_HOSTNAME    host name baked into the agent output
+                  (default: payment-api.corp.meridian-retail.com)
   AGENT_PORT      TCP port for the agent                  (default: 6556)
   HTTP_PORT       TCP port for the HTTP endpoint          (default: 8080)
   START_BROKEN    start in the broken state ("1"/"0")     (default: 1)
@@ -310,8 +311,6 @@ def filesystem_usage(now: float) -> tuple[int, int]:
 # --------------------------------------------------------------------------- #
 #  Agent output generation
 # --------------------------------------------------------------------------- #
-def _kb(mib: float) -> int:
-    return int(mib * 1024)
 
 
 def build_agent_output(broken: bool) -> bytes:
@@ -1201,7 +1200,8 @@ def _admin_page() -> str:
  .btn.current {{ background:#444; color:#aaa; cursor:default; }}
  .foot {{ margin-top:2rem; color:#666; font-size:.85rem; }}
 </style></head><body>
- <h1>demo control — <b>{HOSTNAME}</b> <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
+ <h1>demo control — <b>{HOSTNAME}</b>
+ <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
  <div class="state">{meta["label"]}</div>
  <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b>
   — {meta["tagline"]}</div>

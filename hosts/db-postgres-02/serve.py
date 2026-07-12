@@ -1330,7 +1330,8 @@ def _admin_page() -> str:
  .btn.current {{ background:#444; color:#aaa; cursor:default; }}
  .foot {{ margin-top:2rem; color:#666; font-size:.85rem; }}
 </style></head><body>
- <h1>demo control — <b>{HOSTNAME}</b> <span style="color:#555">(PostgreSQL 16 read replica · auto-refreshes every 5 s)</span></h1>
+ <h1>demo control — <b>{HOSTNAME}</b>
+ <span style="color:#555">(PostgreSQL 16 read replica · auto-refreshes every 5 s)</span></h1>
  <div class="state">{meta["label"]}</div>
  <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b>
   — {meta["tagline"]}</div>

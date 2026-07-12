@@ -215,7 +215,7 @@ def _parse_varbinds(body: bytes) -> list[tuple[int, ...]]:
         tag, vb, pos = _read_tlv(body, pos)
         if tag != T_SEQ:
             raise BERError("varbind not a sequence")
-        otag, obody, p = _read_tlv(vb, 0)
+        otag, obody, _ = _read_tlv(vb, 0)
         if otag != T_OID:
             raise BERError("varbind name not an OID")
         oids.append(bytes_to_oid(obody))
@@ -289,11 +289,11 @@ def handle_message(data: bytes, table: Table, community: str | None = None) -> b
         return None
 
     p = 0
-    rtag, rbody, p = _read_tlv(pbody, p)  # request-id
+    _, rbody, p = _read_tlv(pbody, p)  # request-id
     request_id = dec_int(rbody)
-    n1tag, n1body, p = _read_tlv(pbody, p)  # error-status / non-repeaters
-    n2tag, n2body, p = _read_tlv(pbody, p)  # error-index / max-repetitions
-    vbtag, vbbody, _ = _read_tlv(pbody, p)  # varbind list
+    _, n1body, p = _read_tlv(pbody, p)  # error-status / non-repeaters
+    _, n2body, p = _read_tlv(pbody, p)  # error-index / max-repetitions
+    _, vbbody, _ = _read_tlv(pbody, p)  # varbind list
     oids = _parse_varbinds(vbbody)
 
     if ptag == T_GET:
@@ -445,7 +445,7 @@ def _selftest() -> None:
         out, q = [], 0
         while q < len(vbl):
             _, vb, q = _read_tlv(vbl, q)
-            ot, ob, r = _read_tlv(vb, 0)
+            _, ob, r = _read_tlv(vb, 0)
             vt, vbody, _ = _read_tlv(vb, r)
             out.append((bytes_to_oid(ob), vt, vbody))
         return out

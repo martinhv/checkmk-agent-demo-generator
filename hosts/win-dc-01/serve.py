@@ -382,7 +382,8 @@ def build_agent_output(state: str) -> bytes:
     a("pluginsdir C:\\ProgramData\\checkmk\\agent\\plugins")
     a("localdir C:\\ProgramData\\checkmk\\agent\\local")
     a(
-        f'C:\\ProgramData\\checkmk\\agent\\plugins\\cmk_update_agent.checkmk.py:CMK_VERSION = "{AGENT_VERSION}"'
+        f"C:\\ProgramData\\checkmk\\agent\\plugins\\"
+        f'cmk_update_agent.checkmk.py:CMK_VERSION = "{AGENT_VERSION}"'
     )
     a(f'C:\\ProgramData\\checkmk\\agent\\plugins\\mk_inventory.vbs:CMK_VERSION = "{AGENT_VERSION}"')
 
@@ -598,9 +599,11 @@ def _admin_page() -> str:
  .btn.current {{ background:#444; color:#aaa; cursor:default; }}
  .foot {{ margin-top:2rem; color:#666; font-size:.85rem; }}
 </style></head><body>
- <h1>demo control — <b>{HOSTNAME}</b> <span style="color:#555">(Windows Server 2022 · auto-refreshes every 5 s)</span></h1>
+ <h1>demo control — <b>{HOSTNAME}</b>
+ <span style="color:#555">(Windows Server 2022 · auto-refreshes every 5 s)</span></h1>
  <div class="state">{meta["label"]}</div>
- <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b> — {meta["tagline"]}</div>
+ <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b>
+ — {meta["tagline"]}</div>
  {extra_html}
  <div class="cards">{"".join(cards)}</div>
  <div class="foot">curl API: /admin/heal · /admin/degrade · /admin/break · / (JSON status)</div>

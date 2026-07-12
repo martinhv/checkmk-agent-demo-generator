@@ -47,12 +47,15 @@ CI (`.github/workflows/ci.yml`) runs exactly `uv run prek run --all-files`.
 The backlog from the initial setup has been paid down — the gates are now
 clean at full strength:
 
-- **ruff** runs hop's full ruleset with **no per-rule ignores** except `E501`
-  (line length): this is a data generator with long embedded agent/SNMP/HTML
-  literals where hard-wrapping hurts readability. Everything else is enforced.
+- **ruff** runs hop's full ruleset with **no per-rule ignores** — `E501`
+  included (the long embedded agent/SNMP/HTML literals were wrapped). Only a
+  `tests/*` `E402` exception remains (they import repo modules after a
+  `sys.path` insert).
 - **basedpyright** runs `standard` and is **clean at error level** — no rule
-  downgrades; the whole codebase type-checks (`reportUnusedExpression` is even
-  promoted to error). The remaining gap to hop's `strict` is annotating every
+  downgrades — plus the dead-code rules from `strict` pulled forward and kept
+  hard (`reportUnusedExpression`, `reportUnusedVariable`, `reportUnusedFunction`).
+  The remaining gap to full `strict` is the annotation-coverage family
+  (`reportUnknown*` / `reportMissing*` ≈ 1100 findings): annotating every
   param/return and the untyped JSON dicts — a larger effort left for later.
 - **pytest** still has no coverage floor (`tests/test_smoke.py` is a scaffold).
   Add `--cov-fail-under=NN` to `pyproject.toml` once real tests exist.

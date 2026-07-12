@@ -332,10 +332,6 @@ def _smart_json(name: str, model: str, serial: str, hours: int, temp: int) -> st
     return json.dumps(doc, separators=(",", ":"))
 
 
-def _kb(mib: float) -> int:
-    return int(mib * 1024)
-
-
 def filesystem_usage(now: float) -> tuple[int, int]:
     """root / and /var/spool/postfix — both green, growing + cleaned over time.
 
@@ -665,9 +661,8 @@ def build_agent_output(state: str) -> bytes:
     # ESTABLISHED smtp conns drop when the MX is unreachable; SYN_SENT to the
     # dead MX may rise — corroboration only, no default alert on these.
     a(f"01 {round(gauge('tcp.estab', 14, amp_abs=4, phase=0.9, period=700))}")
-    a(
-        f"02 {round(gauge('tcp.synsent', 0, amp_abs=1, phase=1.5, period=400)) + (3 if broken else 0)}"
-    )
+    synsent = round(gauge("tcp.synsent", 0, amp_abs=1, phase=1.5, period=400))
+    a(f"02 {synsent + (3 if broken else 0)}")
     a(f"06 {round(gauge('tcp.timewait', 7, amp_abs=3, phase=2.4, period=500))}")
     a("0A 3")
 
@@ -990,7 +985,8 @@ STATE_META = {
         ),
         "effects": [
             "Postfix Queue default: deferred queue climbs toward ~18 over "
-            f"{DEFER_CLIMB_MIN:g} min — visibly rising graph, still OK/green (< 20) — the breadcrumb",
+            f"{DEFER_CLIMB_MIN:g} min — visibly rising graph, "
+            "still OK/green (< 20) — the breadcrumb",
             "active queue stays small (~2-6); local injection still works",
             "Postfix status still OK; outbound bandwidth begins to sag",
         ],
@@ -1089,7 +1085,8 @@ def _admin_page() -> str:
  .btn.current {{ background:#444; color:#aaa; cursor:default; }}
  .foot {{ margin-top:2rem; color:#666; font-size:.85rem; }}
 </style></head><body>
- <h1>demo control — <b>{HOSTNAME}</b> <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
+ <h1>demo control — <b>{HOSTNAME}</b>
+ <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
  <div class="state">{meta["label"]}</div>
  <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b>
   — {meta["tagline"]}</div>

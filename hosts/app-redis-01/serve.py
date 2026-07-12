@@ -805,7 +805,9 @@ def build_agent_output(state: str) -> bytes:
     a(f"used_cpu_user:{user / 100:.2f}")
     a("# Keyspace")
     a(
-        f"db0:keys={int(_lerp(420000, 1180000, p))},expires={int(_lerp(390000, 410000, p))},avg_ttl={int(_lerp(540000, 90, p))}"
+        f"db0:keys={int(_lerp(420000, 1180000, p))},"
+        f"expires={int(_lerp(390000, 410000, p))},"
+        f"avg_ttl={int(_lerp(540000, 90, p))}"
     )
 
     # ---- processes: the redis server + daemons ---------------------------- #
@@ -1187,7 +1189,8 @@ def _admin_page() -> str:
  .btn.current {{ background:#444; color:#aaa; cursor:default; }}
  .foot {{ margin-top:2rem; color:#666; font-size:.85rem; }}
 </style></head><body>
- <h1>demo control — <b>{HOSTNAME}</b> <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
+ <h1>demo control — <b>{HOSTNAME}</b>
+ <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
  <div class="state">{meta["label"]}</div>
  <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b>
   — {meta["tagline"]}</div>

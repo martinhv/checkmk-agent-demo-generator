@@ -1026,7 +1026,7 @@ class ReplayDevice(Device):
     _DYNAMIC_KINDS = frozenset({"uptime", "hrcpu", "apcdate", "ctr32", "ctr64"})
 
     def _slot_value(self, seg: tuple, elapsed: float, now: float, sampled: dict) -> str:
-        kind, oid, key, rec = seg
+        kind, _oid, key, rec = seg
         if kind == "sysname":
             return self.fqdn
         if kind == "syslocation":

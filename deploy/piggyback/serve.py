@@ -715,7 +715,8 @@ def _overview_page() -> str:
  <table>{"".join(rows)}</table>
  {_fleet_section(fleet)}
  <div class="foot">curl: /admin/&lt;host&gt;/&lt;degrade|break|heal&gt; · / (JSON status).
-  Click <b>&#9432; info</b> on any host to see exactly which Checkmk services change in each state.</div>
+  Click <b>&#9432; info</b> on any host to see exactly which Checkmk services
+  change in each state.</div>
 </body></html>"""
 
 

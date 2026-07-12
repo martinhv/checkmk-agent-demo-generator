@@ -312,7 +312,8 @@ _LNX_BASE_PROCS = [
         108_000,
         21_000,
         720,
-        "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal",
+        "/usr/bin/python3 /usr/share/unattended-upgrades/"
+        "unattended-upgrade-shutdown --wait-for-signal",
     ),
 ]
 
@@ -1094,10 +1095,12 @@ class WindowsHost:
         a("pluginsdir C:\\ProgramData\\checkmk\\agent\\plugins")
         a("localdir C:\\ProgramData\\checkmk\\agent\\local")
         a(
-            f'C:\\ProgramData\\checkmk\\agent\\plugins\\cmk_update_agent.checkmk.py:CMK_VERSION = "{AGENT_VERSION}"'
+            f"C:\\ProgramData\\checkmk\\agent\\plugins\\"
+            f'cmk_update_agent.checkmk.py:CMK_VERSION = "{AGENT_VERSION}"'
         )
         a(
-            f'C:\\ProgramData\\checkmk\\agent\\plugins\\mk_inventory.vbs:CMK_VERSION = "{AGENT_VERSION}"'
+            f"C:\\ProgramData\\checkmk\\agent\\plugins\\"
+            f'mk_inventory.vbs:CMK_VERSION = "{AGENT_VERSION}"'
         )
 
         a("<<<ps:sep(9)>>>")

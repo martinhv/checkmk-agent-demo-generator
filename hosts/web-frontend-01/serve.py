@@ -907,7 +907,8 @@ def _admin_page() -> str:
   </ul>
  </div>
 
- <div class="foot">JSON status: <a style="color:#9aa4af" href="/">http://localhost:{HTTP_PORT}/</a></div>
+ <div class="foot">JSON status:
+ <a style="color:#9aa4af" href="/">http://localhost:{HTTP_PORT}/</a></div>
 </body></html>"""
 
 

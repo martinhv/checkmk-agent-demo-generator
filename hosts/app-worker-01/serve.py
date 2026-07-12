@@ -323,10 +323,6 @@ def _smart_json(name: str, model: str, serial: str, hours: int, temp: int) -> st
     return json.dumps(doc, separators=(",", ":"))
 
 
-def _kb(mib: float) -> int:
-    return int(mib * 1024)
-
-
 def filesystem_usage(now: float) -> tuple[int, int]:
     """root / and /opt/orderworker — both green, growing + cleaned over time."""
     uptime = now - START + UPTIME_OFFSET
@@ -941,11 +937,13 @@ STATE_META = {
         ),
         "effects": [
             "Memory CRIT: virtual (RAM+swap) usage > 90 % (default levels 80/90) — the headline",
-            "order-worker.service FAILED (OOM-killed) -> Systemd Service Summary CRIT — the symptom",
+            "order-worker.service FAILED (OOM-killed) -> "
+            "Systemd Service Summary CRIT — the symptom",
             "the worker flaps: OOM-kill / restart count climbs live (~1 per 90 s)",
             "major page faults pinned (heavy swap thrash), queue throughput collapsed",
             "load elevated but GREEN, CPU not the cause — the AI fuses Memory + Swap + "
-            "page faults + the failed unit into 'heap leak, OOM-killed; fix the worker, not the RAM'",
+            "page faults + the failed unit into 'heap leak, OOM-killed; "
+            "fix the worker, not the RAM'",
         ],
     },
 }
@@ -1025,7 +1023,8 @@ def _admin_page() -> str:
  .btn.current {{ background:#444; color:#aaa; cursor:default; }}
  .foot {{ margin-top:2rem; color:#666; font-size:.85rem; }}
 </style></head><body>
- <h1>demo control — <b>{HOSTNAME}</b> <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
+ <h1>demo control — <b>{HOSTNAME}</b>
+ <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
  <div class="state">{meta["label"]}</div>
  <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b>
   — {meta["tagline"]}</div>

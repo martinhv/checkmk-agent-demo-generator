@@ -30,7 +30,8 @@ TransportProtocol.PLAIN and accepts it — no TLS, no registration.
 Stdlib only -> the container is plain python:slim, no pip install.
 
 Config via env:
-  CMK_HOSTNAME   host name baked into the agent output   (default: db-postgres-01.corp.meridian-retail.com)
+  CMK_HOSTNAME   host name baked into the agent output
+                 (default: db-postgres-01.corp.meridian-retail.com)
   AGENT_PORT     TCP port for the agent                  (default: 6556)
   HTTP_PORT      TCP port for the admin/toggle endpoint  (default: 8080)
   START_STATE    healthy | degraded | broken             (default: healthy)
@@ -1435,14 +1436,20 @@ STATE_META = {
             f"~{BREAK_RAMP_MIN * 0.45:.1f} min, CRIT 40 at ~{BREAK_RAMP_MIN * 0.9:.1f} min — "
             "1-min load leads, 15-min lags, like real loadavg)",
             "CPU utilization: compute idle, I/O wait ramps to ~80 %",
-            "Disk IO SUMMARY: 'Read latency' climbs ~1.2 → ~200 ms (fastest ramp — it's the cause), "
-            "'Utilization' → ~99 % (CRIT only with the optional Disk IO levels rule, otherwise graph-only)",
-            "postgres: commits collapse ~10× as a curve, sessions pile up 2 → 24 running poll by poll, "
+            "Disk IO SUMMARY: 'Read latency' climbs ~1.2 → ~200 ms "
+            "(fastest ramp — it's the cause), "
+            "'Utilization' → ~99 % (CRIT only with the optional Disk IO "
+            "levels rule, otherwise graph-only)",
+            "postgres: commits collapse ~10× as a curve, "
+            "sessions pile up 2 → 24 running poll by poll, "
             "one SELECT stuck (duration grows live)",
-            "memory: Dirty pages pile up (~1.5 MB/s), Writeback ramps 0 → ~190 MB (flushes can't drain)",
-            f"SMART stays GREEN for the first ~{SMART_CONFESSION_MIN:g} min — no service points at the "
+            "memory: Dirty pages pile up (~1.5 MB/s), "
+            "Writeback ramps 0 → ~190 MB (flushes can't drain)",
+            f"SMART stays GREEN for the first ~{SMART_CONFESSION_MIN:g} min — "
+            "no service points at the "
             "disk; the AI has to fuse load + iowait + latency + Dirty/Writeback + postgres itself. "
-            "Then the drive finally confesses: pending sectors → CRIT (cascading: uncorrectable ~5 min, "
+            "Then the drive finally confesses: pending sectors → CRIT "
+            "(cascading: uncorrectable ~5 min, "
             "reallocated ~10 min later), vindicating the diagnosis",
         ],
     },
@@ -1539,7 +1546,8 @@ def _admin_page() -> str:
  .btn.current {{ background:#444; color:#aaa; cursor:default; }}
  .foot {{ margin-top:2rem; color:#666; font-size:.85rem; }}
 </style></head><body>
- <h1>demo control — <b>{HOSTNAME}</b> <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
+ <h1>demo control — <b>{HOSTNAME}</b>
+ <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
  <div class="state">{meta["label"]}</div>
  <div class="since">in this state for <b>{_fmt_duration(state_since_seconds())}</b>
   — {meta["tagline"]}</div>
