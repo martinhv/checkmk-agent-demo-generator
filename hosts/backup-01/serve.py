@@ -38,9 +38,23 @@ STATE_FILE = os.environ.get("STATE_FILE", "/var/tmp/cmk-demo-backup-state.json")
 START = time.time()
 UPTIME_OFFSET = 12 * 86400  # pretend the host has been up ~12 days
 
-# How many seconds ago the last nightly backup completed (6-8 h ago, varies
-# slightly per restart but stays in range once state is loaded).
-_LAST_BACKUP_AGE_S: float = 6.5 * 3600  # default; overridden from state file
+NCPU = 4
+CPU_BUDGET = float(NCPU * 100)  # jiffies/s — /proc/stat conserves this exactly
+
+# Nightly job anchors (wall clock, UTC): the restic timer fires at 01:07, the
+# prune ~2 h later at 03:07, and the prune's reclaim shows in df once it
+# finishes (~03:15). Ages derived from these grow 0 -> 24 h and reset daily —
+# never a pinned "6.5 h ago" that hops with the process START.
+BACKUP_JOB_HM = (1, 7)
+PRUNE_JOB_HM = (3, 7)
+PRUNE_DF_PHASE_S = 3 * 3600 + 15 * 60  # prune finishes ~03:15 -> df saw resets
+ROOT_ROTATE_PHASE_S = 47 * 60  # this host's logrotate slot (00:47 UTC)
+
+
+def _last_daily(now: float, hour: int, minute: int) -> int:
+    """Epoch of the most recent daily HH:MM UTC occurrence."""
+    t = int(now) // 86400 * 86400 + hour * 3600 + minute * 60
+    return t if t <= now else t - 86400
 
 
 # --------------------------------------------------------------------------- #
@@ -239,26 +253,30 @@ def _smart_json(name: str, model: str, serial: str, hours: int, temp: int) -> st
 def filesystem_usage(now: float) -> tuple[int, int, int, int]:
     uptime = now - START + UPTIME_OFFSET
     day = 86_400.0
+    midnight = int(now) // 86400 * 86400
 
-    # root: ~10 GiB base + slow log creep (max ~800 MiB before logrotate) + wobble
+    # root: ~10 GiB base + slow log creep (max ~800 MiB) + wobble. logrotate
+    # trims the logs at this host's 00:47 UTC slot, so anchor the sawtooth to
+    # ROOT_ROTATE_PHASE_S: logs grow 0 -> 800 MiB and drop when logrotate fires.
     root_size = 41_943_040  # 40 GiB in KiB
     root_base = 10_485_760  # ~10 GiB
-    root_logs = 819_200 * ((now % day) / day)  # 0..800 MiB daily sawtooth
+    since_rotate = (now - midnight - ROOT_ROTATE_PHASE_S) % day
+    root_logs = 819_200 * (since_rotate / day)  # 0..800 MiB, resets at 00:47
     root_growth = min(524_288, uptime * 0.02)  # forever creep, capped
     root_used = int(
         root_base + root_logs + root_growth + gauge("fs.root", 0, amp_abs=40_000, period=1600)
     )
 
-    # /srv/backup: ~70 % of 4 TiB. Restic prune runs ~2 h after the
-    # backup window and reclaims ~5 GiB daily; slow repo growth between prunes.
+    # /srv/backup: ~70 % of 4 TiB. Restic prune runs ~2 h after the backup
+    # window and its reclaim shows in df once it finishes (~03:15 UTC).
     # 4 TiB in KiB: 4 * 1024 GiB * 1048576 KiB/GiB = 4096 * 1048576
     bkp_size_kib = 4096 * 1048576  # 4 TiB in KiB
     bkp_base = int(0.695 * bkp_size_kib)  # ~69.5 % base
-    # Daily ~5 GiB sawtooth: repo grows between backups (slow), prune reclaims
-    daily_period = day
-    prune_reclaim_kib = 5 * 1048576  # 5 GiB reclaimed per day by prune
-    # Sawtooth: rises from 0 to prune_reclaim over the day, drops at midnight
-    bkp_growth_daily = int(prune_reclaim_kib * ((now % daily_period) / daily_period))
+    prune_reclaim_kib = 5 * 1048576  # 5 GiB reclaimed per prune
+    # Sawtooth anchored to PRUNE_DF_PHASE_S: the repo grows all day and drops
+    # ~5 GiB when the prune's reclaim lands (~03:15 UTC), not at midnight.
+    since_reclaim = (now - midnight - PRUNE_DF_PHASE_S) % day
+    bkp_growth_daily = int(prune_reclaim_kib * (since_reclaim / day))
     # Long-term forever growth: ~100 MiB/day = ~118 KiB/s ... slow creep
     bkp_forever = min(5 * 1048576, int(uptime * 1.3))
     bkp_used = int(
@@ -360,11 +378,12 @@ def build_agent_output() -> bytes:
     # Keep bkp at 68-72 % — safely under 80/90 % df defaults
     bkp_used = max(int(0.67 * bkp_size), min(int(0.72 * bkp_size), bkp_used))
 
-    # ---- last backup age (loaded from state; increases monotonically) ------- #
-    # Clamp to 6-8 h for a believable "ran last night" story
-    last_bkp_age_s_display = max(
-        6 * 3600, min(8 * 3600, _LAST_BACKUP_AGE_S + (time.time() - START) % 3600)
-    )
+    # ---- nightly job anchors: the restic backup timer fires at 01:07 UTC and
+    #      the prune ~2 h later at 03:07. Deriving each start_time from these
+    #      makes the "last backup age" grow 0 -> 24 h and reset when tonight's
+    #      run fires — never a constant offset that hops with the process START.
+    bkp_start = _last_daily(now, *BACKUP_JOB_HM)
+    prune_start = _last_daily(now, *PRUNE_JOB_HM)
 
     # ---- cert expiry (dynamically 330 days out) ----------------------------- #
     cert_to = time.strftime("%a, %d %b %Y %H:%M:%S +0000", time.gmtime(now + 330 * 86400))
@@ -922,8 +941,7 @@ def build_agent_output() -> bytes:
     # ----------------------------------------------------------------------- #
     a("<<<job>>>")
 
-    # restic-backup: ran ~6-8 h ago, took ~48 min, exited 0
-    bkp_start = now - int(last_bkp_age_s_display)
+    # restic-backup: fired at 01:07 UTC, took ~48 min, exited 0
     a("==> restic-backup <==")
     a(f"start_time {bkp_start}")
     a("exit_code 0")
@@ -933,8 +951,7 @@ def build_agent_output() -> bytes:
     a("max_res_kbytes 524288")
     a("avg_mem_kbytes 0")
 
-    # restic-prune: ran ~30 min after the backup, took ~8 min, exited 0
-    prune_start = bkp_start + 50 * 60  # prune triggered 50 min after backup start
+    # restic-prune: fired at 03:07 UTC (~2 h after the backup), ~8 min, exited 0
     a("==> restic-prune <==")
     a(f"start_time {prune_start}")
     a("exit_code 0")
@@ -956,7 +973,6 @@ def save_state() -> None:
     data = {
         "version": 1,
         "start": START,
-        "last_backup_age_s": _LAST_BACKUP_AGE_S,
         "counters": {n: [c.acc, c.last] for n, c in _ALL_COUNTERS.items()},
     }
     try:
@@ -969,7 +985,7 @@ def save_state() -> None:
 
 
 def load_state() -> None:
-    global START, _LAST_BACKUP_AGE_S
+    global START
     if not STATE_FILE or not os.path.exists(STATE_FILE):
         return
     try:
@@ -979,7 +995,6 @@ def load_state() -> None:
         print(f"[state] load failed ({exc}) — starting fresh")
         return
     START = data["start"]
-    _LAST_BACKUP_AGE_S = data.get("last_backup_age_s", _LAST_BACKUP_AGE_S)
     saved = data.get("counters", {})
     restored = 0
     for name, c in _ALL_COUNTERS.items():
@@ -1020,8 +1035,10 @@ def _fmt_duration(seconds: float) -> str:
 
 
 def _admin_page() -> str:
-    uptime_s = int(time.time() - START) + UPTIME_OFFSET
-    last_bkp_h = round(_LAST_BACKUP_AGE_S / 3600, 1)
+    now = time.time()
+    uptime_s = int(now - START) + UPTIME_OFFSET
+    last_bkp_h = round((now - _last_daily(now, *BACKUP_JOB_HM)) / 3600, 1)
+    last_prune_h = round((now - _last_daily(now, *PRUNE_JOB_HM)) / 3600, 1)
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="30">
 <title>{HOSTNAME} — backup host status</title>
@@ -1046,7 +1063,7 @@ def _admin_page() -> str:
   Host uptime: <b>{_fmt_duration(uptime_s)}</b><br>
   Role: <b>Restic backup host — Meridian Retail offsite backups</b><br>
   Last backup: <b>{last_bkp_h:.1f} h ago</b> (exit code 0, real_time 48m 12s)<br>
-  Last prune: <b>{last_bkp_h + 0.8:.1f} h ago</b> (exit code 0, real_time 8m 4s)<br>
+  Last prune: <b>{last_prune_h:.1f} h ago</b> (exit code 0, real_time 8m 4s)<br>
   Next backup window: <b>~01:00 UTC</b> (nightly timer)
  </div>
  <div class="note">
@@ -1115,7 +1132,9 @@ class HttpHandler(BaseHTTPRequestHandler):
                 "role": "restic backup host",
                 "state": "healthy",
                 "uptime_s": int(time.time() - START) + UPTIME_OFFSET,
-                "last_backup_age_h": round(_LAST_BACKUP_AGE_S / 3600, 2),
+                "last_backup_age_h": round(
+                    (time.time() - _last_daily(time.time(), *BACKUP_JOB_HM)) / 3600, 2
+                ),
                 "last_backup_exit_code": 0,
                 "ui": "/admin",
             }

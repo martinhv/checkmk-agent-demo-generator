@@ -228,6 +228,21 @@ class Counter:
             self.last = now
             return int(self.acc)
 
+    def sample_exact(self, rate_per_s: float, now: float | None = None) -> int:
+        """Integrate an exact caller-computed rate (no internal wobble).
+
+        Used wherever several counters must share one budget or inequality:
+        the /proc/stat tick budget (user+system+iowait+idle must advance at
+        exactly NCPU*100 Hz) and any bytes-vs-packets style pairing.
+        """
+        if now is None:
+            now = time.time()
+        with self.lock:
+            dt = max(0.0, now - self.last)
+            self.acc += max(0.0, rate_per_s) * dt
+            self.last = now
+            return int(self.acc)
+
 
 def _aged(rate_per_s: float) -> float:
     """Start value so the counter looks like it has run for the fake uptime."""
@@ -374,12 +389,28 @@ def build_agent_output(broken: bool) -> bytes:
     l15 = round(load_base * gauge("load15", 1.0, amp_frac=0.06, phase=2.0, period=2400), 2)
     total_procs = 248 - (3 if broken else 0)
 
-    # ---- /proc/stat: ~400 ticks/s total on 4 CPUs. Broken: a touch less
-    #      user time (fewer requests served), idle picks it up. -------------- #
-    user = C_USER.sample(_lerp(35, 24, r_net))
-    system = C_SYSTEM.sample(_lerp(12, 10, r_net))
-    idle = C_IDLE.sample(_lerp(348, 361, r_net))
-    iowait = C_IOWAIT.sample(4)
+    # ---- /proc/stat: the CPU tick budget MUST sum to exactly ncpu*100 Hz
+    #      (~400 ticks/s on 4 CPUs — a kernel person adds the fields up).
+    #      Wobble the busy rates (user/system/iowait) first, then let idle
+    #      ABSORB the remainder so the total is exactly ncpu*100 jiffies/s;
+    #      integrate every field via sample_exact against ONE shared `now`.
+    #      Result: between two polls the emitted deltas sum to exactly
+    #      ncpu*100*dt, and each counter stays monotonic across state flips
+    #      (we integrate the current rate over dt, never recompute from
+    #      cumulative state). Broken: a touch less user time (fewer requests
+    #      served), idle picks it up. ---------------------------------------- #
+    cpu_now = time.time()
+    u_wob = 1.0 + C_USER.amp * C_USER.wob.step(cpu_now)
+    s_wob = 1.0 + C_SYSTEM.amp * C_SYSTEM.wob.step(cpu_now)
+    io_wob = 1.0 + C_IOWAIT.amp * C_IOWAIT.wob.step(cpu_now)
+    user_rate = max(0.0, _lerp(35, 24, r_net) * u_wob)
+    system_rate = max(0.0, _lerp(12, 10, r_net) * s_wob)
+    iowait_rate = max(0.0, 4.0 * io_wob)
+    idle_rate = ncpu * 100 - (user_rate + system_rate + iowait_rate)
+    user = C_USER.sample_exact(user_rate, cpu_now)
+    system = C_SYSTEM.sample_exact(system_rate, cpu_now)
+    iowait = C_IOWAIT.sample_exact(iowait_rate, cpu_now)
+    idle = C_IDLE.sample_exact(idle_rate, cpu_now)
 
     # ---- disks: calm in both states; broken writes a few more error log
     #      lines to the root volume. ----------------------------------------- #
@@ -396,11 +427,24 @@ def build_agent_output(broken: bool) -> bytes:
 
     # ---- network: the service-level collapse, visible in graphs only.
     #      rx climbs a little (clients retrying), tx falls off a cliff over a
-    #      few minutes (503 bodies are tiny). -------------------------------- #
-    rx_bytes = C_RX_B.sample(_lerp(180_000, 205_000, r_net))
-    tx_bytes = C_TX_B.sample(_lerp(320_000, 55_000, r_net))
-    rx_pkts = C_RX_P.sample(_lerp(950, 1150, r_net))
-    tx_pkts = C_TX_P.sample(_lerp(900, 640, r_net))
+    #      few minutes. bytes are DERIVED from the wobbled packet rate via a
+    #      plausible average frame size and integrated with sample_exact
+    #      against ONE shared `now`, so bytes/packet stays realistic and bytes
+    #      never drifts below the packet count (the bytes-vs-packets pairing).
+    #      The frame size COLLAPSES when broken (503 bodies are tiny) — that,
+    #      not the packet rate, is what makes tx bytes fall off a cliff
+    #      (~320 -> ~55 kB/s) while tx packets barely move. A distinct wobble
+    #      on the frame size keeps the bytes graph from peaking in lockstep
+    #      with the packets graph. --------------------------------------------- #
+    net_now = time.time()
+    rx_pps = max(1.0, _lerp(950, 1150, r_net) * (1.0 + C_RX_P.amp * C_RX_P.wob.step(net_now)))
+    tx_pps = max(1.0, _lerp(900, 640, r_net) * (1.0 + C_TX_P.amp * C_TX_P.wob.step(net_now)))
+    rx_frame = _lerp(189.0, 178.0, r_net) * (1.0 + 0.12 * C_RX_B.wob.step(net_now))
+    tx_frame = _lerp(356.0, 86.0, r_net) * (1.0 + 0.12 * C_TX_B.wob.step(net_now))
+    rx_pkts = C_RX_P.sample_exact(rx_pps, net_now)
+    tx_pkts = C_TX_P.sample_exact(tx_pps, net_now)
+    rx_bytes = C_RX_B.sample_exact(rx_pps * rx_frame, net_now)
+    tx_bytes = C_TX_B.sample_exact(tx_pps * tx_frame, net_now)
 
     # ---- tcp states: ESTABLISHED dips (clients bail), TIME_WAIT piles up
     #      from the fast-failing retry storm. No default levels -> graph-only

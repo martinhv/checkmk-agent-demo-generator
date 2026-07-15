@@ -60,6 +60,7 @@ import os
 import random
 import threading
 import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import StreamRequestHandler, ThreadingTCPServer
 from typing import Any, cast
@@ -74,6 +75,11 @@ SMART_CONFESSION_MIN = float(os.environ.get("SMART_CONFESSION_MIN", "8"))
 
 START = time.time()
 UPTIME_OFFSET = 12 * 86400  # pretend the host has been up ~12 days
+
+# Host-stable phase offset for daily/periodic cleanup sawteeth (logrotate, WAL
+# recycling, backup purges) and job schedules: without it every fake host in
+# the estate would run its "daily cleanup" in the very same second (now % day).
+HOST_PHASE = zlib.crc32(HOSTNAME.encode()) % 86_400
 
 STATES = ("healthy", "degraded", "broken")
 
@@ -139,7 +145,7 @@ def smart_attrs() -> tuple[int, int, int, float]:
       * degraded/broken: the attribute counters stay ZERO — the SMART Stats
         service stays green through the entire incident. The only breadcrumb
         is the temperature creeping up (the controller burns power on
-        retries): 33 → 38 °C, crossing the 35 °C WARN at ~2.5 min — easy
+        retries): 30 → 38 °C, crossing the 35 °C WARN at ~3.6 min — easy
         for a human to blame on the rack AC.
       * SMART_CONFESSION_MIN minutes into `broken`, the drive finally admits
         it: the attributes cascade causally (pending sectors first,
@@ -152,11 +158,13 @@ def smart_attrs() -> tuple[int, int, int, float]:
     m = degraded_minutes()
     if m <= 0:
         return 0, 0, 0, 30
-    # retry storms heat the controller fast: smooth ramp 33 -> 38 over ~6 min,
-    # crossing the 35 WARN at ~2.5 min. Capped at 38 so the +/-1.3 gauge wander
-    # never reaches the 40 CRIT (fail-slow: temp is a WARN breadcrumb, the
-    # SMART attributes are the only thing that ever goes red — and only late).
-    temp = 33.0 + min(5.0, m * 0.85)
+    # retry storms heat the controller: the baseline lerps up FROM the healthy
+    # 30 °C (no +3 °C cliff on the first degraded poll — the ±1.3 gauge wander
+    # bridges the early minutes) to 38 over ~5.7 min, crossing the 35 WARN at
+    # ~3.6 min. Capped at 38 so the wander never reaches the 40 CRIT
+    # (fail-slow: temp is a WARN breadcrumb, the SMART attributes are the only
+    # thing that ever goes red — and only late).
+    temp = round(30.0 + min(8.0, m * 1.4), 1)
     c = broken_seconds() / 60.0 - SMART_CONFESSION_MIN  # cascade age (min)
     if c <= 0:
         return 0, 0, 0, temp  # the drive isn't telling
@@ -185,13 +193,17 @@ def filesystem_usage(now: float) -> tuple[int, int]:
             the pay_size datsize growth) -> a gentle upward trend.
         It stays ~27-30 % full (well under the 80/90 % df defaults) — green
         corroboration, never an alert.
+
+    All sawteeth are phase-shifted by HOST_PHASE so this host's cleanups don't
+    fire in the same second as every other fake host's.
     """
     uptime = now - START + UPTIME_OFFSET
     day = 86_400.0
+    t = now - HOST_PHASE  # host-stable phase for every periodic term
 
     # root: 14.5 GiB base + slow log growth, daily logrotate cleanup
     root_base = 15_204_352  # ~14.5 GiB of 40
-    root_logs = 1_258_291 * ((now % day) / day)  # 0..1.2 GiB sawtooth
+    root_logs = 1_258_291 * ((t % day) / day)  # 0..1.2 GiB sawtooth
     root_growth = min(2_097_152, uptime * 0.05)  # capped ~2 GiB
     root_used = int(
         root_base + root_logs + root_growth + gauge("fs.root", 0, amp_abs=120_000, period=1500)
@@ -199,13 +211,27 @@ def filesystem_usage(now: float) -> tuple[int, int]:
 
     # data: ~118 GiB base + WAL sawtooth + daily backup sawtooth + DB growth
     data_base = 123_731_968  # ~118 GiB
-    wal = 1_572_864 * ((now % 720.0) / 720.0)  # 0..1.5 GiB, 12-min teeth
-    backup = 8_388_608 * ((now % day) / day)  # 0..8 GiB daily
+    wal = 1_572_864 * ((t % 720.0) / 720.0)  # 0..1.5 GiB, 12-min teeth
+    backup = 8_388_608 * ((t % day) / day)  # 0..8 GiB daily
     db_growth = min(6_291_456, uptime * 2.0)  # ~2 kB/s, capped ~6 GiB
     data_used = int(
         data_base + wal + backup + db_growth + gauge("fs.data", 0, amp_abs=300_000, period=900)
     )
     return root_used, data_used
+
+
+def last_scheduled(now: float, hour: int, minute: int = 0) -> int:
+    """Epoch of the most recent daily hh:mm UTC run (+ a host-stable jitter).
+
+    Job/vacuum timestamps must be ANCHORED to a schedule, not "now - 7 h"
+    recomputed per poll ("started exactly 7h00m ago" forever is a giveaway):
+    the age grows through the day and resets when the next run comes around.
+    """
+    day = 86_400
+    t = (int(now) // day) * day + hour * 3_600 + minute * 60 + HOST_PHASE % 1_740
+    if t > now:
+        t -= day
+    return t
 
 
 def break_ramp(frac: float = 1.0) -> float:
@@ -341,18 +367,38 @@ class Counter:
             self.last = now
             return int(self.acc)
 
+    def inst(self, rate_per_s: float, now: float) -> float:
+        """Instantaneous wobbled rate WITHOUT integrating — for counter groups
+        that must conserve a shared budget (the /proc/stat tick budget: the
+        wobbles are computed first, rescaled to fit the budget, then
+        integrated via add())."""
+        with self.lock:
+            return rate_per_s * (1.0 + self.amp * self.wob.step(now))
+
+    def add(self, inst_rate_per_s: float, now: float) -> int:
+        """Integrate a pre-computed instantaneous rate (see inst())."""
+        with self.lock:
+            dt = max(0.0, now - self.last)
+            self.acc += inst_rate_per_s * dt
+            self.last = now
+            return int(self.acc)
+
 
 def _aged(rate_per_s: float) -> float:
     """Start value so the counter looks like it has run for the fake uptime."""
     return rate_per_s * UPTIME_OFFSET
 
 
-# /proc/stat is in jiffies: 100 Hz * 4 CPUs = ~400 ticks/s total.
+# /proc/stat is in jiffies: 100 Hz * 4 CPUs = EXACTLY 400 ticks/s total. The
+# busy counters (user/system/iowait) get their wobble, then idle is defined as
+# the remainder of the budget — sum conservation, see the cpu block in
+# build_agent_output. Seeds sum to exactly 400/s for the same reason.
 # healthy: mostly idle. broken: idle collapses into iowait — the whole point.
 C_USER = Counter("cpu.user", phase=0.3, start=_aged(60))
 C_SYSTEM = Counter("cpu.system", phase=1.1, start=_aged(25))
-C_IDLE = Counter("cpu.idle", phase=2.4, start=_aged(300))
+C_IDLE = Counter("cpu.idle", phase=2.4, start=_aged(303))
 C_IOWAIT = Counter("cpu.iowait", phase=3.0, start=_aged(12))
+C_CPU_TOTAL = Counter("cpu.total_ticks", start=_aged(400))  # invariant: 400/s
 C_CTXT = Counter("kernel.ctxt", phase=4.0, start=_aged(2800))
 C_PROC = Counter("kernel.processes", phase=4.7, start=_aged(7))
 C_PGMAJ = Counter("kernel.pgmajfault", phase=5.4, start=_aged(1))
@@ -403,6 +449,293 @@ PG_SYS = {
     "blks_hit": Counter("pg.postgres.blks_hit", phase=1.0, start=_aged(25)),
     "tup_returned": Counter("pg.postgres.tup_returned", phase=1.4, start=_aged(30)),
 }
+# tup_inserted's seed: datsize/bloat growth is driven by rows inserted SINCE
+# this baseline, so table size grows at ~rows/s x rowsize and collapses with
+# the insert rate when the disk dies (instead of a fixed 2 kB/s forever).
+PAY_ROWS0 = int(_aged(120))
+
+
+# --------------------------------------------------------------------------- #
+#  ps: live processes. Every row gets a FIXED start epoch (daemons: boot + a
+#  small offset; backends: their connect times) and a fixed per-process CPU
+#  rate; TIME = rate x process-age GROWS every poll (the ps check derives
+#  CPU% via get_rate over TIME — a frozen TIME renders 0.0 % forever) and
+#  ELAPSED = now - start grows too, never exceeding uptime. The per-process
+#  rates are chosen so their sum roughly matches the /proc/stat busy rate
+#  (~0.85 cpu-s/s healthy), postgres backends carrying most of it.
+# --------------------------------------------------------------------------- #
+def _cputime(seconds: float) -> str:
+    s = int(seconds)
+    d, r = divmod(s, 86_400)
+    hms = f"{r // 3600:02d}:{r % 3600 // 60:02d}:{r % 60:02d}"
+    return f"{d}-{hms}" if d else hms
+
+
+def _elapsed(seconds: float) -> str:
+    s = max(0, int(seconds))
+    d, r = divmod(s, 86_400)
+    return f"{d}-{r // 3600:02d}:{r % 3600 // 60:02d}:{r % 60:02d}"
+
+
+# (cgroup, user, vsz kB, rss kB, cpu-s/s, boot-offset s, pid, command) — one
+# process per running systemd unit (a unit without a process reads as fake).
+PS_DAEMONS = (
+    ("0::/init.scope", "root", 168_000, 13_200, 4.0e-05, 2, 1, "/sbin/init"),
+    (
+        "0::/system.slice/systemd-journald.service",
+        "root",
+        64_400,
+        22_100,
+        1.0e-04,
+        4,
+        412,
+        "/usr/lib/systemd/systemd-journald",
+    ),
+    (
+        "0::/system.slice/systemd-udevd.service",
+        "root",
+        26_200,
+        8_200,
+        4.0e-06,
+        5,
+        450,
+        "/usr/lib/systemd/systemd-udevd",
+    ),
+    (
+        "0::/system.slice/systemd-networkd.service",
+        "systemd-network",
+        21_400,
+        7_900,
+        2.4e-05,
+        7,
+        480,
+        "/usr/lib/systemd/systemd-networkd",
+    ),
+    (
+        "0::/system.slice/systemd-resolved.service",
+        "systemd-resolve",
+        26_800,
+        13_600,
+        5.6e-05,
+        8,
+        501,
+        "/usr/lib/systemd/systemd-resolved",
+    ),
+    (
+        "0::/system.slice/systemd-timesyncd.service",
+        "systemd-timesync",
+        91_000,
+        7_800,
+        1.2e-05,
+        8,
+        520,
+        "/usr/lib/systemd/systemd-timesyncd",
+    ),
+    (
+        "0::/system.slice/dbus.service",
+        "messagebus",
+        10_400,
+        5_200,
+        2.0e-05,
+        9,
+        530,
+        "@dbus-daemon --system --address=systemd:",
+    ),
+    (
+        "0::/system.slice/systemd-logind.service",
+        "root",
+        14_800,
+        6_900,
+        1.4e-05,
+        9,
+        545,
+        "/usr/lib/systemd/systemd-logind",
+    ),
+    (
+        "0::/system.slice/irqbalance.service",
+        "root",
+        16_400,
+        4_100,
+        1.9e-05,
+        10,
+        560,
+        "/usr/sbin/irqbalance --foreground",
+    ),
+    (
+        "0::/system.slice/multipathd.service",
+        "root",
+        353_000,
+        21_800,
+        5.8e-05,
+        10,
+        575,
+        "/sbin/multipathd -d -s",
+    ),
+    (
+        "0::/system.slice/polkit.service",
+        "root",
+        236_000,
+        8_400,
+        4.8e-06,
+        11,
+        590,
+        "/usr/lib/polkit-1/polkitd --no-debug",
+    ),
+    (
+        "0::/system.slice/networkd-dispatcher.service",
+        "root",
+        32_800,
+        17_200,
+        7.7e-06,
+        12,
+        605,
+        "/usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers",
+    ),
+    (
+        "0::/system.slice/udisks2.service",
+        "root",
+        396_000,
+        12_600,
+        1.7e-05,
+        13,
+        620,
+        "/usr/libexec/udisks2/udisksd",
+    ),
+    (
+        "0::/system.slice/rsyslog.service",
+        "syslog",
+        222_400,
+        6_900,
+        4.5e-05,
+        14,
+        640,
+        "/usr/sbin/rsyslogd -n -iNONE",
+    ),
+    (
+        "0::/system.slice/smartmontools.service",
+        "root",
+        13_100,
+        6_300,
+        8.7e-06,
+        14,
+        655,
+        "/usr/sbin/smartd -n",
+    ),
+    (
+        "0::/system.slice/snapd.service",
+        "root",
+        1_248_000,
+        34_200,
+        1.2e-04,
+        15,
+        670,
+        "/usr/lib/snapd/snapd",
+    ),
+    (
+        "0::/system.slice/unattended-upgrades.service",
+        "root",
+        108_000,
+        21_900,
+        1.9e-06,
+        16,
+        690,
+        "/usr/bin/python3 /usr/share/unattended-upgrades/"
+        "unattended-upgrade-shutdown --wait-for-signal",
+    ),
+    (
+        "0::/system.slice/ssh.service",
+        "root",
+        15_400,
+        9_100,
+        1.0e-06,
+        17,
+        710,
+        "sshd: /usr/sbin/sshd -D [listener]",
+    ),
+    (
+        "0::/system.slice/cron.service",
+        "root",
+        11_500,
+        2_600,
+        2.9e-06,
+        17,
+        720,
+        "/usr/sbin/cron -f -P",
+    ),
+    (
+        "0::/system.slice/getty@tty1.service",
+        "root",
+        6_200,
+        1_700,
+        1.0e-06,
+        18,
+        735,
+        "/sbin/agetty -o -p -- \\u --noclear tty1 linux",
+    ),
+    (
+        "0::/user.slice/user-1000.slice/user@1000.service",
+        "ubuntu",
+        20_600,
+        11_400,
+        2.9e-06,
+        25,
+        760,
+        "/usr/lib/systemd/systemd --user",
+    ),
+    (
+        "0::/user.slice/user-1000.slice/user@1000.service",
+        "ubuntu",
+        21_100,
+        2_400,
+        0.0,
+        25,
+        761,
+        "(sd-pam)",
+    ),
+    (
+        "0::/system.slice/pgbouncer.service",
+        "postgres",
+        18_900,
+        7_400,
+        8.4e-04,
+        30,
+        790,
+        "/usr/sbin/pgbouncer -d /etc/pgbouncer/pgbouncer.ini",
+    ),
+)
+
+# (pid, comm, cpu-s/s) — the kernel-thread block every real box carries;
+# without it `ps` shows ~2 dozen userland processes on a "396-process" host.
+PS_KTHREADS = (
+    (2, "kthreadd", 2.0e-06),
+    (15, "rcu_preempt", 3.5e-04),
+    (16, "migration/0", 6.0e-05),
+    (17, "ksoftirqd/0", 2.4e-04),
+    (22, "migration/1", 6.0e-05),
+    (23, "ksoftirqd/1", 2.2e-04),
+    (28, "migration/2", 6.0e-05),
+    (29, "ksoftirqd/2", 2.1e-04),
+    (34, "migration/3", 6.0e-05),
+    (35, "ksoftirqd/3", 2.3e-04),
+    (38, "kdevtmpfs", 1.0e-06),
+    (64, "kswapd0", 1.1e-05),
+    (70, "kcompactd0", 5.0e-06),
+    (92, "khugepaged", 4.0e-06),
+    (93, "oom_reaper", 0.0),
+    (95, "watchdogd", 0.0),
+    (96, "khungtaskd", 1.0e-06),
+    (118, "scsi_eh_0", 2.0e-06),
+    (120, "scsi_eh_1", 2.0e-06),
+    (233, "jbd2/sda1-8", 1.4e-03),
+    (241, "jbd2/sdb1-8", 3.1e-03),
+    (247, "ext4-rsv-conver", 0.0),
+    (1401, "kworker/0:1-events", 4.5e-03),
+    (1554, "kworker/1:2-events", 4.1e-03),
+    (1688, "kworker/2:0-mm_percpu_wq", 3.6e-03),
+    (1702, "kworker/3:1-events", 3.9e-03),
+    (1750, "kworker/u8:1-flush-8:16", 9.0e-03),
+    (1762, "kworker/u8:2-events_unbound", 5.2e-03),
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -568,12 +901,35 @@ def build_agent_output(state: str) -> bytes:
     total_procs = round(_lerp(396, 612, r1))
 
     # ---- /proc/stat: where the "CPU is idle, it's all I/O wait" clue lives.
-    #      iowait ramps with the disk going bad (slightly behind it). -------- #
+    #      /proc/stat is jiffies: 100 Hz x NCPU = EXACTLY ncpu*100 ticks/s. The
+    #      busy fields (user/system/iowait) get their independent wobble first
+    #      via inst(); idle takes the REMAINDER of the budget; then every field
+    #      is integrated with add() against ONE shared `cpu_now`. So between two
+    #      polls the emitted counters' deltas sum to exactly ncpu*100*dt (the
+    #      C_CPU_TOTAL witness advances by the same budget) and every counter is
+    #      monotonic across healthy/degraded/broken flips (we integrate the
+    #      CURRENT rate over dt, never recompute cumulative from state).
+    #      Broken: iowait ramps to ~80 % while idle collapses into it. ------- #
     r_cpu = break_ramp(0.6)
-    user = C_USER.sample(_lerp(60, 25, r_cpu))
-    system = C_SYSTEM.sample(_lerp(25, 18, r_cpu))
-    idle = C_IDLE.sample(_lerp(300, 40, r_cpu))
-    iowait = C_IOWAIT.sample(_lerp(12, 315, r_cpu))  # -> ~80 % of ~400 ticks/s
+    cpu_now = time.time()
+    budget = float(ncpu * 100)  # total jiffies/s across all cores
+    user_r = C_USER.inst(_lerp(60, 25, r_cpu), cpu_now)
+    system_r = C_SYSTEM.inst(_lerp(25, 18, r_cpu), cpu_now)
+    iowait_r = C_IOWAIT.inst(_lerp(12, 315, r_cpu), cpu_now)  # -> ~80 % broken
+    # A wobble spike on the busy rates must not push idle below zero (a negative
+    # idle rate would make the counter go backwards -> staleness cascade), so
+    # rescale the busy rates to leave a small idle floor when they'd exceed it.
+    busy_cap = budget - 4.0
+    busy = user_r + system_r + iowait_r
+    if busy > busy_cap:
+        scale = busy_cap / busy
+        user_r, system_r, iowait_r = user_r * scale, system_r * scale, iowait_r * scale
+        busy = busy_cap
+    user = C_USER.add(user_r, cpu_now)
+    system = C_SYSTEM.add(system_r, cpu_now)
+    iowait = C_IOWAIT.add(iowait_r, cpu_now)  # -> ~80 % of the budget when broken
+    idle = C_IDLE.add(budget - busy, cpu_now)
+    C_CPU_TOTAL.add(budget, cpu_now)  # invariant witness: exactly ncpu*100/s
 
     # ---- diskstat: sdb read latency = rd_ticks rate / rd_ios rate.
     #      The data disk is a SATA datacenter SSD, so the states are:
@@ -935,100 +1291,18 @@ def build_agent_output(state: str) -> bytes:
     a(str(now))
     a("[processes]")
     a("[header] CGROUP USER VSZ RSS TIME ELAPSED PID COMMAND")
-    for cgs, user, vsz, rss, cputime, pid, cmd in (
-        ("init.scope", "root", 168_000, 13_200, "00:00:39", 1, "/sbin/init"),
-        (
-            "system.slice/systemd-journald.service",
-            "root",
-            64_400,
-            22_100,
-            "00:01:42",
-            412,
-            "/usr/lib/systemd/systemd-journald",
-        ),
-        (
-            "system.slice/systemd-udevd.service",
-            "root",
-            26_200,
-            8_200,
-            "00:00:04",
-            450,
-            "/usr/lib/systemd/systemd-udevd",
-        ),
-        (
-            "system.slice/systemd-resolved.service",
-            "systemd-resolve",
-            26_800,
-            13_600,
-            "00:00:58",
-            501,
-            "/usr/lib/systemd/systemd-resolved",
-        ),
-        (
-            "system.slice/systemd-timesyncd.service",
-            "systemd-timesync",
-            91_000,
-            7_800,
-            "00:00:12",
-            520,
-            "/usr/lib/systemd/systemd-timesyncd",
-        ),
-        (
-            "system.slice/dbus.service",
-            "messagebus",
-            10_400,
-            5_200,
-            "00:00:21",
-            530,
-            "@dbus-daemon --system --address=systemd:",
-        ),
-        (
-            "system.slice/rsyslog.service",
-            "syslog",
-            222_400,
-            6_900,
-            "00:00:47",
-            640,
-            "/usr/sbin/rsyslogd -n -iNONE",
-        ),
-        (
-            "system.slice/smartmontools.service",
-            "root",
-            13_100,
-            6_300,
-            "00:00:09",
-            655,
-            "/usr/sbin/smartd -n",
-        ),
-        (
-            "system.slice/ssh.service",
-            "root",
-            15_400,
-            9_100,
-            "00:00:01",
-            710,
-            "sshd: /usr/sbin/sshd -D [listener]",
-        ),
-        (
-            "system.slice/cron.service",
-            "root",
-            11_500,
-            2_600,
-            "00:00:03",
-            720,
-            "/usr/sbin/cron -f -P",
-        ),
-        (
-            "system.slice/pgbouncer.service",
-            "postgres",
-            18_900,
-            7_400,
-            "00:14:33",
-            790,
-            "/usr/sbin/pgbouncer -d /etc/pgbouncer/pgbouncer.ini",
-        ),
-    ):
-        a(f"0::/{cgs} {user} {vsz} {rss} {cputime} 12-04:11:40 {pid} {cmd}")
+    # System daemons from PS_DAEMONS: each row gets a FIXED start epoch
+    # (boot + its boot-offset) so ELAPSED = now - start grows but never exceeds
+    # uptime, and TIME = per-process cpu-rate x age GROWS every poll (a frozen
+    # TIME renders 0.0 % CPU forever via the ps check's get_rate over TIME).
+    boot_epoch = now - uptime
+    for cgroup, puser, vsz, rss, cpu_rate, boot_off, pid, cmd in PS_DAEMONS:
+        age = max(0, now - (boot_epoch + boot_off))
+        a(f"{cgroup} {puser} {vsz} {rss} {_cputime(cpu_rate * age)} {_elapsed(age)} {pid} {cmd}")
+    # Kernel threads: every real box carries dozens (they start at boot, so
+    # elapsed ~= uptime); without them ps reads as a fake ~2-dozen-proc host.
+    for pid, comm, cpu_rate in PS_KTHREADS:
+        a(f"0::/ root 0 0 {_cputime(cpu_rate * uptime)} {_elapsed(uptime)} {pid} [{comm}]")
     cg = "0::/system.slice/postgresql.service"
     a(
         f"{cg} postgres {pg_vsz} 156000 01:12:33 12-04:11:08 812 "
@@ -1124,9 +1398,13 @@ def build_agent_output(state: str) -> bytes:
         a(f"{name} loaded {act} {sub} {descr}")
 
     # --- scheduled jobs (mk_job): both green — again, no noise ---
+    # start_times are anchored to a daily schedule (nightly base backup ~01:00,
+    # vacuum/analyze ~03:00) via last_scheduled: the age grows through the day
+    # and resets at the next run, instead of a giveaway "started exactly 7h ago"
+    # recomputed every poll.
     a("<<<job>>>")
     a("==> pg-basebackup <==")
-    a(f"start_time {now - 7 * 3600}")
+    a(f"start_time {last_scheduled(now, 1, 0)}")
     a("exit_code 0")
     a("real_time 12:41.3")
     a("user_time 8.40")
@@ -1134,7 +1412,7 @@ def build_agent_output(state: str) -> bytes:
     a("max_res_kbytes 312000")
     a("avg_mem_kbytes 0")
     a("==> vacuum-analyze <==")
-    a(f"start_time {now - 5 * 3600}")
+    a(f"start_time {last_scheduled(now, 3, 0)}")
     a("exit_code 0")
     a("real_time 6:02.1")
     a("user_time 4.20")
@@ -1188,7 +1466,12 @@ def build_agent_output(state: str) -> bytes:
         "tup_updated": PG_PAY["tup_updated"].sample(_lerp(90, 6, r_pg)),
         "tup_deleted": PG_PAY["tup_deleted"].sample(_lerp(2, 0.2, r_pg)),
     }
-    pay_size = 84_512_345_678 + int((time.time() - START) * 2048)
+    # datsize grows with rows actually inserted since PAY_ROWS0 (the
+    # tup_inserted accumulator baseline) x a per-row size, so growth tracks the
+    # insert rate and FLATTENS when the DB stalls in `broken` (inserts collapse
+    # 120/s -> ~8/s), instead of a fixed 2 kB/s forever.
+    rows_since = max(0, pay["tup_inserted"] - PAY_ROWS0)
+    pay_size = 84_512_345_678 + rows_since * 640
     sys_commit = PG_SYS["xact_commit"].sample(0.5)
     sys_hit = PG_SYS["blks_hit"].sample(25)
     sys_ret = PG_SYS["tup_returned"].sample(30)
@@ -1417,7 +1700,7 @@ STATE_META = {
         "effects": [
             "SMART SAMSUNG … Stats stays GREEN — read-retry storms don't show up in SMART "
             "attributes (they only count completed failures), the drive still says PASSED",
-            "Temperature SMART SAMSUNG … → WARN at ~2.5 min (creeps 33 → 38 °C past the 35 °C "
+            "Temperature SMART SAMSUNG … → WARN at ~3.6 min (creeps 30 → 38 °C past the 35 °C "
             "default) — the only breadcrumb, and one everybody blames on the rack AC",
             "Disk IO SUMMARY service: 'Read latency' starts to STUTTER — ~1.2 ms baseline with "
             "read-retry storms to ~8 ms (util ~40 %) in 1-2 min clumps every few minutes; the "

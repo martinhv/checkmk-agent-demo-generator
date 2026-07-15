@@ -119,8 +119,12 @@ class Counter:
         self.lock = threading.Lock()
         _ALL_COUNTERS[name] = self
 
-    def sample(self, rate_per_s: float) -> int:
-        now = time.time()
+    def sample(self, rate_per_s: float, now: float | None = None) -> int:
+        """`now` lets a caller integrate a whole counter FAMILY against one
+        shared timestamp — required for the conserved /proc/stat, where the
+        per-poll deltas of all cpu fields must sum to ncores*100*dt."""
+        if now is None:
+            now = time.time()
         with self.lock:
             dt = max(0.0, now - self.last)
             inst = rate_per_s * (1.0 + self.amp * self.wob.step(now))
@@ -164,7 +168,18 @@ def _ctl_status_json(uuid: str) -> str:
     )
 
 
-def _smart_json(dev: str, model: str, serial: str, hours: int, temp: int) -> str:
+def _smart_json(
+    dev: str,
+    model: str,
+    serial: str,
+    hours: int,
+    temp: int,
+    cycles: int,
+    wear_raw: int,
+) -> str:
+    """Power_Cycle_Count and wear vary per host (cycles seeded 5-40, wear
+    grows with the disk's power-on hours) — 170 hosts with cycles=14/wear=88
+    would read as one cloned image."""
     return json.dumps(
         {
             "device": {"name": dev, "type": "sat", "protocol": "ATA"},
@@ -187,7 +202,7 @@ def _smart_json(dev: str, model: str, serial: str, hours: int, temp: int) -> str
                         "name": "Power_Cycle_Count",
                         "value": 100,
                         "thresh": 0,
-                        "raw": {"value": 14},
+                        "raw": {"value": cycles},
                     },
                     {
                         "id": 187,
@@ -213,9 +228,9 @@ def _smart_json(dev: str, model: str, serial: str, hours: int, temp: int) -> str
                     {
                         "id": 177,
                         "name": "Wear_Leveling_Count",
-                        "value": 96,
+                        "value": max(85, 100 - wear_raw // 15),
                         "thresh": 5,
-                        "raw": {"value": 88},
+                        "raw": {"value": wear_raw},
                     },
                     {
                         "id": 179,
@@ -319,6 +334,34 @@ _LNX_BASE_PROCS = [
         "/usr/bin/python3 /usr/share/unattended-upgrades/"
         "unattended-upgrade-shutdown --wait-for-signal",
     ),
+    # unit <-> process parity: every RUNNING unit in _LNX_BASE_UNITS needs
+    # its process here (a specialist cross-checks systemd_units against ps)
+    ("system.slice/multipathd.service", "root", 353_600, 22_300, 420, "/sbin/multipathd -d -s"),
+    (
+        "system.slice/networkd-dispatcher.service",
+        "root",
+        32_800,
+        20_400,
+        618,
+        "/usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers",
+    ),
+    ("system.slice/udisks2.service", "root", 396_400, 12_900, 641, "/usr/libexec/udisks2/udisksd"),
+    (
+        "system.slice/system-getty.slice/getty@tty1.service",
+        "root",
+        6_216,
+        1_600,
+        801,
+        "/sbin/agetty -o -p -- \\u --noclear tty1 linux",
+    ),
+    (
+        "user.slice/user-1000.slice/user@1000.service",
+        "ubuntu",
+        20_900,
+        11_300,
+        950,
+        "/usr/lib/systemd/systemd --user",
+    ),
 ]
 
 # Base systemd units (all green; ~29 like a real Ubuntu 24.04 server).
@@ -418,8 +461,13 @@ _DISK_MODELS = [
 ]
 
 
-def _mac(rnd: random.Random) -> str:
-    return "02:42:" + ":".join(f"{rnd.randrange(256):02x}" for _ in range(4))
+def _mac(rnd: random.Random, oui: str) -> str:
+    """MAC with a platform-correct OUI: 52:54:00 (QEMU/KVM) for VM guests,
+    a Dell OUI for the bare-metal boxes — 02:42 is the DOCKER bridge prefix
+    and reads as fake on a first-NIC address. Draws four bytes but uses
+    three to keep the fleet-v1 seed stream (uuid, serials) unchanged."""
+    tail = [rnd.randrange(256) for _ in range(4)][:3]
+    return oui + ":" + ":".join(f"{b:02x}" for b in tail)
 
 
 def _uuid(rnd: random.Random) -> str:
@@ -448,7 +496,9 @@ class LinuxHost:
         self.uptime_offset = rnd.uniform(lo, hi) * 86400
         self.jit = rnd.uniform(0.88, 1.12)  # per-instance scale on load/net
         self.phase = rnd.uniform(0, 6.28)
-        self.mac = _mac(rnd)
+        # VM guests get the QEMU/KVM OUI, physical boxes (vm=False: the
+        # kvm-* hypervisors) a Dell one — matching their R760 hardware
+        self.mac = _mac(rnd, "52:54:00" if spec.get("vm", True) else "d0:94:66")
         self.uuid = _uuid(rnd)
         self.ncpu = spec.get("ncpu", 4)
         self.mem_total = spec.get("mem_mb", 8192) * 1024  # kB
@@ -472,7 +522,10 @@ class LinuxHost:
         anon_f, cached_f, shmem_f = spec.get("mem_profile", (0.15, 0.35, 0.03))
         self.anon_f, self.cached_f, self.shmem_f = anon_f, cached_f, shmem_f
 
-        # cpu tick split from the load (util = busy fraction of all cores)
+        # cpu tick split from the load (util = busy fraction of all cores).
+        # /proc/stat is CONSERVED: per poll the busy fields get wobbled rates,
+        # idle takes exactly what they leave of ncores*100 jiffies/s (see
+        # build()) — so Sum(all fields) == ncores*100*dt like a real kernel.
         total_ticks = self.ncpu * 100.0
         util = max(0.02, min(0.80, self.load1 / self.ncpu * 0.75))
 
@@ -519,6 +572,15 @@ class LinuxHost:
         self.c_tx_b = c("net.tx_bytes", self.tx_bps, 2.3)
         self.c_rx_p = c("net.rx_pkts", self.rx_bps / 900, 3.0)
         self.c_tx_p = c("net.tx_pkts", self.tx_bps / 900, 3.7)
+
+        # second seed stream for values added later (keeps fleet-v1 draws —
+        # uptime, jit, mac, uuid, serials — byte-identical across versions)
+        rnd2 = random.Random(f"{short}:fleet-v2")
+        self.fs_phase = rnd2.uniform(0.0, 86400.0)  # daily saws de-lockstepped
+        self.ntp_phase = rnd2.uniform(0.0, 2048.0)  # sync times differ per host
+        self.disk_cycles = rnd2.randint(5, 40)  # SMART power cycles (sda)
+        self.data_cycles = rnd2.randint(5, 40)  # SMART power cycles (sdb)
+        self.root_ino_base = int(rnd2.uniform(170_000, 260_000))
 
     @property
     def fqdn(self) -> str:
@@ -892,13 +954,16 @@ class LinuxHost:
             gauge(f"{s}.smart.sda", 27.0, amp_abs=1.3, phase=self.phase + 2.1, period=1100)
         )
         a("<<<smart_posix_all:sep(0)>>>")
+        sda_hours = self.disk_hours + int(uptime / 3600)
         a(
             _smart_json(
                 "/dev/sda",
                 self.disk_model,
                 self.disk_serial,
-                self.disk_hours + int(uptime / 3600),
+                sda_hours,
                 temp,
+                self.disk_cycles,
+                sda_hours // 150,
             )
         )
         if self.extra_fs:
@@ -910,8 +975,10 @@ class LinuxHost:
                     "/dev/sdb",
                     "Samsung SSD 883 DCT 1.92TB",
                     self.data_serial,
-                    self.disk_hours + int(uptime / 3600),
+                    sda_hours,
                     temp2,
+                    self.data_cycles,
+                    sda_hours // 150,
                 )
             )
 

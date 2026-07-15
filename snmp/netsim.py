@@ -64,6 +64,7 @@ import random
 import sys
 import threading
 import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -106,6 +107,7 @@ class _Wobble:
 
 
 _GAUGES: dict[str, _Wobble] = {}
+_GAUGE_LOCK = threading.Lock()
 
 
 def gauge(
@@ -117,10 +119,11 @@ def gauge(
     phase: float = 0.0,
     period: float = 1200.0,
 ) -> float:
-    w = _GAUGES.get(name)
-    if w is None:
-        w = _GAUGES[name] = _Wobble(phase, period)
-    d = w.step(time.time())
+    with _GAUGE_LOCK:
+        w = _GAUGES.get(name)
+        if w is None:
+            w = _GAUGES[name] = _Wobble(phase, period)
+        d = w.step(time.time())
     if amp_abs is not None:
         return base + amp_abs * d
     return base * (1.0 + (amp_frac or 0.0) * d)
@@ -142,15 +145,22 @@ class Counter:
         self.last = time.time()
         self.amp = amp
         self.wob = _Wobble(phase, period)
+        self.lock = threading.Lock()
         _ALL_COUNTERS[name] = self  # stable name -> restart-proof persistence
 
-    def sample(self, rate_per_s: float) -> int:
+    def sample(self, rate_per_s: float, cap: float | None = None) -> int:
+        """Integrate the wobbled instantaneous rate; `cap` bounds the
+        COMPOSITE rate (base * wobble) — used to keep interface octet
+        counters below the physical line rate in every state."""
         now = time.time()
-        dt = max(0.0, now - self.last)
-        inst = rate_per_s * (1.0 + self.amp * self.wob.step(now))
-        self.acc += inst * dt
-        self.last = now
-        return int(self.acc)
+        with self.lock:
+            dt = max(0.0, now - self.last)
+            inst = rate_per_s * (1.0 + self.amp * self.wob.step(now))
+            if cap is not None:
+                inst = min(inst, cap)
+            self.acc += inst * dt
+            self.last = now
+            return int(self.acc)
 
 
 # --------------------------------------------------------------------------- #
@@ -312,9 +322,13 @@ class Iface:
         f = self.rate_factor if up else 0.0
         in_bps, out_bps = self.in_bps * f, self.out_bps * f
         c = self.c
+        # octet counters may never imply > line rate: clamp the composite
+        # instantaneous rate (incl. wobble) at ~85 % of the wire in ALL
+        # states (a saturated egress plateaus, it does not render 120 %)
+        line_cap = 0.85 * self.mbit * 1_000_000 / 8.0
         vals = {
-            "in_oct": c["in_oct"].sample(in_bps),
-            "out_oct": c["out_oct"].sample(out_bps),
+            "in_oct": c["in_oct"].sample(in_bps, cap=line_cap),
+            "out_oct": c["out_oct"].sample(out_bps, cap=line_cap),
             "in_ucast": c["in_ucast"].sample(in_bps / 700),
             "out_ucast": c["out_ucast"].sample(out_bps / 700),
             "in_mcast": c["in_mcast"].sample(2 * f),
@@ -376,7 +390,7 @@ class Device:
         return f"{self.short}.{DOMAIN}"
 
     def system_rows(self, now: float) -> list[tuple[str, str]]:
-        ticks = int((now - START + self.uptime_offset) * 100)
+        ticks = int((now - START + self.uptime_offset) * 100) % U32  # TimeTicks wrap
         return [
             (".1.3.6.1.2.1.1.1.0", self.sys_descr),
             (".1.3.6.1.2.1.1.2.0", self.sys_objectid),
@@ -699,7 +713,9 @@ class RtWan(Device):
     degraded: a bulk transfer (inventory replication gone wrong) pushes it
               to ~600 Mbit/s; CPU follows to ~70 % — visible in every
               graph, nothing red yet.
-    broken:   the link saturates ~940 Mbit/s; the CPU (process switching,
+    broken:   the link saturates at the ~850 Mbit/s shaper ceiling of the
+              leased line (octet counters clamp at 85 % of the wire — never
+              an impossible >100 % graph); the CPU (process switching,
               QoS drops) climbs past the cisco_cpu defaults (WARN 80/CRIT 90)
               and output discards appear on the WAN port. One story: the
               red CPU points at the saturated WAN graph next to it.
@@ -786,7 +802,7 @@ class RtWan(Device):
 
     def status_extras(self) -> list[str]:
         factor, cpu = self._factor_cpu()
-        mbit = 180 * factor
+        mbit = min(180 * factor, 850)  # octet rate clamps at 85 % of the line
         out = [f"WAN Gi0/1 at ~{mbit:.0f} Mbit/s of 1000, CPU ~{cpu:.0f} % (WARN 80 / CRIT 90)"]
         if self.wan.disc_rate > 0:
             out.append(f"output discards on Gi0/1: ~{self.wan.disc_rate:.0f}/s")
@@ -875,10 +891,51 @@ _HRUPTIME_OID = ".1.3.6.1.2.1.25.1.1.0"
 # ifTable 32-bit + ifXTable 64-bit counter columns -> logical counter key
 _IF32 = {"10": "ifin", "11": "ifinu", "16": "ifout", "17": "ifoutu"}
 _IFHC = {"6": "ifin", "7": "ifinu", "10": "ifout", "11": "ifoutu"}
+_IFSPEED_PREFIX = ".1.3.6.1.2.1.2.2.1.5."  # bit/s (caps at 2^32-1)
+_IFMAC_PREFIX = ".1.3.6.1.2.1.2.2.1.6."  # ifPhysAddress
+_IFHIGHSPEED_PREFIX = ".1.3.6.1.2.1.31.1.1.1.15."  # Mbit/s
+_ENT_SERIAL_PREFIX = ".1.3.6.1.2.1.47.1.1.1.1.11."  # entPhysicalSerialNum
+# Dell iDRAC service tag (a serial in all but name) + the express service
+# code, which is the base-36 decoding of the tag — keep that relationship
+_DELL_SVCTAG_PREFIXES = (
+    ".1.3.6.1.4.1.674.10892.1.300.10.1.11.",
+    ".1.3.6.1.4.1.674.10892.1.300.10.1.50.",
+    ".1.3.6.1.4.1.674.10892.1.1400.90.1.6.",
+)
+_DELL_SVCCODE_PREFIX = ".1.3.6.1.4.1.674.10892.1.300.10.1.49."
 _HRCPU_PREFIX = ".1.3.6.1.2.1.25.3.3.1.2."
 _PAGES_PREFIX = ".1.3.6.1.2.1.43.10.2.1.4."
 _HP_CPU_OID = ".1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0"  # hpSwitchCpuStat (%)
 _APC_DIAG_DATE_OID = ".1.3.6.1.4.1.318.1.1.1.7.2.4.0"  # last self test (M/D/Y)
+
+
+def _parse_hex_value(value: str) -> bytes | None:
+    """Decode a walk-encoded binary value ('"00 1B 2C ... "') to bytes."""
+    v = value.strip()
+    if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+        try:
+            return bytes(int(tok, 16) for tok in v[1:-1].split())
+        except ValueError:
+            return None
+    return None
+
+
+def _mutate_serial(short: str, value: str) -> str:
+    """Per-instance serial/service tag: keep the vendor format (prefix,
+    length, character classes), rewrite the last 4 alphanumeric characters
+    deterministically (seeded by instance name + recorded value) — distinct
+    instances get distinct, restart-stable values."""
+    rnd = random.Random(f"{short}:{value}:ident-v1")
+    chars = list(value)
+    alnum = [i for i, ch in enumerate(chars) if ch.isalnum()]
+    for i in alnum[-4:]:
+        if chars[i].isdigit():
+            chars[i] = rnd.choice("0123456789")
+        elif chars[i].isupper():
+            chars[i] = rnd.choice("ABCDEFGHJKLMNPQRSTUVWXYZ")
+        else:
+            chars[i] = rnd.choice("abcdefghjkmnpqrstuvwxyz")
+    return "".join(chars)
 
 
 def _ticks(value: str) -> int:
@@ -912,9 +969,14 @@ class ReplayModel:
     def __init__(self, name: str, path: str) -> None:
         self.name = name
         # segments: static text blocks interleaved with dynamic slots
-        # slot = (kind, oid, key, recorded_int)
+        # slot = (kind, oid, key, recorded_int) — identity slots (ifmac,
+        # serial, svctag, svccode) carry the recorded VALUE in `key`
         self.segments: list[str | tuple[Any, ...]] = []
         self.rates: dict[str, float] = {}  # counter key -> base rate/s
+        self.seeds: dict[str, int] = {}  # counter key -> recorded total
+        self.linerate: dict[str, float] = {}  # ifIndex -> line rate (bit/s)
+        self.caps: dict[str, float] = {}  # octet key -> composite cap (B/s)
+        self.dell_svctag: str | None = None  # recorded chassis service tag
         self.uptime_rec = 90 * 86400  # seconds, fallback
 
         rows: list[tuple[str, str]] = []
@@ -925,6 +987,14 @@ class ReplayModel:
         for oid, value in rows:
             if oid == _UPTIME_OID:
                 self.uptime_rec = max(7 * 86400, _ticks(value) / 100.0)
+            elif oid.startswith(_IFHIGHSPEED_PREFIX) and value.strip().isdigit():
+                idx = oid.rsplit(".", 1)[1]
+                self.linerate[idx] = max(self.linerate.get(idx, 0.0), int(value) * 1e6)
+            elif oid.startswith(_IFSPEED_PREFIX) and value.strip().isdigit():
+                v = int(value)
+                if 0 < v < U32 - 1:  # 2^32-1 = "see ifHighSpeed"
+                    idx = oid.rsplit(".", 1)[1]
+                    self.linerate[idx] = max(self.linerate.get(idx, 0.0), float(v))
 
         static: list[str] = []
 
@@ -959,37 +1029,65 @@ class ReplayModel:
             col = oid.split(".")[-2]
             if col.isdigit() and 50 <= int(col) <= 66:
                 key = f"ucd.{col}"
-                self._note_rate(key, int(value))
+                self._note_counter(key, int(value))
                 return ("ctr32", oid, key, int(value))
         if oid == _APC_DIAG_DATE_OID:
             # a static date would age into the self-test levels eventually —
             # render "~5 weeks ago" dynamically like the synthetic UPS does
             return ("apcdate", oid, None, 0)
+        # instance identity: replicas of one model must not clone hardware —
+        # MACs (keep the vendor OUI), ENTITY serials, iDRAC service tags
+        if oid.startswith(_IFMAC_PREFIX):
+            raw = _parse_hex_value(value)
+            if raw is not None and len(raw) == 6:
+                return ("ifmac", oid, value, 0)
+        if oid.startswith(_ENT_SERIAL_PREFIX) and value.strip():
+            return ("serial", oid, value, 0)
+        if any(oid.startswith(p) for p in _DELL_SVCTAG_PREFIXES) and value.strip():
+            if self.dell_svctag is None:
+                self.dell_svctag = value.strip()
+            return ("svctag", oid, value.strip(), 0)
+        if oid.startswith(_DELL_SVCCODE_PREFIX) and value.strip().isdigit():
+            return ("svccode", oid, value.strip(), 0)
         parts = oid.rsplit(".", 1)
         if oid.startswith(".1.3.6.1.2.1.2.2.1."):
             col, index = oid.split(".")[-2], parts[1]
             if col in _IF32 and value.isdigit():
                 key = f"{_IF32[col]}.{index}"
-                self._note_rate(key, int(value))
+                self._note_counter(key, int(value), if_index=index)
                 return ("ctr32", oid, key, int(value))
         if oid.startswith(".1.3.6.1.2.1.31.1.1.1."):
             col, index = oid.split(".")[-2], parts[1]
             if col in _IFHC and value.isdigit():
                 key = f"{_IFHC[col]}.{index}"
-                self._note_rate(key, int(value))
+                self._note_counter(key, int(value), if_index=index)
                 return ("ctr64", oid, key, int(value))
         if oid.startswith(_HRCPU_PREFIX) and value.isdigit():
             return ("hrcpu", oid, oid[len(_HRCPU_PREFIX) :], int(value))
         if oid.startswith(_PAGES_PREFIX) and value.isdigit():
             key = f"pages.{oid[len(_PAGES_PREFIX) :]}"
-            self._note_rate(key, int(value))
+            self._note_counter(key, int(value))
             return ("ctr32", oid, key, int(value))
         return None
 
-    def _note_rate(self, key: str, recorded: int) -> None:
+    def _note_counter(self, key: str, recorded: int, if_index: str | None = None) -> None:
+        # Seed the accumulator from the LARGEST recorded value driving this
+        # key: for 32/64-bit pairs that is the HC column (the 32-bit value is
+        # the same counter modulo 2^32) — a fake ToR must not restart its
+        # lifetime total at the wrapped remainder.
+        self.seeds[key] = max(self.seeds.get(key, 0), recorded)
         # base rate: the average the REAL device sustained over its recorded
-        # uptime (32-bit wraps make this an underestimate — fine, stays green)
-        cap = 25e6 if "if" in key and key.split(".")[0].endswith("in") else 25e6
+        # uptime (via the HC total, thanks to max(); 32-bit-only counters
+        # underestimate across wraps — fine, stays green). Octet rates are
+        # capped by the port's LINE RATE where the walk carries it
+        # (ifHighSpeed/ifSpeed): ~60 % of the wire for the base average,
+        # ~85 % for the composite wobbled rate at render time.
+        cap = 25e6
+        if if_index is not None and key.startswith(("ifin.", "ifout.")):
+            line = self.linerate.get(if_index)
+            if line:
+                cap = 0.60 * line / 8.0
+                self.caps[key] = 0.85 * line / 8.0
         rate = min(cap, recorded / self.uptime_rec)
         prev = self.rates.get(key)
         self.rates[key] = max(prev, rate) if prev is not None else rate
@@ -1013,28 +1111,57 @@ class ReplayDevice(Device):
         self.rate_jit = rnd.uniform(0.7, 1.3)
         self.uptime_extra = rnd.uniform(0, 120) * 86400  # instances differ
         self.phase = rnd.uniform(0, 6.28)
+        # per-instance MAC offset: OUI (vendor) stays, low 3 octets shift
+        self.mac_off = rnd.randrange(1, 1 << 24)
+        self._ident: dict[str, str] = {}  # oid -> rewritten identity value
         self._counters: dict[str, Counter] = {}
+        # Instantiate EVERY counter eagerly (seeded from the recorded totals,
+        # HC-preferred): they must exist in the registry BEFORE load_state()
+        # runs, or a restart resets ~110 devices' counters backwards and
+        # triggers the estate-wide staleness cascade.
+        for key, rec in self.model.seeds.items():
+            self._counter(key, rec)
 
     def _counter(self, key: str, recorded: int) -> Counter:
         c = self._counters.get(key)
         if c is None:
             c = Counter(
                 f"{self.short}.{key}",
-                phase=self.phase + (hash(key) % 63) / 10.0,
+                # crc32, not hash(): PYTHONHASHSEED randomises str hashes per
+                # process, which would shift the phase across restarts
+                phase=self.phase + (zlib.crc32(key.encode()) % 63) / 10.0,
                 amp=0.30,
-                start=float(recorded),
+                # seed from the HC-preferred recorded total (see _note_counter)
+                start=float(self.model.seeds.get(key, recorded)),
             )
             self._counters[key] = c
         return c
 
+    def _identity(self, kind: str, oid: str, recorded: str) -> str:
+        """Restart-stable per-instance rewrite of cloned hardware identity."""
+        v = self._ident.get(oid)
+        if v is None:
+            if kind == "ifmac":
+                raw = _parse_hex_value(recorded) or b"\0" * 6
+                low = (int.from_bytes(raw[3:], "big") + self.mac_off) % (1 << 24)
+                v = hex_bytes(raw[:3] + low.to_bytes(3, "big"))
+            elif kind == "svccode":  # base-36 decoding of the mutated tag
+                tag = self.model.dell_svctag
+                v = str(int(_mutate_serial(self.short, tag), 36)) if tag else recorded
+            else:  # serial / svctag
+                v = _mutate_serial(self.short, recorded)
+            self._ident[oid] = v
+        return v
+
     # kinds whose value moves between polls — everything else (incl. sysname/
-    # syslocation and all the recorded static lines) is fixed for an instance
+    # syslocation, the identity slots and all recorded static lines) is fixed
+    # for an instance
     _DYNAMIC_KINDS = frozenset({"uptime", "hrcpu", "apcdate", "ctr32", "ctr64"})
 
     def _slot_value(
         self, seg: tuple[Any, ...], elapsed: float, now: float, sampled: dict[str, int]
     ) -> str:
-        kind, _oid, key, rec = seg
+        kind, oid, key, rec = seg
         if kind == "sysname":
             return self.fqdn
         if kind == "syslocation":
@@ -1046,10 +1173,12 @@ class ReplayDevice(Device):
             return str(max(1, min(97, int(round(v)))))
         if kind == "apcdate":
             return time.strftime("%m/%d/%Y", time.localtime(now - 37 * 86400))
-        # ctr32 / ctr64
+        if kind in ("ifmac", "serial", "svctag", "svccode"):
+            return self._identity(kind, oid, key)
+        # ctr32 / ctr64: cap the composite rate at the port line rate (theme 4)
         if key not in sampled:
             rate = self.model.rates.get(key, 0.0) * self.rate_jit
-            sampled[key] = self._counter(key, rec).sample(rate)
+            sampled[key] = self._counter(key, rec).sample(rate, cap=self.model.caps.get(key))
         return str(sampled[key] % U32 if kind == "ctr32" else sampled[key])
 
     def walk(self, now: float) -> str:
@@ -1323,16 +1452,20 @@ def load_state() -> None:
 WALKS_DIR = ""
 TRANSPORT = "walk"  # set to "snmp" by _main_snmp
 SNMP_PORT: int | None = None
+# render_loop, HTTP toggles and the watchdog all call write_walks(); without the
+# lock two writers would share one .tmp path -> torn files
+_WRITE_LOCK = threading.Lock()
 
 
 def write_walks() -> None:
     now = time.time()
-    for dev in DEVICES:
-        path = os.path.join(WALKS_DIR, dev.fqdn)
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            f.write(dev.walk(now))
-        os.replace(tmp, path)  # atomic: a poll never sees a torn file
+    with _WRITE_LOCK:
+        for dev in DEVICES:
+            path = os.path.join(WALKS_DIR, dev.fqdn)
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                f.write(dev.walk(now))
+            os.replace(tmp, path)  # atomic: a poll never sees a torn file
 
 
 def render_loop() -> None:
@@ -1390,7 +1523,7 @@ DEVICE_EFFECTS: dict[str, dict[str, list[str]]] = {
             "replication), CPU ~70 % — graphs move, nothing red yet"
         ],
         "broken": [
-            "WAN saturates ~940 Mbit/s of 1G",
+            "WAN saturates at the ~850 Mbit/s shaper ceiling of the 1G line",
             "CPU utilization climbs ~93 % -> CRIT (defaults 80/90)",
             "output discards appear on Gi0/1 (graph corroboration)",
         ],
