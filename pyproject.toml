@@ -71,7 +71,10 @@ reportConstantRedefinition = "none"
 # The code runs with these dirs on sys.path (estate.py inserts deploy/, netsim
 # imports snmpserver, fleet/serve imports profiles) — mirror that so imports
 # resolve statically instead of tripping reportMissingImports.
-extraPaths = ["snmp", "deploy", "fleet"]
+# NB: "deploy/piggyback" precedes "fleet" so a bare `import serve` resolves to
+# the delivery shell (deploy/piggyback/serve.py), not fleet/serve.py — both are
+# named serve.py, and only the shell is imported by name (in the tests).
+extraPaths = ["snmp", "deploy", "deploy/piggyback", "fleet"]
 
 [tool.ruff]
 line-length = 100

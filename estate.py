@@ -13,6 +13,8 @@ again with `down`.
     ./estate.py replace --site             # tear down + fresh deploy in one go
     ./estate.py status
     ./estate.py break sw-access-01         # or heal/degrade, any host/device
+    ./estate.py cascade                    # one root cause propagating up the stack
+    ./estate.py cascade status             # what has fired so far;  cascade heal to stop
     ./estate.py down --site
 
 Hosts are sorted into a role-based subfolder tree (Applications, Databases,
@@ -638,6 +640,44 @@ def cmd_toggle(args: argparse.Namespace) -> None:
     print(f"{host} -> {action}")
 
 
+def cmd_cascade(args: argparse.Namespace) -> None:
+    """Drive the cross-host cascade (one root cause propagating up the stack).
+
+    `cascade`        -> arm it (or `cascade start`)
+    `cascade heal`   -> stop it and heal every host it touched
+    `cascade status` -> print the timeline and what has fired so far
+    """
+    action = args.action or "start"
+    if action == "status":
+        st = get_json(PANEL + "/admin/cascade/status")
+        if not st:
+            sys.exit(f"ERROR: cascade status unavailable (shell up? {PANEL}/admin)")
+        state = "COMPLETE" if st["complete"] else ("RUNNING" if st["active"] else "IDLE")
+        elapsed = f" (t+{st['elapsed_s']:.0f}s)" if st["active"] else ""
+        print(
+            f"cascade {state}{elapsed} — {len(st['participants'])} hosts, ~{st['total_s']}s total"
+        )
+        for s in st["steps"]:
+            if s.get("skipped"):
+                mark = "skip"
+            elif s.get("fired"):
+                mark = "done"
+            elif st["active"] and s.get("eta_s") is not None:
+                mark = f"in {max(0, s['eta_s'])}s"
+            else:
+                mark = "pending"
+            print(f"  T+{s['at_s']:>4}s  {s['host']:<16} {s['action']:<8} [{mark}]  {s['why']}")
+        return
+    if action not in ("start", "heal", "stop"):
+        sys.exit(f"ERROR: unknown cascade action {action!r} (start | heal | status)")
+    url = f"{PANEL}/admin/cascade/{'heal' if action in ('heal', 'stop') else 'start'}"
+    try:
+        urllib.request.urlopen(url, timeout=15).read()  # noqa: S310
+    except (urllib.error.URLError, OSError) as exc:
+        sys.exit(f"ERROR: cascade {action} failed: {exc} (shell up? {PANEL}/admin)")
+    print(f"cascade -> {action}   (watch it on {PANEL}/admin)")
+
+
 # --------------------------------------------------------------------------- #
 def add_site_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
@@ -735,6 +775,18 @@ def main() -> None:
         t = sub.add_parser(action, help=f"{action} a host or SNMP device")
         t.add_argument("host")
         t.set_defaults(func=cmd_toggle, action=action)
+
+    casc = sub.add_parser(
+        "cascade", help="drive the cross-host cascade (one root cause up the stack)"
+    )
+    casc.add_argument(
+        "action",
+        nargs="?",
+        choices=("start", "heal", "stop", "status"),
+        default="start",
+        help="start (default) | heal (stop + heal all) | status",
+    )
+    casc.set_defaults(func=cmd_cascade)
 
     args = p.parse_args()
     args.func(args)

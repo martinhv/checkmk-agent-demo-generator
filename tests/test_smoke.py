@@ -5,6 +5,7 @@ tests can grow from here (drop --cov-fail-under into pyproject once they do)."""
 # pyright: reportPrivateUsage=false
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -12,7 +13,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-for _sub in ("snmp", "deploy", "fleet"):
+for _sub in ("snmp", "deploy", "fleet", "deploy/piggyback"):
     sys.path.insert(0, str(REPO / _sub))
 
 
@@ -58,6 +59,39 @@ def test_cmk_setup_imports() -> None:
     import cmk_setup
 
     assert hasattr(cmk_setup, "SCHEMA_VERSION")
+
+
+def test_cross_host_cascade_fires_in_order() -> None:
+    # disable persistence so the test doesn't touch /var/tmp
+    os.environ["CASCADE_STATE_FILE"] = ""
+    import serve  # deploy/piggyback/serve.py (the delivery shell)
+
+    casc = serve.Cascade()
+    # the story's participants (carried hosts) — db-postgres-01 is the root cause
+    assert "db-postgres-01" in casc.participants
+    assert casc.steps and casc.steps[0].host == "db-postgres-01"
+    # delays are non-decreasing (a timeline, not a jumble)
+    delays = [s.delay_s for s in casc.steps]
+    assert delays == sorted(delays)
+
+    # idle before trigger
+    assert casc.status()["active"] is False
+
+    # arm it, force the clock forward, and tick once: every step becomes due and
+    # fires (toggles fail fast against unbound child ports — the ORDERING and
+    # bookkeeping are what we assert here, not the child side effects)
+    casc.start()
+    assert casc.started_at is not None
+    casc.started_at -= 10_000  # pretend the whole timeline elapsed
+    casc._tick()  # pyright: ignore[reportPrivateUsage]
+    st = casc.status()
+    assert st["active"] is True
+    assert all(s["fired"] for s in st["steps"] if not s.get("skipped"))
+    assert st["complete"] is True
+
+    # heal clears the run
+    casc.heal()
+    assert casc.status()["active"] is False
 
 
 @pytest.mark.parametrize("script", ["estate.py", "snmp/netsim.py"])

@@ -414,6 +414,285 @@ _BY_NAME = {c.name: c for c in CHILDREN}
 
 
 # --------------------------------------------------------------------------- #
+#  Cross-host cascade: ONE trigger, a dependency-ordered chain of incidents
+# --------------------------------------------------------------------------- #
+# A single failure rarely stays on one host — it propagates *up the dependency
+# stack*. This orchestrates exactly that from one button: a scripted timeline
+# that flips each host's OWN break/degrade toggle at the right moment, so the
+# estate lights up in a realistic causal order instead of all at once. Every
+# host keeps its own incident logic (values, persistence, auto-escalation);
+# the cascade only decides *when* to pull each host's existing lever.
+#
+# The story (Meridian's payments platform brownout) — ONE root cause, the
+# dying SATA SSD in the primary DB, everything downstream a *symptom*:
+#
+#   T+0   db-postgres-01 degrade  read-retry/ECC storms begin — intermittent
+#                                  latency spikes; SMART still PASSED. The quiet
+#                                  breadcrumb (root cause, fires first).
+#   T+2   db-postgres-02 degrade  the standby's replication lag grows as the
+#                                  primary's I/O stalls (replays from a struggling primary).
+#   T+3   app-worker-01  degrade  settlement commits to the primary slow down;
+#                                  the job queue backs up, JVM heap starts filling.
+#   T+5   db-postgres-01 break    primary disk fully fails-slow: iowait pegged,
+#                                  query-latency cliff — the storage collapse.
+#   T+6   payment-api    break    DB writes time out -> the payment API returns
+#                                  errors: the customer-facing symptom (the page).
+#   T+7   app-worker-01  break    buffered jobs overflow the heap -> OOM-killed,
+#                                  order-worker.service flaps.
+#
+# The demo point: by showtime the AI faces a wall of red across five services
+# on four hosts, and must trace it back to the ONE disk that started 7 min
+# earlier — cross-signal fusion (disk latency + iowait + replication lag +
+# heap/OOM + payment errors), not "whatever went red first".
+#
+# app-redis-01 and the web frontend stay GREEN on purpose (low noise, one
+# root cause): the cache and edge tier corroborate by NOT failing.
+#
+# Timing: delays are seconds from the trigger, scaled by CASCADE_TIME_SCALE
+# (default 1.0 = the ~7-min real timeline; e.g. 0.1 compresses it to ~45 s for
+# testing / a short stage slot). Steps whose host isn't in this estate
+# selection (ESTATE_HOSTS) or whose action the host doesn't expose are skipped.
+CASCADE_TIME_SCALE = float(os.environ.get("CASCADE_TIME_SCALE", "1.0") or "1.0")
+CASCADE_STATE_FILE = os.environ.get("CASCADE_STATE_FILE", "/var/tmp/cmk-demo-cascade-state.json")
+
+
+@dataclass(slots=True)
+class CascadeStep:
+    delay_s: float  # seconds after trigger (before CASCADE_TIME_SCALE)
+    host: str  # short name (must be a carried host)
+    action: str  # the host's own toggle: degrade | break | heal
+    why: str  # one-line storyline note (shown on the panel)
+
+
+CASCADE_STEPS: list[CascadeStep] = [
+    CascadeStep(
+        0,
+        "db-postgres-01",
+        "degrade",
+        "SATA SSD read-retry/ECC storms begin — "
+        "intermittent latency spikes, SMART still PASSED (root cause, quiet)",
+    ),
+    CascadeStep(
+        120,
+        "db-postgres-02",
+        "degrade",
+        "standby replication lag grows as the primary's I/O stalls",
+    ),
+    CascadeStep(
+        180,
+        "app-worker-01",
+        "degrade",
+        "settlement commits to the primary slow down; job queue backs up, JVM heap starts filling",
+    ),
+    CascadeStep(
+        300,
+        "db-postgres-01",
+        "break",
+        "primary disk fully fails-slow: iowait pegged, query-latency cliff — the storage collapse",
+    ),
+    CascadeStep(
+        360,
+        "payment-api",
+        "break",
+        "DB writes time out -> payment API returns errors — the customer-facing symptom",
+    ),
+    CascadeStep(
+        420,
+        "app-worker-01",
+        "break",
+        "buffered jobs overflow the heap -> OOM-killed, order-worker.service flaps",
+    ),
+]
+
+
+class Cascade:
+    """Scheduler for the cross-host cascade.
+
+    One always-running daemon loop watches the clock; `start()` arms it and each
+    step fires (its host's toggle) once `elapsed >= delay_s * CASCADE_TIME_SCALE`.
+    `heal()` stops the run and heals every participating host. State (armed +
+    trigger time + which steps fired) is persisted so a shell restart mid-cascade
+    resumes the timeline instead of resetting it — re-firing a toggle is
+    idempotent (the child is already in / moves to the target state), and the
+    children persist their own incident state independently.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.active = False
+        self.started_at: float | None = None
+        self.fired: dict[str, float] = {}  # step key -> wall-clock fired_at
+        self._complete_logged = False
+        # steps that actually apply to this estate selection (host carried +
+        # action exposed by that host); others are shown as "skipped".
+        self.steps: list[CascadeStep] = []
+        self.skipped: list[CascadeStep] = []
+        for s in CASCADE_STEPS:
+            child = _BY_NAME.get(s.host)
+            if child is not None and (not child.actions or s.action in child.actions):
+                self.steps.append(s)
+            else:
+                self.skipped.append(s)
+
+    @staticmethod
+    def _key(i: int, s: CascadeStep) -> str:
+        return f"{i}:{s.host}:{s.action}"
+
+    @property
+    def participants(self) -> list[str]:
+        """Distinct carried hosts the cascade touches (for heal / display)."""
+        seen: dict[str, None] = {}
+        for s in self.steps:
+            seen.setdefault(s.host, None)
+        return list(seen)
+
+    def scaled_delay(self, s: CascadeStep) -> float:
+        return s.delay_s * CASCADE_TIME_SCALE
+
+    def start(self) -> None:
+        with self._lock:
+            self.active = True
+            self.started_at = time.time()
+            self.fired = {}
+            self._complete_logged = False
+        print(
+            f"[cascade] armed — {len(self.steps)} steps over "
+            f"{self.scaled_delay(self.steps[-1]) if self.steps else 0:.0f}s "
+            f"(scale {CASCADE_TIME_SCALE:g})"
+        )
+        self._save()
+
+    def heal(self) -> None:
+        with self._lock:
+            self.active = False
+            self.started_at = None
+            self.fired = {}
+            self._complete_logged = False
+        for host in self.participants:
+            child = _BY_NAME.get(host)
+            if child is not None:
+                ok = child.toggle("heal")
+                print(f"[cascade] heal {host} ({'ok' if ok else 'FAILED'})")
+        self._save()
+
+    def _fire(self, key: str, s: CascadeStep) -> None:
+        child = _BY_NAME.get(s.host)
+        ok = child.toggle(s.action) if child is not None else False
+        with self._lock:
+            self.fired[key] = time.time()
+        print(f"[cascade] fire {s.host} -> {s.action} ({'ok' if ok else 'FAILED'})")
+        self._save()
+
+    def _tick(self) -> None:
+        """Fire every due-but-unfired step. Called by the loop and safe to call
+        repeatedly; on restart it catches up any steps whose time already passed."""
+        with self._lock:
+            if not self.active or self.started_at is None:
+                return
+            elapsed = time.time() - self.started_at
+            due = [
+                (self._key(i, s), s)
+                for i, s in enumerate(self.steps)
+                if self._key(i, s) not in self.fired and elapsed >= self.scaled_delay(s)
+            ]
+        for key, s in due:
+            self._fire(key, s)
+        with self._lock:
+            done = self.active and self.steps and len(self.fired) >= len(self.steps)
+            if done and not self._complete_logged:
+                self._complete_logged = True
+                print("[cascade] complete — all steps fired")
+
+    def _loop(self) -> None:
+        while True:
+            time.sleep(3)
+            try:
+                self._tick()
+            except Exception as exc:  # noqa: BLE001 — never let the loop die
+                print(f"[cascade] tick error: {exc}")
+
+    def start_scheduler(self) -> None:
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    # --- status + persistence ------------------------------------------------ #
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            active = self.active
+            started_at = self.started_at
+            fired = dict(self.fired)
+        elapsed = (time.time() - started_at) if (active and started_at) else 0.0
+        steps: list[dict[str, Any]] = []
+        for i, s in enumerate(self.steps):
+            key = self._key(i, s)
+            at = self.scaled_delay(s)
+            steps.append(
+                {
+                    "at_s": round(at),
+                    "host": s.host,
+                    "action": s.action,
+                    "why": s.why,
+                    "fired": key in fired,
+                    "eta_s": None if key in fired else (round(at - elapsed) if active else None),
+                }
+            )
+        for s in self.skipped:
+            steps.append(
+                {
+                    "at_s": round(self.scaled_delay(s)),
+                    "host": s.host,
+                    "action": s.action,
+                    "why": s.why,
+                    "skipped": True,
+                }
+            )
+        done = active and self.steps and len(fired) >= len(self.steps)
+        return {
+            "active": active,
+            "complete": bool(done),
+            "elapsed_s": round(elapsed, 1),
+            "time_scale": CASCADE_TIME_SCALE,
+            "total_s": round(self.scaled_delay(self.steps[-1])) if self.steps else 0,
+            "participants": self.participants,
+            "steps": steps,
+        }
+
+    def _save(self) -> None:
+        if not CASCADE_STATE_FILE:
+            return
+        with self._lock:
+            data = {"active": self.active, "started_at": self.started_at, "fired": self.fired}
+        try:
+            tmp = CASCADE_STATE_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp, CASCADE_STATE_FILE)
+        except OSError as exc:
+            print(f"[cascade] save failed: {exc}")
+
+    def load(self) -> None:
+        if not CASCADE_STATE_FILE or not os.path.exists(CASCADE_STATE_FILE):
+            return
+        try:
+            with open(CASCADE_STATE_FILE) as f:
+                data = json.load(f)
+        except (OSError, ValueError) as exc:
+            print(f"[cascade] load failed ({exc}) — starting idle")
+            return
+        with self._lock:
+            self.active = bool(data.get("active"))
+            self.started_at = data.get("started_at")
+            self.fired = dict(data.get("fired") or {})
+        if self.active:
+            print(
+                f"[cascade] resumed — armed since t+{time.time() - (self.started_at or 0):.0f}s, "
+                f"{len(self.fired)}/{len(self.steps)} steps already fired"
+            )
+
+
+CASCADE = Cascade()
+
+
+# --------------------------------------------------------------------------- #
 #  Delivery agent output: minimal own section + piggyback blocks
 # --------------------------------------------------------------------------- #
 def _delivery_minimal() -> str:
@@ -636,6 +915,90 @@ def _host_info_page(child: Child | FleetHost) -> str:
 </body></html>"""
 
 
+def _cascade_section() -> str:
+    """The one-button cross-host cascade: status badge + the causal timeline +
+    trigger / heal-all controls. Rendered at the top of the estate overview so
+    the whole story can be driven from a single control."""
+    st = CASCADE.status()
+    if st["complete"]:
+        badge_c, badge_t = "#c62828", "COMPLETE"
+    elif st["active"]:
+        badge_c, badge_t = "#f9a825", f"RUNNING · t+{_fmt_duration(st['elapsed_s'])}"
+    else:
+        badge_c, badge_t = "#3a4350", "IDLE"
+
+    items: list[str] = []
+    for s in st["steps"]:
+        at = _fmt_duration(s["at_s"])
+        if s.get("skipped"):
+            mark, cls, note = "&#8856;", "skip", " — not in this estate selection"
+        elif s.get("fired"):
+            mark, cls, note = "&#10003;", "done", ""
+        elif st["active"]:
+            eta = s.get("eta_s")
+            mark, cls = "&#9203;", "pend"
+            note = f" — in {_fmt_duration(max(0, eta))}" if eta is not None else ""
+        else:
+            mark, cls, note = "&#9675;", "idle", ""
+        items.append(
+            f"<li class='cs {cls}'><span class='m'>{mark}</span>"
+            f"<span class='at'>T+{at}</span> "
+            f"<b>{s['host']}</b> <span class='act'>{s['action']}</span>"
+            f"<span class='why'>{s['why']}{note}</span></li>"
+        )
+
+    if st["active"]:
+        controls = (
+            "<a class='cbtn heal' href='/admin/cascade/heal'>&#9632; stop &amp; heal all</a>"
+            "<a class='cbtn again' href='/admin/cascade/start'>&#8635; restart</a>"
+        )
+    else:
+        controls = "<a class='cbtn go' href='/admin/cascade/start'>&#9654; trigger cascade</a>"
+
+    scale = st["time_scale"]
+    scale_note = "" if scale == 1.0 else f" · time&times;{scale:g}"
+    return f"""
+ <div class="casc">
+  <div class="chead">
+   <div>
+    <h2>cross-host cascade <span class="cbadge" style="background:{badge_c}">{badge_t}</span></h2>
+    <p class="csub">payments-platform brownout — one root cause (dying disk on
+     <b>db-postgres-01</b>) propagating up the stack over
+     ~{_fmt_duration(st["total_s"])}{scale_note}. The frontend &amp; cache stay
+     green (low noise, one root cause).</p>
+   </div>
+   <div class="cctl">{controls}</div>
+  </div>
+  <ul class="clist">{"".join(items)}</ul>
+ </div>
+ <style>
+  .casc {{ border:1px solid #33404d; border-radius:.6rem; background:#20262d;
+          padding:1rem 1.2rem; margin:1rem 0 1.6rem; }}
+  .chead {{ display:flex; justify-content:space-between; align-items:flex-start;
+           gap:1rem; flex-wrap:wrap; }}
+  .casc h2 {{ margin:.1rem 0 .3rem; font-size:1.1rem; color:#d8dee4; }}
+  .cbadge {{ font-size:.72rem; font-weight:700; letter-spacing:.05em; color:#fff;
+            padding:.12rem .55rem; border-radius:.3rem; vertical-align:.12em; }}
+  .csub {{ color:#9aa4af; margin:.2rem 0 0; max-width:44rem; font-size:.9rem; }}
+  .cctl {{ display:flex; gap:.4rem; flex-wrap:wrap; }}
+  .cbtn {{ display:inline-block; padding:.5rem 1rem; border-radius:.4rem; color:#fff;
+          text-decoration:none; font-weight:600; font-size:.9rem; white-space:nowrap; }}
+  .cbtn.go {{ background:#c62828; }} .cbtn.heal {{ background:#2e7d32; }}
+  .cbtn.again, .cbtn.stop {{ background:#3a4350; }}
+  .clist {{ list-style:none; margin:1rem 0 0; padding:0; }}
+  .cs {{ display:flex; align-items:baseline; gap:.5rem; padding:.28rem 0;
+        border-top:1px solid #2a2e34; font-size:.9rem; }}
+  .cs .m {{ width:1.2rem; text-align:center; }}
+  .cs .at {{ color:#7f8b97; font-variant-numeric:tabular-nums; min-width:3.6rem; }}
+  .cs .act {{ color:#9aa4af; font-size:.82rem; padding:.02rem .4rem; border:1px solid #3a4350;
+             border-radius:.25rem; margin-left:.1rem; }}
+  .cs .why {{ color:#7f8b97; flex:1 1 100%; margin-left:1.7rem; font-size:.82rem; }}
+  .cs.done {{ color:#e07a7a; }} .cs.done .m {{ color:#c62828; }}
+  .cs.pend {{ color:#d8dee4; }} .cs.pend .m {{ color:#f9a825; }}
+  .cs.idle {{ color:#9aa4af; }} .cs.skip {{ opacity:.45; }}
+ </style>"""
+
+
 def _overview_page() -> str:
     rows: list[str] = []
     colors = {"healthy": "#2e7d32", "degraded": "#f9a825", "broken": "#c62828", None: "#666"}
@@ -681,6 +1044,7 @@ def _overview_page() -> str:
  <p class="sub">{len(CHILDREN)} hosts carried. This shell emits only a
   minimal agent section; everyone below arrives as piggyback blocks or
   per-host datasource files.</p>
+ {_cascade_section() if CASCADE.steps else ""}
  <table>{"".join(rows)}</table>
  {_fleet_section(fleet)}
  <div class="foot">curl: /admin/&lt;host&gt;/&lt;degrade|break|heal&gt; · / (JSON status).
@@ -740,6 +1104,22 @@ class HttpHandler(BaseHTTPRequestHandler):
         path = path.rstrip("/") or "/"
         if path == "/admin":
             return self._send_html(_overview_page())
+        if path == "/admin/cascade" or path.startswith("/admin/cascade/"):
+            sub = path[len("/admin/cascade") :].lstrip("/")
+            if sub == "status":
+                return self._send(200, CASCADE.status())
+            if sub in ("", "start", "trigger"):
+                CASCADE.start()
+                print("[ctl] cascade -> START")
+            elif sub in ("heal", "stop"):
+                CASCADE.heal()
+                print("[ctl] cascade -> HEAL")
+            else:
+                return self._send(404, {"error": f"unknown cascade action {sub!r}"})
+            self.send_response(303)
+            self.send_header("Location", "/admin")
+            self.end_headers()
+            return None
         if path.startswith("/admin/"):
             parts = path[len("/admin/") :].split("/")
             if len(parts) == 2 and parts[0] in _BY_NAME:
@@ -770,6 +1150,7 @@ class HttpHandler(BaseHTTPRequestHandler):
                     }
                     for c in CHILDREN
                 ],
+                "cascade": CASCADE.status(),
                 "ui": "/admin",
             },
         )
@@ -807,6 +1188,16 @@ def main() -> None:
             print(
                 f"[boot] fleet: carrying {len(fleet_hosts)} steady-green "
                 f"bulk hosts (total {len(CHILDREN)})"
+            )
+
+        # arm the cross-host cascade scheduler (resumes a mid-run cascade if the
+        # shell was restarted while one was armed)
+        CASCADE.load()
+        CASCADE.start_scheduler()
+        if CASCADE.skipped:
+            print(
+                f"[cascade] {len(CASCADE.steps)} steps active, "
+                f"{len(CASCADE.skipped)} skipped (host not in this selection)"
             )
 
         agent = AgentServer(("0.0.0.0", AGENT_PORT), AgentHandler)  # nosec B104
