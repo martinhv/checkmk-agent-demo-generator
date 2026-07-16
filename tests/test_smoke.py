@@ -61,6 +61,28 @@ def test_cmk_setup_imports() -> None:
     assert hasattr(cmk_setup, "SCHEMA_VERSION")
 
 
+def test_estate_sample_config_loads() -> None:
+    # the shipped sample must parse and map to real `up` argparse dests
+    sys.path.insert(0, str(REPO))
+    import estate
+
+    overrides, env = estate.load_config(str(REPO / "estate.sample.toml"))
+    assert set(overrides) <= estate.CONFIG_KEYS
+    assert overrides["site"] == "auto"  # `site = true` -> newest dev site
+    assert overrides["mode"] == "self-hosted"
+    assert isinstance(env, dict)  # [env] table (commented out -> empty)
+
+
+def test_estate_config_rejects_unknown_key(tmp_path: Path) -> None:
+    sys.path.insert(0, str(REPO))
+    import estate
+
+    bad = tmp_path / "bad.toml"
+    bad.write_text('scale = "full"\nscail = "typo"\n')
+    with pytest.raises(SystemExit):
+        estate.load_config(str(bad))
+
+
 def test_cross_host_cascade_fires_in_order() -> None:
     # disable persistence so the test doesn't touch /var/tmp
     os.environ["CASCADE_STATE_FILE"] = ""

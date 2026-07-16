@@ -10,6 +10,7 @@ again with `down`.
     ./estate.py up --site v300 --scale minimal
     ./estate.py up --site --scale standard --replicas 5   # ~50-host estate
     ./estate.py up --site-url ... --mode cloud            # Checkmk Cloud (SaaS)
+    ./estate.py up --config estate.toml    # options from a file (see estate.sample.toml)
     ./estate.py replace --site             # tear down + fresh deploy in one go
     ./estate.py status
     ./estate.py break sw-access-01         # or heal/degrade, any host/device
@@ -80,6 +81,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from typing import Any, TypedDict, cast
@@ -680,6 +682,61 @@ def cmd_cascade(args: argparse.Namespace) -> None:
 
 
 # --------------------------------------------------------------------------- #
+#  Config file (--config estate.toml): supply the `up`/`replace` options from a
+#  TOML file instead of flags. Precedence is CLI flag > config file > built-in
+#  default (achieved by folding the config into the subparser's defaults before
+#  the real parse). See estate.sample.toml for every key.
+# --------------------------------------------------------------------------- #
+# keys accepted in the config = the `up` argparse dests (mirrors add_up_args +
+# add_site_args); `no-snmp`/`no-checkmk`/`site-url`/`force-foreign` use the
+# underscore dest form (no_snmp, ...).
+CONFIG_KEYS = {
+    "mode",
+    "scale",
+    "replicas",
+    "runtime",
+    "no_snmp",
+    "force",
+    "site",
+    "site_url",
+    "user",
+    "secret",
+    "force_foreign",
+    "no_checkmk",
+}
+
+
+def load_config(path: str) -> tuple[dict[str, Any], dict[str, str]]:
+    """Parse the TOML config into (argparse-overrides, extra-env). Unknown keys
+    are a hard error so a typo never silently does nothing."""
+    try:
+        with open(path, "rb") as f:
+            data: dict[str, Any] = tomllib.load(f)
+    except FileNotFoundError:
+        sys.exit(f"ERROR: config file not found: {path}")
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        sys.exit(f"ERROR: cannot read config {path}: {exc}")
+
+    env_raw: Any = data.pop("env", {})
+    if not isinstance(env_raw, dict):
+        sys.exit('ERROR: [env] in the config must be a table of KEY = "value" pairs')
+    env = cast("dict[str, Any]", env_raw)
+
+    overrides: dict[str, Any] = {}
+    for key, val in data.items():
+        norm = key.replace("-", "_")
+        if norm not in CONFIG_KEYS:
+            sys.exit(
+                f"ERROR: unknown config key {key!r} — valid keys: "
+                f"{', '.join(sorted(CONFIG_KEYS))} (+ an [env] table)"
+            )
+        # `site = true` means "--site with no name" (newest dev site = "auto");
+        # `site = "v300"` names a specific site.
+        overrides[norm] = "auto" if (norm == "site" and val is True) else val
+    return overrides, {str(k): str(v) for k, v in env.items()}
+
+
+# --------------------------------------------------------------------------- #
 def add_site_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--site",
@@ -752,6 +809,12 @@ def main() -> None:
             "(re-run discovery + activation); by default an "
             "unchanged re-run short-circuits in ~1s",
         )
+        parser.add_argument(
+            "--config",
+            metavar="FILE",
+            help="read these options from a TOML config file (any CLI flag "
+            "overrides it); see estate.sample.toml for all keys",
+        )
         add_site_args(parser)
 
     up = sub.add_parser("up", help="start simulators + configure Checkmk")
@@ -788,6 +851,17 @@ def main() -> None:
         help="start (default) | heal (stop + heal all) | status",
     )
     casc.set_defaults(func=cmd_cascade)
+
+    # --config: fold the file's values into the up/replace subparser defaults
+    # BEFORE the real parse, so an explicit CLI flag still wins over the file.
+    pre, _ = p.parse_known_args()
+    if getattr(pre, "config", None):
+        overrides, env = load_config(pre.config)
+        if env:
+            os.environ.update(env)  # inherited by the shell + host simulators
+            print(f"config: exported {len(env)} env var(s) from {pre.config}")
+        (up if pre.cmd == "up" else replace).set_defaults(**overrides)
+        print(f"config: loaded {len(overrides)} option(s) from {pre.config}")
 
     args = p.parse_args()
     args.func(args)

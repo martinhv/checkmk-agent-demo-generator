@@ -29,9 +29,16 @@ time); `down` removes all of it.
 ./estate.py up --site --scale standard         # 10 agent hosts, no SNMP
 ./estate.py up --site --replicas 5             # ~50-host estate, same stories
 ./estate.py up --site-url http://host/prod --user automation --secret ...
+./estate.py up --config estate.toml            # all options from a file (estate.sample.toml)
 ./estate.py status                             # what runs, who's broken
 ./estate.py degrade rt-wan-01                  # stage incidents from the CLI
 ```
+
+A `--site`/`--config` target that names a **local dev site which exists but is
+stopped** is started automatically (`omd start <name>`; falls back to `sudo` if
+needed). `--config FILE` reads any `up`/`replace` option from a TOML file (a CLI
+flag still overrides it) and can export extra simulator env (cascade/incident
+timing) — copy **`estate.sample.toml`**, which documents every key.
 
 | `--scale` | what you get |
 |---|---|

@@ -1,0 +1,70 @@
+# estate.sample.toml — configuration for `./estate.py up --config <file>`
+#
+# Copy this file, delete the keys you don't need, and run:
+#     ./estate.py up --config estate.toml
+#     ./estate.py replace --config estate.toml     # (works for replace too)
+#
+# Every key below is OPTIONAL and mirrors an `up` command-line flag. Precedence
+# is: an explicit CLI flag  >  this file  >  the built-in default. So the file
+# sets your defaults and you can still override one-off on the command line
+# (e.g. `./estate.py up --config estate.toml --scale minimal`).
+
+# --- Which Checkmk site to target — choose EITHER `site` OR `site_url` --------
+
+# Local dev site (cmk-dev-site / cmk-dev-install-site conventions:
+# http://localhost/<name>, user cmkadmin / password cmk). If the chosen site
+# EXISTS but is stopped, estate.py starts it automatically (omd start <name>).
+#   site = "v300"     # a specific site name
+#   site = true       # newest local v* dev site (= `--site` with no NAME)
+site = true
+
+# ...OR a remote / non-dev site by URL (mutually exclusive with `site`).
+# Uncomment these and comment out `site` above to use them:
+# site_url = "http://monitoring.example.com/prod"
+# user     = "automation"     # site user with Setup write access
+# secret   = "s3cr3t"         # automation secret
+#                             # (else $CMK_AUTOMATION_SECRET, else prompt)
+
+# --- What to deploy -----------------------------------------------------------
+
+# self-hosted = full site-filesystem access (SNMP layer + datasource delivery);
+# cloud       = Checkmk Cloud/SaaS, piggyback agent data only, SNMP layer off.
+mode = "self-hosted"
+
+# How much estate to bring up:
+#   minimal   payment-api + db-postgres-01 only, no network layer
+#   standard  the full 10-host agent estate + BI pack, no network layer
+#   full      standard + the SNMP network layer (switches, WAN router, UPS)
+#   company   the researched ~300-host estate (fleet + ~110 SNMP devices)
+scale = "full"
+
+# Stamp out every replicable host class N times (web-frontend-02, ...); the
+# replicas run steady-green, incidents stay unique to the originals.
+replicas = 1
+
+# How to run the delivery shell: "docker" | "podman" | "native"
+# (native = a plain background process, no container engine).
+runtime = "docker"
+
+# Skip the SNMP layer even at scale = "full" / "company".
+no_snmp = false
+
+# Reconfigure Checkmk even if nothing changed (re-run discovery + activation).
+# By default an unchanged re-run short-circuits in ~1 s.
+force = false
+
+# Activate even when OTHER users have pending changes on the site.
+force_foreign = false
+
+# Only start/stop the simulators; skip all Checkmk site setup entirely.
+no_checkmk = false
+
+# --- Extra environment for the simulators (optional) --------------------------
+# Every key in this table is exported into the environment that the delivery
+# shell and the per-host simulators inherit — handy for incident timing and the
+# cross-host cascade. Values are strings.
+[env]
+# CASCADE_TIME_SCALE  = "0.1"   # compress the cross-host cascade to ~45 s
+# AUTO_BREAK_AFTER_MIN = "20"   # per-host degraded -> broken auto-escalation (min)
+# LEAK_FILL_MIN        = "18"   # app-worker heap-leak fill time (min)
+# ESTATE_DOMAIN        = "corp.meridian-retail.com"   # DNS domain -> host FQDNs
