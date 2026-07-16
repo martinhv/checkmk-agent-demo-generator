@@ -1,10 +1,19 @@
-# Piggyback delivery — the whole estate behind one "shell" host
+# Delivery shell — the whole estate behind one "shell" host
 
 An **optional** alternative to adding every Meridian Retail host in Checkmk as
-its own TCP host. Run *this* one host and the entire estate shows up as
-**piggyback hosts** hanging off it. The delivery host itself carries only a
-**minimal agent section** — it's just the shell that delivers everyone else's
-data.
+its own TCP host. Run *this* one shell and it delivers the entire estate's agent
+data to Checkmk. The shell itself carries only a **minimal agent section** —
+it's just the carrier for everyone else's data.
+
+The shell delivers in one of two modes (`DELIVERY_MODE`):
+
+- **datasource** (the default `estate.py` uses on a self-hosted site) — each
+  host's agent output is written to a file that Checkmk reads per host via a
+  `cat $HOSTNAME$` datasource program. Scales best, needs filesystem access.
+- **piggyback** (for Checkmk Cloud/SaaS, no site filesystem) — the estate shows
+  up as **piggyback hosts** hanging off the shell. This README walks through the
+  piggyback path in detail; the datasource wiring is covered in
+  `../../CLAUDE.md` and handled automatically by `../cmk_setup.py`.
 
 ## Quick start
 
@@ -13,7 +22,7 @@ On a Checkmk dev box, from zero to the fully monitored estate:
 ```bash
 cmk-dev-install-site              # install today's build + create the v* site
 ../../estate.py up --site         # or by hand:
-cd deploy/piggyback
+cd deploy/delivery
 docker compose up --build -d      # start the estate container
 ../cmk_setup.py --site            # set up the site (newest running v* dev site)
 ```
@@ -59,7 +68,7 @@ source of truth.
 ## 1. Run it
 
 ```bash
-cd deploy/piggyback
+cd deploy/delivery
 docker compose up --build -d      # one container runs the shell + all children
 docker compose logs -f            # watch [pb] spawn lines
 ```
@@ -72,7 +81,7 @@ No Docker? Stdlib-only — run it from the repo root checkout (it finds the host
 dirs relative to itself):
 
 ```bash
-AGENT_PORT=6559 HTTP_PORT=8099 python3 deploy/piggyback/serve.py
+AGENT_PORT=6559 HTTP_PORT=8099 python3 deploy/delivery/serve.py
 ```
 
 Sanity check (the delivery output should start with the shell's own section,

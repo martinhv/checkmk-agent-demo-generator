@@ -411,7 +411,7 @@ def panel_get(panel: str, path: str = "/", *, optional: bool = False) -> dict[st
         die(
             f"cannot reach the delivery control panel at {panel}: {err}\n"
             "       Is the estate running?  ./estate.py up  (or: cd "
-            "deploy/piggyback && docker compose up --build -d)"
+            "deploy/delivery && docker compose up --build -d)"
         )
 
 

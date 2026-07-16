@@ -50,7 +50,7 @@ control panels: **:8099/admin** (servers), **:8101/admin** (network).
 | Dir | What |
 |---|---|
 | `estate.py` | the CLI — orchestrates everything below |
-| `deploy/` | deployment machinery: `cmk_setup.py` (REST-API site setup/teardown engine, also usable standalone) and `piggyback/` (ONE container that runs every agent host and delivers them as piggyback — agent :6559) |
+| `deploy/` | deployment machinery: `cmk_setup.py` (REST-API site setup/teardown engine, also usable standalone) and `delivery/` (ONE container that runs every agent host and delivers them to Checkmk — datasource files by default, or piggyback for cloud — agent :6559) |
 | `hosts/` | the agent-based simulators, one dir per host (`serve.py` + Dockerfile + README with the demo choreography) — each still runs standalone via its own `docker compose` |
 | `fleet/` | the company-scale server bulk: `profiles.py` (declarative roster, ~170 Linux/Windows hosts on 12 KVM hypervisors) + `serve.py` (ONE process synthesizing every agent output) |
 | `snmp/` | the SNMP simulator: `netsim.py` answers SNMP v2c **live** on one UDP port (127.0.0.1:1161), routing to a device by its unique community (stdlib responder `snmpserver.py`, no sudo, no stored-walk files); real if64/cisco/apc plugins, live graphs. `walklib/` holds ~24 anonymized real device walks (made by `curate_walks.py`) that netsim replays as ~110 estate devices |
@@ -86,7 +86,7 @@ Everything `estate.py` does decomposes into parts you can run alone:
 ```bash
 cd hosts/app-worker-01 && docker compose up --build -d   # one host, own TCP port
 nc 127.0.0.1 6562 | head                                 # its agent stream
-cd deploy/piggyback && docker compose up --build -d      # the whole estate, one container
+cd deploy/delivery && docker compose up --build -d      # the whole estate, one container
 ../cmk_setup.py --site                                   # site setup only
 python3 snmp/netsim.py --walks-dir /tmp/walks --once     # eyeball SNMP walks
 ```

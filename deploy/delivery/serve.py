@@ -1,41 +1,38 @@
 #!/usr/bin/env python3
-"""Meridian Retail demo: piggyback delivery host (the "shell").
+"""Meridian Retail demo: the estate delivery shell.
 
-An *optional* alternative to adding every estate host in Checkmk as its own
-TCP host: run THIS one host, and the whole estate shows up as **piggyback
-hosts** hanging off it. The delivery host itself carries only a minimal agent
-section — it's just the shell that carries everyone else's data.
-
-How it works
-------------
-Checkmk piggyback: any sections a host's agent wraps in `<<<<other-host>>>>`
-... `<<<<>>>>` markers are attributed by the site to *other-host*, not to the
-delivering host (the empty `<<<<>>>>` switches back). So this script:
-
-  1. spawns each estate host's own, unmodified `serve.py` as a child process on
-     an internal 127.0.0.1 port (reusing 100 % of the existing demos — including
-     their break/heal toggles and restart persistence);
-  2. on every agent poll, emits the delivery host's own minimal `<<<check_mk>>>`
-     (+ controller status, so its Check_MK Agent service is OK and TLS-clean),
-     then fetches each child's full agent output and re-frames it as
-     `<<<<hostname>>>>` ... `<<<<>>>>` piggyback blocks.
-
-In Checkmk you then add ONE TCP host (this delivery shell) plus the estate
-hosts as **piggyback** hosts (no agent connection, no per-host port override).
+Instead of adding every estate host in Checkmk as its own TCP host, run THIS
+one shell: it spawns each estate host's own, unmodified `serve.py` as a child
+process on an internal 127.0.0.1 port (reusing 100 % of the existing demos —
+including their break/heal toggles and restart persistence) and delivers all of
+their agent output to Checkmk. The shell itself carries only a minimal agent
+section — it's just the carrier for everyone else's data.
 
 It also serves a single combined `/admin` control panel that proxies the
-break/heal toggles to the right child — one screen to drive the whole estate.
+break/heal toggles to the right child — one screen to drive the whole estate,
+plus the one-button cross-host cascade (see Cascade below).
+
+Two delivery modes (DELIVERY_MODE):
+
+  datasource  each child's agent output is written to a file (AGENT_OUTPUT_DIR)
+              and Checkmk reads it per host via a `cat $FILENAME$` datasource
+              program ("Individual program call instead of agent access"). This
+              is what estate.py uses for a self-hosted site — it scales better
+              (no single-shell fetch bottleneck, no piggyback dependency) but
+              needs filesystem access. The shell then emits ONLY its own section.
+  piggyback   the shell's own agent embeds every child as a `<<<<host>>>>` ...
+              `<<<<>>>>` block: Checkmk piggyback attributes those sections to
+              *host*, not to the delivering shell (the empty `<<<<>>>>` switches
+              back). Checkmk polls only the shell (ONE TCP host) and the estate
+              hosts are added as **piggyback** hosts (no agent connection). Used
+              for Checkmk Cloud/SaaS, where there is no site filesystem.
+
+See deploy/cmk_setup.py for the matching site setup.
 
 Plaintext TCP, stdlib only. Select a subset with ESTATE_HOSTS (comma list);
 default = all. Scale UP with ESTATE_REPLICAS=N: every replicable host class
 is stamped out N times (web-frontend-01, -02, ... -0N) — the original keeps
 its incident toggles, the replicas run steady green as estate background.
-
-Delivery mode (DELIVERY_MODE): `piggyback` (default, as above) or `datasource`
-— the latter writes each host's agent output to a file (AGENT_OUTPUT_DIR) and
-Checkmk reads it per host via a `cat $FILENAME$` datasource program instead of
-piggyback. Better scaling (no single-shell fetch bottleneck), self-hosted only
-(needs filesystem access). See deploy/cmk_setup.py for the matching site setup.
 
 Config via env:
   DELIVERY_HOSTNAME  name of the shell host        (default: cmk-demo-gateway)
@@ -910,7 +907,7 @@ def _host_info_page(child: Child | FleetHost) -> str:
  <div class="since">in this state for <b>{since}</b> — {cur_meta.get("tagline", "")}</div>
  <div class="cards">{"".join(cards)}</div>
  <div class="foot">Each card is a target state and the Checkmk services that change when you
-  switch to it. Buttons toggle this host and return here. Piggyback host
+  switch to it. Buttons toggle this host and return here. Host
   carried by <b>{DELIVERY_HOSTNAME}</b>.</div>
 </body></html>"""
 
@@ -1021,7 +1018,7 @@ def _overview_page() -> str:
         )
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5">
-<title>{DELIVERY_HOSTNAME} — piggyback estate control</title>
+<title>{DELIVERY_HOSTNAME} — estate control</title>
 <style>
  body {{ background:#1a1d21; color:#d8dee4; font-family:system-ui,sans-serif;
         margin:2rem auto; max-width:54rem; padding:0 1rem; }}
@@ -1039,11 +1036,11 @@ def _overview_page() -> str:
  .green {{ color:#2e7d32; font-size:.85rem; }}
  .foot {{ margin-top:1.5rem; color:#666; font-size:.83rem; }}
 </style></head><body>
- <h1>piggyback estate — delivery shell <b>{DELIVERY_HOSTNAME}</b>
+ <h1>estate control — delivery shell <b>{DELIVERY_HOSTNAME}</b>
   <span style="color:#555">(auto-refreshes every 5 s)</span></h1>
  <p class="sub">{len(CHILDREN)} hosts carried. This shell emits only a
-  minimal agent section; everyone below arrives as piggyback blocks or
-  per-host datasource files.</p>
+  minimal agent section; everyone below arrives as per-host datasource files
+  or piggyback blocks.</p>
  {_cascade_section() if CASCADE.steps else ""}
  <table>{"".join(rows)}</table>
  {_fleet_section(fleet)}

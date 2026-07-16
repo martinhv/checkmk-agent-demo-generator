@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """estate.py — the Meridian Retail demo estate in ONE command.
 
-Brings up the whole fake company (agent-based servers as piggyback hosts,
+Brings up the whole fake company (agent-based servers behind a delivery shell,
 SNMP network gear as stored walks) AND configures Checkmk for it — hosts,
 rules, parent topology, BI pack, discovery, activation. Tear it all down
 again with `down`.
@@ -54,9 +54,10 @@ Scales (--scale):
 
 Moving parts (all stdlib, see the directories):
 
-  deploy/piggyback/   ONE container (docker or podman; or --runtime native:
+  deploy/delivery/    ONE container (docker or podman; or --runtime native:
                       one process) runs every agent host's serve.py and
-                      delivers them as piggyback — agent :6559, panel :8099
+                      delivers them (datasource files by default, or piggyback
+                      for cloud) — agent :6559, panel :8099
   snmp/netsim.py      answers SNMP live on ONE UDP port (127.0.0.1:1161),
                       routing to a device by its community — panel :8101. Runs
                       in the same runtime as the gateway (container or native),
@@ -87,7 +88,7 @@ REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(REPO, "deploy"))
 import cmk_setup  # noqa: E402  (deploy/cmk_setup.py — needs sys.path set first)
 
-PANEL = "http://localhost:8099"  # piggyback shell control panel
+PANEL = "http://localhost:8099"  # delivery shell control panel
 SNMP_PANEL = "http://localhost:8101"  # netsim control panel
 PIDFILE_SHELL = "/var/tmp/cmk-demo-estate-shell.pid"
 PIDFILE_NETSIM = "/var/tmp/cmk-demo-estate-netsim.pid"
@@ -178,7 +179,7 @@ def wait_for_children(timeout: float = 60.0) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-#  Piggyback shell (container via compose, or native)
+#  Delivery shell (container via compose, or native)
 # --------------------------------------------------------------------------- #
 # Container runtimes drive the shell through a compose provider. docker and
 # podman share the same `<engine> compose ...` surface and read the same
@@ -233,7 +234,7 @@ def shell_up(args: argparse.Namespace) -> None:
             # recreate so `up` always reflects the current build + env. Counters
             # persist to the state file, so the restart is invisible mid-demo.
             cmd.append("--force-recreate")
-        r = sh(cmd, cwd=os.path.join(REPO, "deploy", "piggyback"), env=env)
+        r = sh(cmd, cwd=os.path.join(REPO, "deploy", "delivery"), env=env)
         if r.returncode != 0:
             sys.exit(f"ERROR: {engine} compose up failed")
         return
@@ -246,7 +247,7 @@ def shell_up(args: argparse.Namespace) -> None:
         env["AGENT_OUTPUT_DIR"] = AGENT_OUTPUT_DIR
     log = open("/var/tmp/cmk-demo-estate-shell.log", "ab")  # noqa: SIM115
     proc = subprocess.Popen(  # noqa: S603
-        [sys.executable, "-u", os.path.join(REPO, "deploy", "piggyback", "serve.py")],
+        [sys.executable, "-u", os.path.join(REPO, "deploy", "delivery", "serve.py")],
         env=env,
         stdout=log,
         stderr=log,
@@ -265,7 +266,7 @@ def shell_down(args: argparse.Namespace) -> None:
     if args.runtime != "native":
         for engine in COMPOSE_ENGINES:
             if shutil.which(engine):
-                sh([engine, "compose", "down"], cwd=os.path.join(REPO, "deploy", "piggyback"))
+                sh([engine, "compose", "down"], cwd=os.path.join(REPO, "deploy", "delivery"))
     _pid_kill(PIDFILE_SHELL, "shell")
 
 
@@ -569,7 +570,7 @@ def cmd_down(args: argparse.Namespace) -> None:
                 )
     print("* stopping netsim")
     netsim_down(args)
-    print("* stopping the piggyback shell")
+    print("* stopping the delivery shell")
     shell_down(args)
     print("Done.")
 

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-for _sub in ("snmp", "deploy", "fleet", "deploy/piggyback"):
+for _sub in ("snmp", "deploy", "fleet", "deploy/delivery"):
     sys.path.insert(0, str(REPO / _sub))
 
 
@@ -64,7 +64,7 @@ def test_cmk_setup_imports() -> None:
 def test_cross_host_cascade_fires_in_order() -> None:
     # disable persistence so the test doesn't touch /var/tmp
     os.environ["CASCADE_STATE_FILE"] = ""
-    import serve  # deploy/piggyback/serve.py (the delivery shell)
+    import serve  # deploy/delivery/serve.py (the delivery shell)
 
     casc = serve.Cascade()
     # the story's participants (carried hosts) — db-postgres-01 is the root cause

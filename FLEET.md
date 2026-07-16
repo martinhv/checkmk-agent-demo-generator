@@ -181,8 +181,8 @@ sw-core-01  (DC core switch, SNMP — no parent)
 The parents only apply when the SNMP layer is deployed (`--scale full`);
 without it the servers simply have no parent.
 
-The parent relations are declared in the piggyback registry
-(`deploy/piggyback/serve.py`) and applied as the Checkmk `parents` host
+The parent relations are declared in the delivery-shell registry
+(`deploy/delivery/serve.py`) and applied as the Checkmk `parents` host
 attribute by `deploy/cmk_setup.py` — which also creates a **BI pack**
 ("Payments platform": network path → customer entry → payment API →
 processing/cache → data layer → storage) plus a `check_bi_aggr` active check
@@ -202,19 +202,21 @@ switches). The pieces below are what it orchestrates and remain usable alone.
 1. **Per-host TCP** (the default): bring up each host's own
    `docker compose`, add each in Checkmk as a TCP host with its agent-port
    override. Independent, copy-pasteable.
-2. **One piggyback delivery host** (`deploy/piggyback/`): a single "shell"
-   host carries the *whole* estate as piggyback. One container runs the shell
-   plus every host's `serve.py` internally; Checkmk polls only the delivery
-   shell (agent **6559**, control panel **8099**) and the estate hosts are added
-   as **piggyback** hosts — no per-host agent port. The shell emits only a
-   minimal agent section. The site setup is one command as well:
+2. **One delivery shell** (`deploy/delivery/`): a single "shell" carries the
+   *whole* estate. One container runs the shell plus every host's `serve.py`
+   internally, and delivers each host's agent output to Checkmk — as per-host
+   datasource files by default (what `estate.py` uses on a self-hosted site),
+   or as **piggyback** blocks off the shell for cloud (Checkmk then polls only
+   the shell: agent **6559**, control panel **8099**, no per-host agent port).
+   The shell emits only a minimal agent section of its own. The site setup is
+   one command as well:
    `deploy/cmk_setup.py` (REST API — folder, hosts, rules,
    discovery, activate; idempotent, `--remove` to tear down). See
-   `deploy/piggyback/README.md`.
+   `deploy/delivery/README.md`.
 
 | Host | agent TCP | admin/HTTP |
 |---|---|---|
-| `cmk-demo-gateway.corp.meridian-retail.com` (piggyback delivery shell) | 6559 | 8099 |
+| `cmk-demo-gateway.corp.meridian-retail.com` (delivery shell) | 6559 | 8099 |
 
 ## Conventions every host follows
 

@@ -1,4 +1,4 @@
-# Meridian Retail demo: piggyback delivery shell.
+# Meridian Retail demo: the estate delivery shell.
 # Build context is the REPO ROOT (it needs every host's serve.py under
 # hosts/) — see the docker-compose.yml in this directory.
 FROM python:3.12-slim
@@ -12,4 +12,4 @@ EXPOSE 6556 8080
 ENV AGENT_PORT=6556 \
     HTTP_PORT=8080
 
-ENTRYPOINT ["python3", "-u", "/opt/estate/deploy/piggyback/serve.py"]
+ENTRYPOINT ["python3", "-u", "/opt/estate/deploy/delivery/serve.py"]

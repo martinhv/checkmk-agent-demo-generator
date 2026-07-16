@@ -18,7 +18,7 @@ and svc-catalog-02, and survive restarts.
 
 Everything is synthesized — no recorded customer data is replayed here.
 
-The delivery shell (deploy/piggyback/serve.py) spawns this as ONE child and
+The delivery shell (deploy/delivery/serve.py) spawns this as ONE child and
 fetches per-host payloads over HTTP:
 
   GET /                  roster JSON (name, fqdn, os, role, parent, descr)

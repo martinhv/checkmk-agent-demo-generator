@@ -1,18 +1,19 @@
-# Meridian Retail demo: run the WHOLE estate behind ONE piggyback delivery host.
+# Meridian Retail demo: run the WHOLE estate behind ONE delivery shell.
 #   docker compose up --build -d          (or let ../../estate.py drive it)
 #   docker compose logs -f
 #
 # One container runs the delivery shell + every estate host's serve.py as an
-# internal child. Checkmk polls only the delivery shell (agent 6559); the estate
-# hosts arrive as piggyback and are added in Checkmk as piggyback hosts (no agent
-# port override). Combined control panel on 8099.
+# internal child. By default (datasource mode) each host's agent output is
+# written to a file the site reads via a "cat $HOSTNAME$" program; in piggyback
+# mode (cloud) Checkmk polls only the shell (agent 6559) and the estate hosts
+# arrive as piggyback blocks. Combined control panel on 8099.
 #
 # Build context is the repo root (the image needs every host's serve.py).
 services:
   cmk-demo-gateway:
     build:
       context: ../..
-      dockerfile: deploy/piggyback/Dockerfile
+      dockerfile: deploy/delivery/Dockerfile
     # fixed tag so estate.py can run netsim (the SNMP responder) from the SAME
     # image as a sibling container (it has snmp/netsim.py + walklib baked in)
     image: cmk-demo-estate:latest

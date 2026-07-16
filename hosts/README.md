@@ -7,7 +7,7 @@ choreography. `FLEET.md` (repo root) has the roster, stories, and port map;
 `CLAUDE.md` has the engineering rules these hosts follow.
 
 You normally don't start these yourself: `../estate.py up` runs all of them
-inside the piggyback delivery shell (`../deploy/piggyback/`), which spawns
+inside the delivery shell (`../deploy/delivery/`), which spawns
 each `serve.py` unmodified as a child process — including N steady-green
 replicas per class with `--replicas N`.
 

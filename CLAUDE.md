@@ -285,7 +285,7 @@ netsim restart for pure value changes.
 
 ## Deploying the estate to a site (`estate.py` + `deploy/cmk_setup.py`)
 
-`estate.py` is the one-command entry (`up`/`down`/`replace`/`status`/`break|degrade|heal`). It runs the delivery shell (`deploy/piggyback/serve.py`, which spawns every `hosts/*/serve.py` as an internal TCP child + a combined `/admin` panel on :8099), optionally the SNMP responder (`snmp/netsim.py`, :8101 panel; answers live SNMP on 127.0.0.1:1161 routed by community, sibling container or native, no sudo), then delegates all Checkmk REST wiring to `deploy/cmk_setup.py` (folder tree → hosts → rules → BI pack → discovery → activation; `--remove` tears down). Everything is stdlib + REST (urllib, no redirect-following so async runs can be polled).
+`estate.py` is the one-command entry (`up`/`down`/`replace`/`status`/`break|degrade|heal`). It runs the delivery shell (`deploy/delivery/serve.py`, which spawns every `hosts/*/serve.py` as an internal TCP child + a combined `/admin` panel on :8099), optionally the SNMP responder (`snmp/netsim.py`, :8101 panel; answers live SNMP on 127.0.0.1:1161 routed by community, sibling container or native, no sudo), then delegates all Checkmk REST wiring to `deploy/cmk_setup.py` (folder tree → hosts → rules → BI pack → discovery → activation; `--remove` tears down). Everything is stdlib + REST (urllib, no redirect-following so async runs can be polled).
 
 ### Deployment modes (`--mode`, default self-hosted)
 

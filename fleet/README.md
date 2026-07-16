@@ -3,7 +3,7 @@
 ONE process (`serve.py`) that synthesizes the ~170 steady-green Linux/Windows
 servers of the 300-host company estate (`estate.py up --scale company`) from
 the declarative roster in `profiles.py`. The delivery shell
-(`deploy/piggyback/serve.py`, env `ESTATE_FLEET=1`) spawns it as a single
+(`deploy/delivery/serve.py`, env `ESTATE_FLEET=1`) spawns it as a single
 child and fetches each host's agent output over HTTP.
 
 ```bash
