@@ -78,6 +78,8 @@ import getpass
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -370,9 +372,65 @@ def _site_alive(name: str) -> bool:
         return False
 
 
+def _site_exists(name: str) -> bool:
+    return os.path.isdir(f"/omd/sites/{name}")
+
+
+def _start_site(name: str, timeout: float = 60.0) -> bool:
+    """Start a stopped local OMD site and wait for its REST API to answer.
+
+    Starting a site needs privilege (root, or being the site user): try a plain
+    `omd start` first — works when this runs as root or as the site's own user —
+    and fall back to passwordless `sudo`. Returns True once the site answers (or
+    was already up, e.g. another process started it meanwhile)."""
+    print(f"  site {name} is stopped — starting it (omd start {name})")
+    started = False
+    for cmd in (["omd", "start", name], ["sudo", "-n", "omd", "start", name]):
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            r = subprocess.run(  # noqa: S603
+                cmd, capture_output=True, text=True, timeout=120, check=False
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"  '{' '.join(cmd)}' could not run ({exc})")
+            continue
+        if r.returncode == 0:
+            started = True
+            break
+        # try the next candidate; keep the last error for the caller's message
+        err = (r.stderr or r.stdout or "").strip().splitlines()
+        if err:
+            print(f"  '{' '.join(cmd)}' failed: {err[-1]}")
+    if not started and not _site_alive(name):
+        return False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _site_alive(name):
+            print(f"  site {name} is up")
+            return True
+        time.sleep(1)
+    return _site_alive(name)
+
+
+def ensure_site_running(name: str) -> None:
+    """Make a named local dev site reachable: if it exists but is stopped, start
+    it; if it doesn't exist, or can't be started, die with a clear message."""
+    if _site_alive(name):
+        return
+    if not _site_exists(name):
+        die(f"local dev site {name!r} not found under /omd/sites — pass --site NAME or --site-url")
+    if not _start_site(name):
+        die(
+            f"site {name!r} exists but could not be started automatically — "
+            f"start it by hand: omd start {name} (or: sudo omd start {name})"
+        )
+
+
 def detect_dev_site() -> str:
-    """Newest running local OMD site named like cmk-dev-site makes them (v300,
-    v260p1, ...). Newest = creation order via the version symlink's ctime."""
+    """Newest local OMD site named like cmk-dev-site makes them (v300, v260p1,
+    ...); newest = creation order via the version symlink's ctime. Prefer one
+    that is already running; otherwise pick the newest and start it (below)."""
     try:
         candidates: list[str] = [
             s for s in os.listdir("/omd/sites") if s.startswith("v") and s[1:2].isdigit()
@@ -385,11 +443,11 @@ def detect_dev_site() -> str:
     for name in candidates:
         if _site_alive(name):
             return name
-    die(
-        f"none of the local dev sites ({', '.join(candidates)}) answers on "
-        "http://localhost/<site>/ — is one started? (omd start <site>)"
-    )
-    raise AssertionError("unreachable")
+    # none running — take the newest and start it (ensure_site_running does so)
+    newest = candidates[0]
+    print(f"* no dev site running; newest is {newest} ({len(candidates)} found)")
+    ensure_site_running(newest)
+    return newest
 
 
 # --------------------------------------------------------------------------- #
@@ -1610,7 +1668,11 @@ def main(argv: list[str] | None = None) -> None:
     if bool(args.site) == bool(args.site_url):
         p.error("pass either --site (local dev site) or --site-url URL")
     if args.site:
-        name = detect_dev_site() if args.site == "auto" else args.site
+        if args.site == "auto":
+            name = detect_dev_site()
+        else:
+            name = args.site
+            ensure_site_running(name)  # exists-but-stopped -> start it
         args.site_url = f"http://localhost/{name}"
         user = args.user or "cmkadmin"
         secret = args.secret or "cmk"
