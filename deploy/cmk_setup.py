@@ -131,7 +131,7 @@ if TYPE_CHECKING:
 #        ipaddress 127.0.0.1 and carry a unique per-host community attribute
 #        (the device name); only a folder port rule remains. Lets netsim run
 #        as a normal port-mapped container like the gateway.
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # Host label on the delivery shell holding the last-activated estate
 # fingerprint. Lives on the site (survives across `estate.py up` runs) and is
@@ -147,6 +147,10 @@ DATASOURCE_RULE_DESCRIPTION = (
     "Meridian Retail demo: agent output via datasource program (cat $HOSTNAME$)"
 )
 RESIDUAL_RULE_DESCRIPTION = "Meridian Retail demo: PDUs without residual-current sensors stay OK"
+INVENTORY_RULE_DESCRIPTION = "Meridian Retail demo: HW/SW inventory for the SNMP network devices"
+INVENTORY_INTERVAL_RULE_DESCRIPTION = (
+    "Meridian Retail demo: HW/SW inventory check interval (spare netsim from minutely walks)"
+)
 
 # --- Folder taxonomy --------------------------------------------------------
 # Hosts are sorted into a role-based subfolder tree under the estate root so
@@ -703,6 +707,85 @@ def ensure_usewalk_rule(api: CmkApi, fqdns: list[str]) -> None:
     print(f"  created usewalk rule ({len(wanted)} devices)")
 
 
+def ensure_inventory_rule(api: CmkApi, fqdns: list[str]) -> None:
+    """Enable Checkmk HW/SW inventory on exactly the SNMP devices (root folder,
+    explicit host-name condition, marker description — same ownership pattern as
+    the usewalk/agent-port rules). The rule alone materialises a "Check_MK HW/SW
+    Inventory" active check per host; the generic SNMP inventory plug-ins then
+    populate real ENTITY trees (chassis/PSU/fan/module serials + firmware),
+    interfaces and system attributes from the replayed walks. An empty value
+    dict = all defaults (inventory on, failures WARN). Only SNMP devices get it
+    — the agent hosts emit no mk_inventory sections, so it would be empty noise
+    there and the request is scoped to SNMP."""
+    if not fqdns:
+        return
+    wanted = sorted(fqdns)
+    for rule, hosts in _marked_rules(api, "active_checks:cmk_inv", INVENTORY_RULE_DESCRIPTION):
+        if sorted(hosts) == wanted:
+            print("  HW/SW inventory rule exists")
+            return
+        api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
+        print("  removed stale HW/SW inventory rule")
+    status, payload, _ = api.request(
+        "POST",
+        "/domain-types/rule/collections/all",
+        body={
+            "ruleset": "active_checks:cmk_inv",
+            "folder": "/",
+            "properties": {"description": INVENTORY_RULE_DESCRIPTION, "disabled": False},
+            "value_raw": repr({}),
+            "conditions": {
+                "host_name": {"match_on": wanted, "operator": "one_of"},
+            },
+        },
+    )
+    if status != 200:
+        api_error("creating the HW/SW inventory rule", status, payload)
+    print(f"  created HW/SW inventory rule ({len(wanted)} devices)")
+
+
+def ensure_inventory_interval_rule(api: CmkApi, fqdns: list[str], minutes: float = 240.0) -> None:
+    """Slow the "Check_MK HW/SW Inventory" active check down to every few hours
+    (the interval a real admin sets — HW/SW inventory need not run minutely).
+    Beyond realism this spares netsim: with the default 1-min interval every
+    SNMP device would re-walk its full inventory OID space every minute. The
+    ruleset stores the interval in MINUTES (see extra_service_conf:check_interval
+    in cmk/gui/wato/_check_mk_configuration.py). Scoped to the SNMP devices +
+    the inventory service description."""
+    if not fqdns:
+        return
+    wanted = sorted(fqdns)
+    want = repr(float(minutes))
+    for rule, hosts in _marked_rules(
+        api, "extra_service_conf:check_interval", INVENTORY_INTERVAL_RULE_DESCRIPTION
+    ):
+        if sorted(hosts) == wanted and rule.get("extensions", _ED).get("value_raw") == want:
+            print("  HW/SW inventory interval rule exists")
+            return
+        api.request("DELETE", f"/objects/rule/{rule['id']}", etag="*")
+        print("  removed stale HW/SW inventory interval rule")
+    status, payload, _ = api.request(
+        "POST",
+        "/domain-types/rule/collections/all",
+        body={
+            "ruleset": "extra_service_conf:check_interval",
+            "folder": "/",
+            "properties": {"description": INVENTORY_INTERVAL_RULE_DESCRIPTION, "disabled": False},
+            "value_raw": want,
+            "conditions": {
+                "host_name": {"match_on": wanted, "operator": "one_of"},
+                "service_description": {
+                    "match_on": ["Check_MK HW/SW Inventory$"],
+                    "operator": "one_of",
+                },
+            },
+        },
+    )
+    if status != 200:
+        api_error("creating the HW/SW inventory interval rule", status, payload)
+    print(f"  created HW/SW inventory interval rule ({minutes:g} min)")
+
+
 def ensure_snmp_port_rule(api: CmkApi, root_ident: str, port: int) -> None:
     """Live-SNMP transport: one `snmp_ports` rule on the estate ROOT folder for
     the shared responder port (inherited by the Network subfolders; agent hosts
@@ -931,6 +1014,11 @@ def setup_snmp(
         ensure_snmp_port_rule(api, root_ident, int(info.get("snmp_port") or 161))
     else:
         ensure_usewalk_rule(api, fqdns)
+    # HW/SW inventory: enable it on exactly these devices (both transports fetch
+    # the same OID trees) and slow the check down so netsim isn't re-walked
+    # every minute.
+    ensure_inventory_rule(api, fqdns)
+    ensure_inventory_interval_rule(api, fqdns)
     return fqdns
 
 
@@ -1546,6 +1634,10 @@ def teardown(api: CmkApi, args: argparse.Namespace) -> None:
             ]
     delete_bi_objects(api)
     _delete_marked_rules(api, "usewalk_hosts", SNMP_RULE_DESCRIPTION, set(names))
+    _delete_marked_rules(api, "active_checks:cmk_inv", INVENTORY_RULE_DESCRIPTION, set(names))
+    _delete_marked_rules(
+        api, "extra_service_conf:check_interval", INVENTORY_INTERVAL_RULE_DESCRIPTION, set(names)
+    )
     _delete_marked_rules(api, "special_agents:bi", BI_RULE_DESCRIPTION, set(names))
     delete_datasource_rule(api, folder_ident(args.folder))
     delete_residual_current_rule(api, folder_ident(args.folder))

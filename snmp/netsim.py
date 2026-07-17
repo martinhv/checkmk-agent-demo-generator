@@ -416,6 +416,49 @@ class Device:
         return []
 
 
+def entity_physical_rows(
+    short: str, components: list[dict[str, Any]]
+) -> list[tuple[str, str]]:
+    """ENTITY-MIB physicalEntity table (.1.3.6.1.2.1.47.1.1.1.1) for a list of
+    hardware components — this is what feeds Checkmk's HW/SW inventory
+    ("Hardware > Physical components"): the snmp_extended_info inventory plug-in
+    walks columns 2/4/5/7/10/11/12/13 (descr, containedIn, class, name,
+    softwareRev, serial, mfgName, model). We also emit 8/9 (hardwareRev,
+    firmwareRev) — unused by that plug-in but read by other Cisco checks and
+    what a real agent returns. Serials run through _mutate_serial(short, ...) so
+    replicas of one model (e.g. the access switches) never clone a serial and
+    the value is restart-stable. Each component dict:
+        idx (int), contained_in (int, 0 = the device),
+        cls (entPhysicalClass: 3 chassis, 6 PSU, 7 fan, 8 sensor, 9 module,
+             10 port, 11 stack, 12 cpu), descr, name,
+        hw_rev, fw_rev, sw_rev, serial (a template — rewritten per instance),
+        mfg, model — text fields omitted when empty (as a real agent does)."""
+    text_cols = {
+        "descr": 2,
+        "name": 7,
+        "hw_rev": 8,
+        "fw_rev": 9,
+        "sw_rev": 10,
+        "mfg": 12,
+        "model": 13,
+    }
+    base = ".1.3.6.1.2.1.47.1.1.1.1"
+    rows: list[tuple[str, str]] = []
+    for c in components:
+        idx = c["idx"]
+        # structural columns are always present
+        rows.append((f"{base}.4.{idx}", str(c.get("contained_in", 0))))
+        rows.append((f"{base}.5.{idx}", str(c["cls"])))
+        for key, col in text_cols.items():
+            v = c.get(key)
+            if v:
+                rows.append((f"{base}.{col}.{idx}", str(v)))
+        serial = c.get("serial")  # column 11 — rewritten per instance
+        if serial:
+            rows.append((f"{base}.11.{idx}", _mutate_serial(short, str(serial))))
+    return rows
+
+
 def envmon_temp_rows(descr: str, celsius: float, threshold: int) -> list[tuple[str, str]]:
     """CISCO-ENVMON-MIB temperature row (classic IOS): value + device
     threshold + state 1 (normal)."""
@@ -444,22 +487,58 @@ def envmon_fan_psu_rows(fans: list[str], psus: list[str]) -> list[tuple[str, str
 
 
 def catalyst_platform_rows(
-    dev: str, cpu_pct: float, temp_c: float, mem_used: int, mem_free: int
+    dev: str,
+    cpu_pct: float,
+    temp_c: float,
+    mem_used: int,
+    mem_free: int,
+    *,
+    model: str = "C9300-48P",
+    chassis_descr: str = "Cisco Catalyst 9300 48-port Switch",
+    sw_ver: str = "17.03.04",
+    psu_model: str = "PWR-C1-715WAC",
+    fan_model: str = "C9300-FAN-T1",
+    uplink_model: str = "C9300-NM-8X",
 ) -> list[tuple[str, str]]:
     """Modern IOS-XE Catalyst: cisco_cpu_multiitem (cpmCPU row 7 -> ENTITY
     1001), enhanced-64 cisco_mem pool, CISCO-ENTITY-SENSOR temperature with
-    device thresholds WARN 65 / CRIT 75, ENVMON fans + PSUs."""
-    rows = [
-        # ENTITY-MIB skeleton: chassis 1, CPU 1001, temp sensor 1010
-        (".1.3.6.1.2.1.47.1.1.1.1.4.1", "0"),
-        (".1.3.6.1.2.1.47.1.1.1.1.4.1001", "1"),
-        (".1.3.6.1.2.1.47.1.1.1.1.4.1010", "1"),
-        (".1.3.6.1.2.1.47.1.1.1.1.5.1", "3"),  # chassis
-        (".1.3.6.1.2.1.47.1.1.1.1.5.1001", "12"),  # cpu
-        (".1.3.6.1.2.1.47.1.1.1.1.5.1010", "8"),  # sensor
-        (".1.3.6.1.2.1.47.1.1.1.1.7.1", "Switch 1 Chassis"),
-        (".1.3.6.1.2.1.47.1.1.1.1.7.1001", "Switch 1 CPU"),
-        (".1.3.6.1.2.1.47.1.1.1.1.7.1010", "Switch 1 - Temp Sensor 0"),
+    device thresholds WARN 65 / CRIT 75, ENVMON fans + PSUs.
+
+    The ENTITY-MIB table below is the full physical inventory (chassis +
+    supervisor + uplink module + dual PSUs + fan trays + temp sensor), each
+    component carrying model / serial / firmware / manufacturer, so Checkmk's
+    HW/SW inventory renders a rich "Hardware > Physical components" tree — not
+    just the three-node skeleton the checks need. Indices 1 (chassis), 1001
+    (CPU, referenced by cisco_cpu_multiitem) and 1010 (temp sensor, referenced
+    by CISCO-ENTITY-SENSOR) are preserved verbatim."""
+    rows = entity_physical_rows(
+        dev,
+        [
+            {"idx": 1, "contained_in": 0, "cls": 3, "descr": chassis_descr,
+             "name": "Switch 1 Chassis", "hw_rev": "V03", "sw_rev": sw_ver,
+             "serial": "FCW2140L0GH", "mfg": "Cisco", "model": model},
+            {"idx": 1000, "contained_in": 1, "cls": 9, "descr": f"{model} Supervisor",
+             "name": "Switch 1 Supervisor", "sw_rev": sw_ver,
+             "serial": "FDO2138V0KL", "mfg": "Cisco", "model": model},
+            {"idx": 1001, "contained_in": 1000, "cls": 12, "name": "Switch 1 CPU"},
+            {"idx": 1002, "contained_in": 1, "cls": 9, "descr": "Uplink Module",
+             "name": "Switch 1 - Uplink Module", "serial": "FOC2141U0MN",
+             "mfg": "Cisco", "model": uplink_model},
+            {"idx": 2, "contained_in": 1, "cls": 6, "descr": "Power Supply Module",
+             "name": "Switch 1 - Power Supply A", "serial": "LIT2136F0PQ",
+             "mfg": "Cisco", "model": psu_model},
+            {"idx": 3, "contained_in": 1, "cls": 6, "descr": "Power Supply Module",
+             "name": "Switch 1 - Power Supply B", "serial": "LIT2136F0RS",
+             "mfg": "Cisco", "model": psu_model},
+            {"idx": 4, "contained_in": 1, "cls": 7, "descr": "Fan Module",
+             "name": "Switch 1 - FAN 1", "mfg": "Cisco", "model": fan_model},
+            {"idx": 5, "contained_in": 1, "cls": 7, "descr": "Fan Module",
+             "name": "Switch 1 - FAN 2", "mfg": "Cisco", "model": fan_model},
+            {"idx": 1010, "contained_in": 1, "cls": 8,
+             "name": "Switch 1 - Temp Sensor 0"},
+        ],
+    )
+    rows += [
         # cisco_cpu_multiitem: physical index ref + 5-min utilization %
         (".1.3.6.1.4.1.9.9.109.1.1.1.1.2.7", "1001"),
         (".1.3.6.1.4.1.9.9.109.1.1.1.1.8.7", str(int(round(cpu_pct)))),
@@ -683,6 +762,11 @@ class SwAccess(Device):
             ),
             mem_used=1_204_570_112,
             mem_free=2_890_137_600,
+            model="C9200L-48P-4G",
+            chassis_descr="Cisco Catalyst 9200L 48-port PoE+ Switch",
+            psu_model="PWR-C5-125WAC",
+            fan_model="C9200L-FAN",
+            uplink_model="C9200L-NM-4G",
         )
         return rows
 
@@ -780,6 +864,29 @@ class RtWan(Device):
         rows.append((".1.3.6.1.2.1.2.1.0", str(len(self.ifaces))))
         for it in self.ifaces:
             rows += it.rows()
+        rows += entity_physical_rows(
+            self.short,
+            [
+                # ISR 2921: chassis + on-board GE module + dual NIM slots + PSU.
+                # No CPU/sensor ENTITY row (classic IOS exposes those via the
+                # Cisco private MIBs above / ENVMON below, not ENTITY).
+                {"idx": 1, "contained_in": 0, "cls": 3,
+                 "descr": "Cisco 2921 Integrated Services Router",
+                 "name": "Chassis", "hw_rev": "V05", "sw_rev": "15.7(3)M5",
+                 "serial": "FTX1840AH0AB", "mfg": "Cisco", "model": "CISCO2921/K9"},
+                {"idx": 2, "contained_in": 1, "cls": 9,
+                 "descr": "Cisco 2921 Motherboard with 3 GE, integrated VPN and 4W",
+                 "name": "Motherboard", "serial": "FOC18401K0CD",
+                 "mfg": "Cisco", "model": "CISCO2921/K9"},
+                {"idx": 3, "contained_in": 1, "cls": 6, "descr": "AC Power Supply",
+                 "name": "Power Supply 0", "serial": "LIT18396A0EF",
+                 "mfg": "Cisco", "model": "PWR-2921-51-AC"},
+                {"idx": 4, "contained_in": 2, "cls": 9,
+                 "descr": "1-Port Serial WAN Interface Card",
+                 "name": "NIM subslot 0/0", "serial": "FOC18412N0GH",
+                 "mfg": "Cisco", "model": "HWIC-1T"},
+            ],
+        )
         rows += [
             # classic cisco_cpu: cpmCPUTotal5minRev only, NO .2.* row (that
             # would flip detection to cisco_cpu_multiitem)

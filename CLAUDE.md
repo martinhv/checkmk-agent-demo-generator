@@ -283,6 +283,64 @@ Verification loop: `estate.py up --force` after service-set changes (the
 per-host discovery skip would otherwise keep stale service sets), plain
 netsim restart for pure value changes.
 
+### HW/SW inventory for the SNMP devices (two halves: the rule + the OIDs)
+
+HW/SW inventory needs BOTH a Checkmk rule to turn it on AND the OID trees the
+inventory plug-ins walk. Two independent pieces:
+
+- **The rule** (`deploy/cmk_setup.py`): one `active_checks:cmk_inv` rule
+  (root folder `/`, explicit host-name condition on the SNMP device FQDNs,
+  marker description — same ownership pattern as `usewalk_hosts`/`agent_ports`),
+  value `repr({})` = all defaults. That alone materialises a "Check_MK HW/SW
+  Inventory" **active check** per device — it is NOT a discovered service, so
+  it appears purely from config at activation and the per-host discovery skip
+  is irrelevant (but adding it DOES change the service set → bumped
+  `SCHEMA_VERSION`). Scoped to SNMP only: agent hosts emit no `mk_inventory`
+  sections so it would be empty noise there. Also add an
+  `extra_service_conf:check_interval` rule (value in **minutes**) matching
+  service `Check_MK HW/SW Inventory$` — the documented "set a longer interval"
+  move, and it spares netsim from every device re-walking its whole inventory
+  OID space every minute (we use 240). Both created in `setup_snmp`, deleted in
+  `teardown` via `_delete_marked_rules` (host-scoped condition = subset of the
+  torn-down names).
+- **The OIDs.** The ~110 REPLAYED devices already carry real ENTITY trees
+  (`sw-dc-dist-01` → ~1000 inventory entries out of the box). Only the four
+  hand-built synthetic devices (`SwCore`/`SwAccess`/`RtWan`/`Ups`) were sparse.
+  Fix: `entity_physical_rows()` emits a full ENTITY-MIB physicalEntity table
+  (`.1.3.6.1.2.1.47.1.1.1.1`) — chassis + supervisor + uplink module + dual
+  PSUs + fan trays + sensor, each with model/serial/firmware/manufacturer.
+  Serials run through `_mutate_serial(short, template)` so replicas never clone
+  a serial. `snmp_extended_info` (the inventory plug-in) walks columns
+  **2/4/5/7/10/11/12/13** (descr/containedIn/class/name/swRev/serial/mfg/model);
+  the single parent-0 entity (the chassis) is consumed as the device's *global*
+  serial/model (→ `hardware.system`), everything else becomes a
+  `hardware.components.{psus,fans,modules,sensors,…}` row. Keep the existing
+  indices 1/1001/1010 (referenced by cisco_cpu_multiitem + CISCO-ENTITY-SENSOR).
+  The **UPS is deliberately left sparse**: an APC AP9631 genuinely does not
+  implement ENTITY-MIB and no cmk plug-in inventories the `.318` ident OIDs, so
+  faking a tree there would be a tell — authentic beats rich.
+
+**Verifying inventory is a caching minefield.** `cmk -i HOST` / `cmk
+--inventory` **computes** the tree (prints "Found N entries") but on 3.0 does
+**NOT persist** `var/check_mk/inventory/<fqdn>.json` — only the active check
+(via the core) writes it. Force it with a livestatus
+`SCHEDULE_FORCED_SVC_CHECK;<fqdn>;Check_MK HW/SW Inventory;<now>` then read the
+JSON. And the SNMP fetch has *layered* caches that hide new netsim data:
+`tmp/check_mk/data_source_cache/snmp/{checking,discovery,inventory}/<fqdn>`
+(three separate dirs — clearing only `checking`/`discovery` misses `inventory`)
+plus the per-column walk cache `var/check_mk/snmp_cache/<fqdn>/` — clear all
+before trusting a re-run. Ground truth for "what does netsim actually serve" is
+`cmk --snmpwalk <fqdn>` (writes `var/check_mk/snmpwalks/`) or a direct
+per-column GETBULK against `127.0.0.1:1161` (community = device short name) —
+both bypass the check pipeline's caches.
+
+**Container gotcha:** the SNMP responder normally runs as a **podman/docker
+container** off `cmk-demo-estate:latest`, not the native process. After editing
+`netsim.py` you must rebuild the image + recreate the netsim container (an
+`estate.py up` with the ORIGINAL `--runtime` does this on code-hash change);
+`--runtime native` just spins up a second process that can't bind the
+already-mapped `:1161`, so Checkmk keeps polling the stale-code container.
+
 ## Deploying the estate to a site (`estate.py` + `deploy/cmk_setup.py`)
 
 `estate.py` is the one-command entry (`up`/`down`/`replace`/`status`/`break|degrade|heal`). It runs the delivery shell (`deploy/delivery/serve.py`, which spawns every `hosts/*/serve.py` as an internal TCP child + a combined `/admin` panel on :8099), optionally the SNMP responder (`snmp/netsim.py`, :8101 panel; answers live SNMP on 127.0.0.1:1161 routed by community, sibling container or native, no sudo), then delegates all Checkmk REST wiring to `deploy/cmk_setup.py` (folder tree → hosts → rules → BI pack → discovery → activation; `--remove` tears down). Everything is stdlib + REST (urllib, no redirect-following so async runs can be polled).
